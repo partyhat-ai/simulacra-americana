@@ -1,8 +1,8 @@
 # synthetic-electorate-toy: file map
 
-Generated from commit `8d299e47f067` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `2d80910f7eef` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 
-1097 tracked files. 187 are reproduced in full in the `code-N.md` parts; the rest are listed with the reason they are not.
+1098 tracked files. 188 are reproduced in full in the `code-N.md` parts; the rest are listed with the reason they are not.
 
 Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/ (append the path to fetch the raw file).
 
@@ -19,6 +19,7 @@ Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/sy
 | `DISCLOSURES.md` | 72,502 | 1,312 | Disclosures: inaccuracies and intellectual-honesty flags | code-1.md |
 | `Dockerfile` | 4,134 | 95 | syntax=docker/dockerfile:1 | code-1.md |
 | `EVAL.md` | 18,600 | 336 | EVAL: the 1920 prototype | code-2.md |
+| `LICENSE` | 1,065 | 21 |  | code-2.md |
 | `METHOD.md` | 24,001 | 489 | Simulacra Americana: how the harness works | code-2.md |
 | `README.md` | 2,087 | 49 | Synthetic voters (toy example) | code-2.md |
 | `VALIDITY.md` | 25,202 | 341 | Validity: goals, contamination, leakage and historical bias | code-2.md |

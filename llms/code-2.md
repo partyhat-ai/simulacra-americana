@@ -1,6 +1,6 @@
 # synthetic-electorate-toy: source and docs, part 2 of 16
 
-Generated from commit `8d299e47f067` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `2d80910f7eef` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 Files `EVAL.md` to `infra/alb.tf`. Lines are numbered as in the repository.
 
 ## `EVAL.md`
@@ -342,6 +342,32 @@ Files `EVAL.md` to `infra/alb.tf`. Lines are numbered as in the repository.
   334| - **Reading the stereotype audit.** A4 used the regex pass only.
   335| - **Alien declarant voting in 1920.** Not coded in any dataset found; treated
   336|   as barred everywhere.
+```
+
+## `LICENSE`
+
+```
+    1| MIT License
+    2| 
+    3| Copyright (c) 2026 Partyhat
+    4| 
+    5| Permission is hereby granted, free of charge, to any person obtaining a copy
+    6| of this software and associated documentation files (the "Software"), to deal
+    7| in the Software without restriction, including without limitation the rights
+    8| to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    9| copies of the Software, and to permit persons to whom the Software is
+   10| furnished to do so, subject to the following conditions:
+   11| 
+   12| The above copyright notice and this permission notice shall be included in all
+   13| copies or substantial portions of the Software.
+   14| 
+   15| THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   16| IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   17| FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   18| AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   19| LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   20| OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   21| SOFTWARE.
 ```
 
 ## `METHOD.md`
