@@ -1,6 +1,6 @@
 # synthetic-electorate-toy: source and docs, part 10 of 16
 
-Generated from commit `2d80910f7eef` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `5fc0a9e54bc9` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 Files `simharness/scenario.py` to `src/lib/robot/blast.ts`. Lines are numbered as in the repository.
 
 ## `simharness/scenario.py`

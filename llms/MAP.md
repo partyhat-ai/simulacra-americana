@@ -1,6 +1,6 @@
 # synthetic-electorate-toy: file map
 
-Generated from commit `2d80910f7eef` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `5fc0a9e54bc9` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 
 1098 tracked files. 188 are reproduced in full in the `code-N.md` parts; the rest are listed with the reason they are not.
 
@@ -25,7 +25,7 @@ Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/sy
 | `VALIDITY.md` | 25,202 | 341 | Validity: goals, contamination, leakage and historical bias | code-2.md |
 | `biome.json` | 775 | 40 |  | code-2.md |
 | `docker/entrypoint.sh` | 652 | 17 | The API container's entrypoint: check the state mount, surface the worker's | code-2.md |
-| `docs/DEPLOY.md` | 17,170 | 327 | Deploying Simulacra Americana | code-2.md |
+| `docs/DEPLOY.md` | 17,271 | 327 | Deploying Simulacra Americana | code-2.md |
 | `docs/harness/README.md` | 12,296 | 190 | Simulacra Americana harness | code-2.md |
 | `infra/.gitignore` | 60 | 5 |  | code-2.md |
 | `infra/.terraform.lock.hcl` | 1,481 | 26 | This file is maintained automatically by "terraform init". | code-2.md |
@@ -45,7 +45,7 @@ Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/sy
 | `infra/taskdef.json.tftpl` | 2,071 | 56 |  | code-3.md |
 | `infra/terraform.tfvars.example` | 570 | 12 | Copy to terraform.tfvars (gitignored) and fill in. | code-3.md |
 | `infra/variables.tf` | 2,538 | 65 |  | code-3.md |
-| `infra/vercel-dns.sh` | 1,801 | 49 | Every DNS record the AWS side needs, added in Vercel DNS (the zone lives | code-3.md |
+| `infra/vercel-dns.sh` | 1,799 | 49 | Every DNS record the AWS side needs, added in Vercel DNS (the zone lives | code-3.md |
 | `infra/versions.tf` | 1,275 | 39 | Simulacra Americana's AWS stack: the simulation API (ECS Fargate behind an | code-3.md |
 | `package.json` | 1,328 | 45 |  | code-3.md |
 | `pnpm-lock.yaml` | 75,611 | 2,356 |  | skip: lockfile |
@@ -133,7 +133,7 @@ Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/sy
 | `src/lib/simulacra/AbsentRow.svelte` | 1,987 | 46 | A group the year has no simulation for, held in its usual place on a | code-11.md |
 | `src/lib/simulacra/ElectionHeader.svelte` | 8,119 | 162 | The election at the top of the page: the two candidates with their | code-11.md |
 | `src/lib/simulacra/GroupLabel.svelte` | 826 | 18 | A group's name. On a narrow window the word "citizens" is set small and | code-11.md |
-| `src/lib/simulacra/InfoPopover.svelte` | 3,346 | 101 | An ⓘ button that opens a short explanation — for terms (backtest, held | code-11.md |
+| `src/lib/simulacra/InfoPopover.svelte` | 3,347 | 101 | An info button that opens a short explanation — for terms (backtest, held | code-11.md |
 | `src/lib/simulacra/KindChips.svelte` | 6,130 | 144 | The what-if suggestions: one row of chips, scrolled sideways (a vertical | code-11.md |
 | `src/lib/simulacra/MiniMap.svelte` | 5,681 | 135 | The election's map, small: one tile per state, in the colour of whoever | code-11.md |
 | `src/lib/simulacra/Narrator.svelte` | 3,284 | 115 | The narrator: the harness robot's bubble and the what-if composer | code-12.md |

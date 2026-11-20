@@ -1,6 +1,6 @@
 # synthetic-electorate-toy: source and docs, part 2 of 16
 
-Generated from commit `2d80910f7eef` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `5fc0a9e54bc9` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 Files `EVAL.md` to `infra/alb.tf`. Lines are numbered as in the repository.
 
 ## `EVAL.md`
@@ -1393,12 +1393,12 @@ Files `EVAL.md` to `infra/alb.tf`. Lines are numbered as in the repository.
    57| 
    58| ## Stand-up (once)
    59| 
-   60| Each step marked ⛔ needs Cameron's yes.
+   60| Steps marked (production) change production. Review the plan or dry-run output before running them.
    61| 
    62| 1. `infra/bootstrap.sh` creates the state bucket.
    63| 2. `cd infra && terraform init && terraform plan`.
-   64| 3. ⛔ Certificates first: `terraform apply -target=aws_acm_certificate.api -target=aws_acm_certificate.assets -target=aws_ecr_repository.api`.
-   65| 4. ⛔ DNS for the certificates: `infra/vercel-dns.sh certs`, then
+   64| 3. (production) Certificates first: `terraform apply -target=aws_acm_certificate.api -target=aws_acm_certificate.assets -target=aws_ecr_repository.api`.
+   65| 4. (production) DNS for the certificates: `infra/vercel-dns.sh certs`, then
    66|    `--apply`. This adds the `amazon.com` CAA record (without it ACM never
    67|    issues; the zone allows only pki.goog, sectigo and letsencrypt) and the two
    68|    validation CNAMEs.
@@ -1412,7 +1412,7 @@ Files `EVAL.md` to `infra/alb.tf`. Lines are numbered as in the repository.
    76|    Terraform creates the empty secret in step 7. If you want the value in
    77|    place before the task first starts, run
    78|    `terraform apply -target=aws_secretsmanager_secret.prod` first.
-   79| 7. ⛔ `terraform apply -var image=<ecr>/simulacra-api:<sha>`. This waits for
+   79| 7. (production) `terraform apply -var image=<ecr>/simulacra-api:<sha>`. This waits for
    80|    the certificates to issue, then creates everything else, including the
    81|    bill-monthly items: ALB, EFS, CloudFront. Pass `-var image` on the very
    82|    apply that FIRST creates `aws_ecs_task_definition.api`: the task def
@@ -1429,7 +1429,7 @@ Files `EVAL.md` to `infra/alb.tf`. Lines are numbered as in the repository.
    93|    retrying, so seed right after step 7.
    94| 9. Assets: `python3 scripts/mirror-portraits.py --out ../simulacra-assets`,
    95|    then `scripts/publish-assets.sh`.
-   96| 10. ⛔ DNS for the endpoints: `infra/vercel-dns.sh endpoints`, then `--apply`.
+   96| 10. (production) DNS for the endpoints: `infra/vercel-dns.sh endpoints`, then `--apply`.
    97| 11. Confirm the SNS subscription email to cam@partyhat.ai. Until it's
    98|     confirmed, alarms reach nobody.
    99| 12. Free reproducibility check on the server: a one-off task running
@@ -1487,7 +1487,7 @@ Files `EVAL.md` to `infra/alb.tf`. Lines are numbered as in the repository.
   151| (production and preview). `www.` redirects 308 to the apex as a domain
   152| setting (`vercel api /v9/projects/simulacra-americana/domains/www.simulacraamericana.com -X PATCH`).
   153| Once the repo is connected to Vercel's Git integration, Vercel builds a preview from every push. Promoting to production is
-  154| manual (`vercel promote <url>`) and needs Cameron's yes. After a promotion,
+  154| manual (`vercel promote <url>`) and needs the owner's sign-off. After a promotion,
   155| check that the site loads, a year opens through the rewrite, and the robot
   156| loads from `assets.`.
   157| 

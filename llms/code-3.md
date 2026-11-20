@@ -1,6 +1,6 @@
 # synthetic-electorate-toy: source and docs, part 3 of 16
 
-Generated from commit `2d80910f7eef` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `5fc0a9e54bc9` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 Files `infra/backup.tf` to `scripts/harness/build_franchise.py`. Lines are numbered as in the repository.
 
 ## `infra/backup.tf`
@@ -1149,7 +1149,7 @@ Files `infra/backup.tf` to `scripts/harness/build_franchise.py`. Lines are numbe
     1| #!/usr/bin/env bash
     2| # Every DNS record the AWS side needs, added in Vercel DNS (the zone lives
     3| # there; scope camerons-projects-2a650f0d). Prints the commands by default;
-    4| # --apply runs them. Each run needs Cameron's yes: these change production DNS.
+    4| # --apply runs them. These change production DNS, so check the dry run first.
     5| #
     6| #   infra/vercel-dns.sh certs [--apply]      before the full apply: CAA + ACM validation
     7| #   infra/vercel-dns.sh endpoints [--apply]  after it: api. -> ALB, assets. -> CloudFront
