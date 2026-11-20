@@ -1,6 +1,6 @@
 # synthetic-electorate-toy: source and docs, part 9 of 16
 
-Generated from commit `93f19ca29232` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `8d299e47f067` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 Files `simharness/pipeline.py` to `simharness/run.py`. Lines are numbered as in the repository.
 
 ## `simharness/pipeline.py`

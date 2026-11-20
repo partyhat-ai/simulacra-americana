@@ -16,13 +16,13 @@ than known.
 
 Read `VALIDITY.md` for what the system can and cannot claim.
 
-Generated from commit `93f19ca29232` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `8d299e47f067` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 
 ## Start here
 
 - [README](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/README.md): overview
 - [File map](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/MAP.md): all 1097 files with size, line count, description, and which digest part holds each one
-- [Commit history](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/HISTORY.md): 3 commit(s)
+- [Commit history](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/HISTORY.md): 4 commit(s)
 
 ## Documentation
 
@@ -35,13 +35,13 @@ Generated from commit `93f19ca29232` (2026-11-20) of github.com/partyhat-ai/synt
 - [docs/DEPLOY.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/docs/DEPLOY.md)
 - [docs/harness/README.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/docs/harness/README.md)
 
-## Full source text (1,699,153 characters, about 424,788 tokens, in 16 part(s))
+## Full source text (1,699,437 characters, about 424,859 tokens, in 16 part(s))
 
 - [llms/code-1.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/code-1.md): 10 files, `.dockerignore` to `Dockerfile` (102,167 characters)
 - [llms/code-2.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/code-2.md): 12 files, `EVAL.md` to `infra/alb.tf` (118,288 characters)
 - [llms/code-3.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/code-3.md): 21 files, `infra/backup.tf` to `scripts/harness/build_franchise.py` (119,500 characters)
 - [llms/code-4.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/code-4.md): 5 files, `scripts/harness/build_population.py` to `scripts/harness/build_population_republic.py` (90,396 characters)
-- [llms/code-5.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/code-5.md): 18 files, `scripts/harness/build_republic.py` to `serve/contract.test.ts` (115,228 characters)
+- [llms/code-5.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/code-5.md): 18 files, `scripts/harness/build_republic.py` to `serve/contract.test.ts` (115,512 characters)
 - [llms/code-6.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/code-6.md): 9 files, `serve/contract.ts` to `simharness/agentlayer.py` (110,571 characters)
 - [llms/code-7.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/code-7.md): 7 files, `simharness/agents.py` to `simharness/data.py` (118,289 characters)
 - [llms/code-8.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/code-8.md): 6 files, `simharness/evaluate.py` to `simharness/paired.py` (112,098 characters)

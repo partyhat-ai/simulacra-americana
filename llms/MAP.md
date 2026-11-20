@@ -1,6 +1,6 @@
 # synthetic-electorate-toy: file map
 
-Generated from commit `93f19ca29232` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `8d299e47f067` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 
 1097 tracked files. 187 are reproduced in full in the `code-N.md` parts; the rest are listed with the reason they are not.
 
@@ -65,7 +65,7 @@ Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/sy
 | `scripts/harness/nhgis_extract_modern.py` | 2,728 | 52 | Submit, wait for and download the NHGIS state-level extract behind the | code-5.md |
 | `scripts/harness/nhgis_extract_republic.py` | 1,702 | 29 | Submit, wait for and download the NHGIS state-level extract behind the | code-5.md |
 | `scripts/harness/sessions-report.py` | 3,727 | 86 | What people typed into the page, and what the robot couldn't model. | code-5.md |
-| `scripts/llms_digest.py` | 12,022 | 238 | Build llms.txt and llms/: a plain-text copy of this repository for tools that | code-5.md |
+| `scripts/llms_digest.py` | 12,285 | 241 | Build llms.txt and llms/: a plain-text copy of this repository for tools that | code-5.md |
 | `scripts/mirror-portraits.py` | 5,354 | 139 | Mirror the candidates' Wikimedia Commons portraits for the assets bucket. | code-5.md |
 | `scripts/model-check.ts` | 1,242 | 24 | Prints the sample model's outcome for every what-if of every story | code-5.md |
 | `scripts/publish-assets.sh` | 2,895 | 52 | Publish the robot assets and mirrored portraits to s3://simulacra-americana-assets | code-5.md |

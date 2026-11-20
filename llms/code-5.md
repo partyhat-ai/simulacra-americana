@@ -1,6 +1,6 @@
 # synthetic-electorate-toy: source and docs, part 5 of 16
 
-Generated from commit `93f19ca29232` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `8d299e47f067` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 Files `scripts/harness/build_republic.py` to `serve/contract.test.ts`. Lines are numbered as in the repository.
 
 ## `scripts/harness/build_republic.py`
@@ -1385,150 +1385,153 @@ Files `scripts/harness/build_republic.py` to `serve/contract.test.ts`. Lines are
    92| 
    93| def build(root: Path, out: Path) -> dict:
    94|     owner, name, branch = repo_identity(root)
-   95|     sha = git("rev-parse", "HEAD", cwd=root).strip()
-   96|     date = git("log", "-1", "--format=%cs", cwd=root).strip()
-   97|     raw_base = f"https://raw.githubusercontent.com/{owner}/{name}/{branch}/"
-   98|     files = [f for f in git("ls-files", cwd=root).splitlines() if f and not f.startswith(OWN)]
-   99|     stamp = (f"Generated from commit `{sha[:12]}` ({date}) of github.com/{owner}/{name} by "
-  100|              f"`scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to "
-  101|              f"`{branch}`, so this text matches the code at that commit.")
-  102| 
-  103|     rows, included, data_dirs = [], [], {}
-  104|     for f in files:
-  105|         raw = (root / f).read_bytes()
-  106|         verdict = classify(f, len(raw), raw)
-  107|         ext = os.path.splitext(f)[1].lower()
-  108|         text = "" if verdict == "skip: binary" else raw.decode("utf-8", "replace")
-  109|         lines = text.count("\n") + (1 if text and not text.endswith("\n") else 0)
-  110|         desc = first_descriptive_line(text, ext) if verdict == "include" else ""
-  111|         rows.append((f, len(raw), lines, desc, verdict))
-  112|         if verdict == "include":
-  113|             included.append((f, text, ext))
-  114|         elif verdict.startswith("data"):
-  115|             data_dirs.setdefault(f.split("/")[0] if "/" in f else "(root)", []).append((f, text))
-  116| 
-  117|     # Parts: whole files in path order, never split across parts.
-  118|     parts, cur, cur_len = [], [], 0
-  119|     for f, text, ext in included:
-  120|         numbered = "\n".join(f"{i:>5}| {l}" for i, l in enumerate(text.splitlines(), 1))
-  121|         block = f"\n## `{f}`\n\n```{LANG.get(ext, '')}\n{numbered}\n```\n"
-  122|         if cur and cur_len + len(block) > PART_CHARS:
-  123|             parts.append(cur)
-  124|             cur, cur_len = [], 0
-  125|         cur.append((f, block))
-  126|         cur_len += len(block)
-  127|     if cur:
-  128|         parts.append(cur)
-  129| 
-  130|     (out / "llms").mkdir(parents=True, exist_ok=True)
-  131|     part_index, file_part = [], {}
-  132|     for i, part in enumerate(parts, 1):
-  133|         fname = f"llms/code-{i}.md"
-  134|         body = "".join(b for _, b in part)
-  135|         (out / fname).write_text(
-  136|             f"# {name}: source and docs, part {i} of {len(parts)}\n\n{stamp}\nFiles `{part[0][0]}` to "
-  137|             f"`{part[-1][0]}`. Lines are numbered as in the repository.\n" + body)
-  138|         part_index.append((fname, part[0][0], part[-1][0], len(part), len(body)))
-  139|         for f, _ in part:
-  140|             file_part[f] = f"code-{i}.md"
-  141| 
-  142|     m = [f"# {name}: file map", "", stamp, "",
-  143|          f"{len(files)} tracked files. {len(included)} are reproduced in full in the `code-N.md` parts; "
-  144|          "the rest are listed with the reason they are not.", "",
-  145|          f"Every path below is relative to {raw_base} (append the path to fetch the raw file).", "",
-  146|          "| File | Bytes | Lines | Description | In digest |", "|---|---|---|---|---|"]
-  147|     for f, size, lines, desc, verdict in rows:
-  148|         if not verdict.startswith("data"):
-  149|             m.append(f"| `{f}` | {size:,} | {lines:,} | {desc.replace('|', '/')[:100]} | {file_part.get(f, verdict)} |")
-  150|     if data_dirs:
-  151|         m += ["", "### Data files (not reproduced; one sample per folder in `data-samples.md`)", "",
-  152|               "| Folder | Files | Bytes |", "|---|---|---|"]
-  153|         sizes = {r[0]: r[1] for r in rows}
-  154|         for d, items in sorted(data_dirs.items()):
-  155|             m.append(f"| `{d}/` | {len(items)} | {sum(sizes[f] for f, _ in items):,} |")
-  156|     (out / "llms" / "MAP.md").write_text("\n".join(m) + "\n")
-  157| 
-  158|     if data_dirs:
-  159|         ds = [f"# {name}: data samples", "", stamp, "",
-  160|               "Data files are not reproduced in full. One sample per top-level folder, first 40 lines:", ""]
-  161|         for d, items in sorted(data_dirs.items()):
-  162|             f, text = items[0]
-  163|             sample = "\n".join(text.splitlines()[:40])
-  164|             ds += [f"## `{d}/` ({len(items)} files)", "", f"Sample: `{f}`", "",
-  165|                    f"```{LANG.get(os.path.splitext(f)[1].lower(), '')}\n{sample}\n```", ""]
-  166|         (out / "llms" / "data-samples.md").write_text("\n".join(ds))
-  167| 
-  168|     # Commits that touched anything besides the digest itself, verbatim.
-  169|     log = git("log", "--format=%h  %ad  %an  %s", "--date=short", "--", ".", ":(exclude)llms.txt", ":(exclude)llms",
-  170|               cwd=root).strip()
-  171|     count = len(log.splitlines()) if log else 0
-  172|     (out / "llms" / "HISTORY.md").write_text(
-  173|         f"# {name}: commit history\n\n{stamp}\n\n{count} commit(s), verbatim from `git log` "
-  174|         f"(commits that only regenerate this digest are left out):\n\n```\n{log}\n```\n")
-  175| 
-  176|     readme = next((f for f in files if f.lower() == "readme.md"), None)
-  177|     total = sum(p[4] for p in part_index)
-  178|     idx = [f"# {name}", ""]
-  179|     if readme:
-  180|         intro = re.split(r"(?m)^##\s", (root / readme).read_text(errors="replace"))[0]
-  181|         intro = re.sub(r"(?m)^#\s.*\n", "", intro).strip()
-  182|         if intro:
-  183|             idx += ["## Summary (the README's opening section, verbatim)", "", intro[:3000], ""]
-  184|     idx += [stamp, "", "## Start here", ""]
-  185|     if readme:
-  186|         idx.append(f"- [README]({raw_base}{readme}): overview")
-  187|     idx += [f"- [File map]({raw_base}llms/MAP.md): all {len(files)} files with size, line count, description, "
-  188|             "and which digest part holds each one",
-  189|             f"- [Commit history]({raw_base}llms/HISTORY.md): {count} commit(s)", ""]
-  190|     docs = [r[0] for r in rows if r[0].lower().endswith(".md") and r[0] != readme]
-  191|     if docs:
-  192|         idx += ["## Documentation", ""] + [f"- [{d}]({raw_base}{d})" for d in docs[:30]] + [""]
-  193|     idx += [f"## Full source text ({total:,} characters, about {total // 4:,} tokens, in {len(part_index)} part(s))", ""]
-  194|     idx += [f"- [{fn}]({raw_base}{fn}): {n} files, `{a}` to `{b}` ({size:,} characters)"
-  195|             for fn, a, b, n, size in part_index]
-  196|     if data_dirs:
-  197|         idx += ["", "## Data", "", f"- [Data samples]({raw_base}llms/data-samples.md): "
-  198|                 f"{sum(len(v) for v in data_dirs.values())} data files in {len(data_dirs)} folder(s), one sample each"]
-  199|     (out / "llms.txt").write_text("\n".join(idx) + "\n")
-  200|     return {"files": len(files), "included": len(included), "parts": len(part_index), "chars": total}
-  201| 
-  202| 
-  203| def snapshot(d: Path) -> dict[str, str]:
-  204|     out = {}
-  205|     if (d / "llms.txt").exists():
-  206|         out["llms.txt"] = (d / "llms.txt").read_text()
-  207|     for p in sorted((d / "llms").glob("*")) if (d / "llms").is_dir() else []:
-  208|         out[f"llms/{p.name}"] = p.read_text()
-  209|     return out
-  210| 
-  211| 
-  212| def main() -> None:
-  213|     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-  214|     ap.add_argument("--check", action="store_true", help="exit 1 if llms.txt and llms/ don't match the code")
-  215|     args = ap.parse_args()
-  216|     root = Path(git("rev-parse", "--show-toplevel", cwd=Path.cwd()).strip())
-  217|     tmp = Path(tempfile.mkdtemp(prefix="llms-digest-"))
-  218|     try:
-  219|         stats = build(root, tmp)
-  220|         fresh = snapshot(tmp)
-  221|         if args.check:
-  222|             # The stamp names a commit; compare everything else.
-  223|             norm = lambda d: {k: re.sub(r"commit `[0-9a-f]{12}` \(\d{4}-\d\d-\d\d\)", "commit", v) for k, v in d.items()}
-  224|             if norm(fresh) != norm(snapshot(root)):
-  225|                 sys.exit("llms.txt / llms/ don't match the code. Run: python3 scripts/llms_digest.py")
-  226|             print("llms.txt and llms/ match the code.")
-  227|             return
-  228|         shutil.rmtree(root / "llms", ignore_errors=True)
-  229|         (root / "llms").mkdir()
-  230|         for rel, text in fresh.items():
-  231|             (root / rel).write_text(text)
-  232|         print(f"{stats['included']} of {stats['files']} files in {stats['parts']} part(s), {stats['chars']:,} characters.")
-  233|     finally:
-  234|         shutil.rmtree(tmp, ignore_errors=True)
-  235| 
-  236| 
-  237| if __name__ == "__main__":
-  238|     main()
+   95|     # The last commit that changed anything besides the digest: rebuilding after a
+   96|     # digest-only commit then gives identical text, so the workflow never loops.
+   97|     code_only = ("--", ".", ":(exclude)llms.txt", ":(exclude)llms")
+   98|     sha = git("log", "-1", "--format=%H", *code_only, cwd=root).strip()
+   99|     date = git("log", "-1", "--format=%cs", *code_only, cwd=root).strip()
+  100|     raw_base = f"https://raw.githubusercontent.com/{owner}/{name}/{branch}/"
+  101|     files = [f for f in git("ls-files", cwd=root).splitlines() if f and not f.startswith(OWN)]
+  102|     stamp = (f"Generated from commit `{sha[:12]}` ({date}) of github.com/{owner}/{name} by "
+  103|              f"`scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to "
+  104|              f"`{branch}`, so this text matches the code at that commit.")
+  105| 
+  106|     rows, included, data_dirs = [], [], {}
+  107|     for f in files:
+  108|         raw = (root / f).read_bytes()
+  109|         verdict = classify(f, len(raw), raw)
+  110|         ext = os.path.splitext(f)[1].lower()
+  111|         text = "" if verdict == "skip: binary" else raw.decode("utf-8", "replace")
+  112|         lines = text.count("\n") + (1 if text and not text.endswith("\n") else 0)
+  113|         desc = first_descriptive_line(text, ext) if verdict == "include" else ""
+  114|         rows.append((f, len(raw), lines, desc, verdict))
+  115|         if verdict == "include":
+  116|             included.append((f, text, ext))
+  117|         elif verdict.startswith("data"):
+  118|             data_dirs.setdefault(f.split("/")[0] if "/" in f else "(root)", []).append((f, text))
+  119| 
+  120|     # Parts: whole files in path order, never split across parts.
+  121|     parts, cur, cur_len = [], [], 0
+  122|     for f, text, ext in included:
+  123|         numbered = "\n".join(f"{i:>5}| {l}" for i, l in enumerate(text.splitlines(), 1))
+  124|         block = f"\n## `{f}`\n\n```{LANG.get(ext, '')}\n{numbered}\n```\n"
+  125|         if cur and cur_len + len(block) > PART_CHARS:
+  126|             parts.append(cur)
+  127|             cur, cur_len = [], 0
+  128|         cur.append((f, block))
+  129|         cur_len += len(block)
+  130|     if cur:
+  131|         parts.append(cur)
+  132| 
+  133|     (out / "llms").mkdir(parents=True, exist_ok=True)
+  134|     part_index, file_part = [], {}
+  135|     for i, part in enumerate(parts, 1):
+  136|         fname = f"llms/code-{i}.md"
+  137|         body = "".join(b for _, b in part)
+  138|         (out / fname).write_text(
+  139|             f"# {name}: source and docs, part {i} of {len(parts)}\n\n{stamp}\nFiles `{part[0][0]}` to "
+  140|             f"`{part[-1][0]}`. Lines are numbered as in the repository.\n" + body)
+  141|         part_index.append((fname, part[0][0], part[-1][0], len(part), len(body)))
+  142|         for f, _ in part:
+  143|             file_part[f] = f"code-{i}.md"
+  144| 
+  145|     m = [f"# {name}: file map", "", stamp, "",
+  146|          f"{len(files)} tracked files. {len(included)} are reproduced in full in the `code-N.md` parts; "
+  147|          "the rest are listed with the reason they are not.", "",
+  148|          f"Every path below is relative to {raw_base} (append the path to fetch the raw file).", "",
+  149|          "| File | Bytes | Lines | Description | In digest |", "|---|---|---|---|---|"]
+  150|     for f, size, lines, desc, verdict in rows:
+  151|         if not verdict.startswith("data"):
+  152|             m.append(f"| `{f}` | {size:,} | {lines:,} | {desc.replace('|', '/')[:100]} | {file_part.get(f, verdict)} |")
+  153|     if data_dirs:
+  154|         m += ["", "### Data files (not reproduced; one sample per folder in `data-samples.md`)", "",
+  155|               "| Folder | Files | Bytes |", "|---|---|---|"]
+  156|         sizes = {r[0]: r[1] for r in rows}
+  157|         for d, items in sorted(data_dirs.items()):
+  158|             m.append(f"| `{d}/` | {len(items)} | {sum(sizes[f] for f, _ in items):,} |")
+  159|     (out / "llms" / "MAP.md").write_text("\n".join(m) + "\n")
+  160| 
+  161|     if data_dirs:
+  162|         ds = [f"# {name}: data samples", "", stamp, "",
+  163|               "Data files are not reproduced in full. One sample per top-level folder, first 40 lines:", ""]
+  164|         for d, items in sorted(data_dirs.items()):
+  165|             f, text = items[0]
+  166|             sample = "\n".join(text.splitlines()[:40])
+  167|             ds += [f"## `{d}/` ({len(items)} files)", "", f"Sample: `{f}`", "",
+  168|                    f"```{LANG.get(os.path.splitext(f)[1].lower(), '')}\n{sample}\n```", ""]
+  169|         (out / "llms" / "data-samples.md").write_text("\n".join(ds))
+  170| 
+  171|     # Commits that touched anything besides the digest itself, verbatim.
+  172|     log = git("log", "--format=%h  %ad  %an  %s", "--date=short", "--", ".", ":(exclude)llms.txt", ":(exclude)llms",
+  173|               cwd=root).strip()
+  174|     count = len(log.splitlines()) if log else 0
+  175|     (out / "llms" / "HISTORY.md").write_text(
+  176|         f"# {name}: commit history\n\n{stamp}\n\n{count} commit(s), verbatim from `git log` "
+  177|         f"(commits that only regenerate this digest are left out):\n\n```\n{log}\n```\n")
+  178| 
+  179|     readme = next((f for f in files if f.lower() == "readme.md"), None)
+  180|     total = sum(p[4] for p in part_index)
+  181|     idx = [f"# {name}", ""]
+  182|     if readme:
+  183|         intro = re.split(r"(?m)^##\s", (root / readme).read_text(errors="replace"))[0]
+  184|         intro = re.sub(r"(?m)^#\s.*\n", "", intro).strip()
+  185|         if intro:
+  186|             idx += ["## Summary (the README's opening section, verbatim)", "", intro[:3000], ""]
+  187|     idx += [stamp, "", "## Start here", ""]
+  188|     if readme:
+  189|         idx.append(f"- [README]({raw_base}{readme}): overview")
+  190|     idx += [f"- [File map]({raw_base}llms/MAP.md): all {len(files)} files with size, line count, description, "
+  191|             "and which digest part holds each one",
+  192|             f"- [Commit history]({raw_base}llms/HISTORY.md): {count} commit(s)", ""]
+  193|     docs = [r[0] for r in rows if r[0].lower().endswith(".md") and r[0] != readme]
+  194|     if docs:
+  195|         idx += ["## Documentation", ""] + [f"- [{d}]({raw_base}{d})" for d in docs[:30]] + [""]
+  196|     idx += [f"## Full source text ({total:,} characters, about {total // 4:,} tokens, in {len(part_index)} part(s))", ""]
+  197|     idx += [f"- [{fn}]({raw_base}{fn}): {n} files, `{a}` to `{b}` ({size:,} characters)"
+  198|             for fn, a, b, n, size in part_index]
+  199|     if data_dirs:
+  200|         idx += ["", "## Data", "", f"- [Data samples]({raw_base}llms/data-samples.md): "
+  201|                 f"{sum(len(v) for v in data_dirs.values())} data files in {len(data_dirs)} folder(s), one sample each"]
+  202|     (out / "llms.txt").write_text("\n".join(idx) + "\n")
+  203|     return {"files": len(files), "included": len(included), "parts": len(part_index), "chars": total}
+  204| 
+  205| 
+  206| def snapshot(d: Path) -> dict[str, str]:
+  207|     out = {}
+  208|     if (d / "llms.txt").exists():
+  209|         out["llms.txt"] = (d / "llms.txt").read_text()
+  210|     for p in sorted((d / "llms").glob("*")) if (d / "llms").is_dir() else []:
+  211|         out[f"llms/{p.name}"] = p.read_text()
+  212|     return out
+  213| 
+  214| 
+  215| def main() -> None:
+  216|     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+  217|     ap.add_argument("--check", action="store_true", help="exit 1 if llms.txt and llms/ don't match the code")
+  218|     args = ap.parse_args()
+  219|     root = Path(git("rev-parse", "--show-toplevel", cwd=Path.cwd()).strip())
+  220|     tmp = Path(tempfile.mkdtemp(prefix="llms-digest-"))
+  221|     try:
+  222|         stats = build(root, tmp)
+  223|         fresh = snapshot(tmp)
+  224|         if args.check:
+  225|             # The stamp names a commit; compare everything else.
+  226|             norm = lambda d: {k: re.sub(r"commit `[0-9a-f]{12}` \(\d{4}-\d\d-\d\d\)", "commit", v) for k, v in d.items()}
+  227|             if norm(fresh) != norm(snapshot(root)):
+  228|                 sys.exit("llms.txt / llms/ don't match the code. Run: python3 scripts/llms_digest.py")
+  229|             print("llms.txt and llms/ match the code.")
+  230|             return
+  231|         shutil.rmtree(root / "llms", ignore_errors=True)
+  232|         (root / "llms").mkdir()
+  233|         for rel, text in fresh.items():
+  234|             (root / rel).write_text(text)
+  235|         print(f"{stats['included']} of {stats['files']} files in {stats['parts']} part(s), {stats['chars']:,} characters.")
+  236|     finally:
+  237|         shutil.rmtree(tmp, ignore_errors=True)
+  238| 
+  239| 
+  240| if __name__ == "__main__":
+  241|     main()
 ```
 
 ## `scripts/mirror-portraits.py`
