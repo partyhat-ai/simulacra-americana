@@ -1,0 +1,16 @@
+node_modules/
+.svelte-kit/
+build/
+.env
+.env.*
+!.env.example
+__pycache__/
+.pytest_cache/
+.venv/
+runs/*/fit.pkl
+runs/*/effects.pkl
+runs/_cache/
+sessions/
+notes/
+.DS_Store
+*.egg-info/

@@ -1,0 +1,157 @@
+<script lang="ts">
+  // The what-if composer: the suggestions (KindChips) on one row, scrolled
+  // sideways, its edges fading where there's more past them (the right edge
+  // is Rerun's); your own what-if, the field and Rerun, on the row beneath.
+  import { Square } from 'lucide-svelte';
+  import KindChips from './KindChips.svelte';
+  import { RUN_LIMITS, type WhatIf } from './schemas';
+
+  interface Props {
+    /** The harness's name, for the field's label. */
+    name: string;
+    whatIfs?: readonly WhatIf[];
+    selected?: readonly string[];
+    slice?: string | null;
+    ran?: readonly string[];
+    /** The typed what-if. */
+    value?: string;
+    /** The field, for the page to focus. */
+    input?: HTMLInputElement | null;
+    running?: boolean;
+    canRun?: boolean;
+    canReset?: boolean;
+    /** Something to run since the rerun on show. */
+    dirty?: boolean;
+    ontoggle?: (key: string) => void;
+    onrun?: () => void;
+    onstop?: () => void;
+    onreset?: () => void;
+    onfocus?: (on: boolean) => void;
+  }
+  let {
+    name,
+    whatIfs = [],
+    selected = [],
+    slice = null,
+    ran = [],
+    value = $bindable(''),
+    input = $bindable(null),
+    running = false,
+    canRun = true,
+    canReset = false,
+    dirty = true,
+    ontoggle,
+    onrun,
+    onstop,
+    onreset,
+    onfocus,
+  }: Props = $props();
+
+  function submit(e: SubmitEvent) {
+    e.preventDefault();
+    if (running) onstop?.();
+    else onrun?.();
+  }
+</script>
+
+<form class="compose" aria-label="What-ifs" onsubmit={submit}>
+  <KindChips {whatIfs} {selected} {ran} {slice} {running} {ontoggle} />
+  <span class="ask">
+    <input
+      bind:this={input}
+      bind:value
+      type="text"
+      placeholder="What if…"
+      maxlength={RUN_LIMITS.text}
+      aria-label="Tell {name} what to change"
+      autocomplete="off"
+      enterkeyhint="go"
+      disabled={running}
+      onfocus={() => onfocus?.(true)}
+      onblur={() => onfocus?.(false)}
+    />
+    {#if canReset && !running}
+      <button type="button" class="reset" onclick={() => onreset?.()}>Reset</button>
+    {/if}
+    <button type="submit" class="run" class:rest={!dirty && !running} disabled={!running && !canRun}>
+      {#if running}<Square size={11} strokeWidth={0} fill="currentColor" aria-hidden="true" /> Stop{:else}Rerun{/if}
+    </button>
+  </span>
+</form>
+
+<style>
+  /* The suggestions above, the field and Rerun beneath: both rows the
+     column's full width, so the chip row ends at Rerun's right edge. */
+  /* The composer pins to the column's floor (WhatIf .talk). */
+  .compose { display: flex; flex-direction: column; align-items: stretch; gap: var(--compose-gap); min-width: 0; margin-top: auto; }
+  .ask { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  /* The field: Messages' entry capsule — white, an opaqueSeparator
+     hairline, a blue caret — whose ring turns the tint while typing (the
+     creator-rows search field's behaviour). */
+  input {
+    flex: 1;
+    min-width: 0;
+    height: var(--control-h);
+    padding: 0 14px;
+    border: var(--hairline) solid var(--separator);
+    border-radius: 999px;
+    background: #fff;
+    color: var(--label);
+    caret-color: var(--tint);
+    font: inherit;
+    font-size: 15px;
+    transition: border-color 0.15s ease;
+  }
+  input::placeholder { color: var(--label-3); }
+  input:focus { outline: none; border-color: var(--tint); }
+  input:disabled { opacity: 0.6; }
+  /* Rerun: the send button — filled systemBlue, white, regular weight. */
+  .run {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: var(--control-h);
+    padding: 0 18px;
+    border: none;
+    border-radius: 999px;
+    background: var(--tint);
+    color: #fff;
+    font: inherit;
+    font-size: 15px;
+    font-weight: 400;
+    cursor: pointer;
+    transition: background-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s cubic-bezier(0.2, 0.9, 0.3, 1.3); /* = KindChips .chip */
+  }
+  /* Hover and press as the chips have them (KindChips): a hairline ring on
+     hover, a press that shrinks it. On blue the ring is light, to show. */
+  @media (hover: hover) {
+    .run:hover:not(:disabled) { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.45); }
+    .run.rest:hover:not(:disabled) { box-shadow: inset 0 0 0 1px rgba(0, 122, 255, 0.2); }
+  }
+  .run:active:not(:disabled) { background: #0062cc; transform: scale(0.97); box-shadow: none; }
+  .run:disabled { opacity: 0.35; cursor: default; background: var(--tint); }
+  /* Nothing new to run: at rest, a gray button (pressing it shows the rerun
+     already made). It fills blue again as soon as there's a change. */
+  .run.rest { background: var(--fill); color: var(--label); }
+  .run.rest:active:not(:disabled) { background: var(--fill-press); }
+  /* Reset: a plain text button in the tint. */
+  .reset {
+    height: var(--control-h);
+    padding: 0 10px;
+    border: none;
+    background: transparent;
+    color: var(--tint);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    border-radius: 10px;
+  }
+  .reset:hover { background: rgba(0, 122, 255, 0.08); }
+  .reset:active { opacity: 0.6; }
+  .run:focus-visible, .reset:focus-visible { outline: 2px solid #3876b7; outline-offset: 2px; }
+  /* Under the Rerun view's invert the accent-coloured parts are turned back
+     (as the photos are) and take dark mode's systemBlue. */
+  :global(.sa.dark) .run:not(.rest),
+  :global(.sa.dark) .reset { filter: invert(1) hue-rotate(180deg) saturate(66.7%); }
+  @media (prefers-reduced-motion: reduce) { .run { transition: none; } }
+</style>

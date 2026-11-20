@@ -1,0 +1,33 @@
+# Simulacra Americana
+
+> Replays every American presidential election from 1789 to 2024 as it happened, then reruns it with one thing changed: who could vote, who lived where, what people cared about, or who was on the ballot. A calibrated statistical backbone decides the counts; synthetic voters, interviewed in both worlds, explain the change in their own words. Every result says how far to trust it.
+
+## How it works
+
+- Every election opens as it happened. The electorate is rebuilt from census records, including the adults who couldn't legally vote, each kept with the reason.
+- A calibrated statistical backbone decides the counts. An unchanged rerun reproduces each state's certified Republican, Democratic and other vote in every draw.
+- Synthetic voters, interviewed in both the real and the changed world, supply only within-person changes and quotes, never counts.
+- A what-if is typed as one of four kinds: franchise (who can vote), population (who lives where), issue (what people care about) or candidate (who is on the ballot).
+- Every rerun carries a confidence tier, and a running disclosures log records what is assumed rather than known.
+
+## Evaluation (1920 prototype, 12 held-out states)
+
+- Two-party vote share RMSE 7.6 points, against 8.7 for uniform swing and 17.4 for persistence ("same as last time").
+- Brier score for state winners 0.052, against 0.069 for uniform swing.
+- Turnout RMSE 2.9 points (persistence 16.5); Spearman rank correlation 0.92.
+- 19th Amendment placebo passes: in Georgia and Mississippi, where women couldn't register in time, implied women's turnout is near zero (2.1% and 3.5%).
+- The checks it fails are published with the ones it passes: it calls North Carolina for Harding, its women's-turnout intervals are too narrow, and the synthetic voters overstate turnout and answer too uniformly.
+
+## Sources
+
+Certified returns from the Clerk of the House, the Federal Election Commission and Dave Leip's Atlas of U.S. Presidential Elections; populations from the U.S. Census and IPUMS NHGIS; disenfranchisement, suffrage and turnout research from Harvard Dataverse replication data (Gray and Jenkins; Teele; Corder and Wolbrecht); party platforms from The American Presidency Project; period newspapers from Chronicling America.
+
+## Links
+
+- Site: https://simulacraamericana.com
+- Code: https://github.com/partyhat-ai/synthetic-electorate-toy
+- Evaluation, failures included: https://github.com/partyhat-ai/synthetic-electorate-toy/blob/main/EVAL.md
+- Method: https://github.com/partyhat-ai/synthetic-electorate-toy/blob/main/METHOD.md
+- What it can and can't claim: https://github.com/partyhat-ai/synthetic-electorate-toy/blob/main/VALIDITY.md
+- Known flaws: https://github.com/partyhat-ai/synthetic-electorate-toy/blob/main/DISCLOSURES.md
+- Built by Cameron Feather: https://cameronfeather.com

@@ -1,0 +1,46 @@
+<script lang="ts">
+  // A group the year has no simulation for, held in its usual place on a
+  // narrow window so every year shows five rows (absentGroups in groups.ts):
+  // its name, why it's missing, and a faint dashed rule where SliceRow's dots
+  // go. Laid out as SliceRow's head, so it's as tall; nothing to tap or drag.
+  import GroupLabel from './GroupLabel.svelte';
+  import { type Absent, DOTS } from './groups';
+
+  let { absent }: { absent: Absent } = $props();
+
+  const N = DOTS;
+</script>
+
+<div class="row" role="group" aria-label="{absent.label}: {absent.why}">
+  <div class="head">
+    <span class="who">
+      <span class="label"><GroupLabel label={absent.label} /></span>
+      <span class="cap">{absent.why}</span>
+    </span>
+    <svg class="strip" viewBox="0 0 {N * 10} 10" preserveAspectRatio="xMinYMid meet" aria-hidden="true">
+      <line x1="2" y1="5" x2={N * 10 - 2} y2="5" />
+    </svg>
+  </div>
+</div>
+
+<style>
+  /* = SliceRow's narrow head (≤700px: the strip under the name), quieter. */
+  .row { position: relative; border-radius: 12px; }
+  .head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: var(--strip-gap);
+    align-items: center;
+    min-height: var(--row-min);
+    padding: var(--row-pad-y) var(--row-pad-x);
+  }
+  .who { display: flex; flex-direction: column; gap: var(--who-gap); min-width: 0; }
+  .label { font-size: var(--name-size); font-weight: 600; line-height: var(--name-leading); color: rgba(0, 0, 0, 0.45); }
+  .cap { font-size: var(--note-size); line-height: var(--note-leading); color: rgba(0, 0, 0, 0.45); }
+  .strip { width: 100%; height: auto; display: block; overflow: visible; }
+  .strip line { stroke: rgba(0, 0, 0, 0.18); stroke-width: 1.2; stroke-dasharray: 4 6; stroke-linecap: round; }
+  /* 701-760px: SliceRow sets its dots beside the name; so does this. */
+  @media (min-width: 701px) {
+    .head { grid-template-columns: minmax(160px, 212px) minmax(0, 1fr) 124px; gap: 16px; }
+  }
+</style>

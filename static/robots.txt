@@ -1,0 +1,8 @@
+# Simulacra Americana: every American presidential election, replayed and rerun with one thing changed.
+# Plain-text overview for AI agents: https://simulacraamericana.com/llms.txt
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /robot
+
+Sitemap: https://simulacraamericana.com/sitemap.xml

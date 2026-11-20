@@ -1,0 +1,458 @@
+<script lang="ts">
+  // Simulacra Americana: rerun an American presidential election with one
+  // fact changed. It opens on a real election (one of the ten with stories,
+  // at random, or ?year=): the two candidates, who won, and the map as it
+  // happened. Below are the groups of voters that decided it, including the
+  // ones who couldn't vote, each a row of fifty people. The narrator robot
+  // stands beside the what-if field: tap a suggestion or type your own, and
+  // it reruns the election and says what changed; tapped, it fires its chest
+  // reactor, and the tab icon takes the shot's colour. The timeline along the
+  // bottom moves between elections.
+  //
+  // This file is composition and layout. State: $lib/simulacra/state(.svelte).ts;
+  // reruns: runs.ts; what the robot says: Narrator; the robot: RobotStage.
+  import { onDestroy, onMount, tick, untrack } from 'svelte';
+  import { replaceState } from '$app/navigation';
+  import AboutSources from '$lib/simulacra/AboutSources.svelte';
+  import { findAccessKey } from '$lib/simulacra/accessKey';
+  import { tallest, toBody } from '$lib/simulacra/actions';
+  import { createSimulacraApi } from '$lib/simulacra/api';
+  import { ELECTION_YEARS } from '$lib/simulacra/geo';
+  import ElectionHeader from '$lib/simulacra/ElectionHeader.svelte';
+  import { namesOf, paintsOf } from '$lib/simulacra/header';
+  import { electionOf, FEATURED } from '$lib/simulacra/history';
+  import InfoPopover from '$lib/simulacra/InfoPopover.svelte';
+  import Narrator from '$lib/simulacra/Narrator.svelte';
+  import { hoverPlaces } from '$lib/simulacra/places';
+  import AbsentRow from '$lib/simulacra/AbsentRow.svelte';
+  import { DOTS, GROUP_ORDER, isAbsent, withAbsent } from '$lib/simulacra/groups';
+  import { NARROW_ROBOT_YAW, ROBOT_YAW } from '$lib/robot/stage';
+  import RobotStage, { STILLS } from '$lib/simulacra/RobotStage.svelte';
+  import { createSampleApi } from '$lib/simulacra/sample';
+  import type { WhatIf } from '$lib/simulacra/schemas';
+  import SliceRow from '$lib/simulacra/SliceRow.svelte';
+  import { apiOptionsFor, OPENING_YEAR, randomStory, readParams } from '$lib/simulacra/state';
+  import { PageState } from '$lib/simulacra/state.svelte';
+  import { TabIcon } from '$lib/simulacra/tabIcon';
+  import TimeBar from '$lib/simulacra/TimeBar.svelte';
+  import '$lib/simulacra/theme.css';
+
+  const params = readParams(new URLSearchParams(location.search), import.meta.env.DEV);
+  // The typed what-ifs' access key: from a link's #key=, else kept for the tab.
+  const access = findAccessKey(location.hash, () => sessionStorage);
+  const page = new PageState({
+    api: params.sample ? createSampleApi() : createSimulacraApi(apiOptionsFor(params.simapi, access.key)),
+    year: params.year ?? OPENING_YEAR,
+    replaceUrl: (url) => {
+      try {
+        replaceState(url, {});
+      } catch {
+        // router not ready
+      }
+    },
+    onFresh: (n) => narrator?.startReveal(n),
+  });
+
+  let narrator = $state<ReturnType<typeof Narrator> | null>(null);
+  let robot = $state<ReturnType<typeof RobotStage> | null>(null);
+  let mainEl = $state<HTMLElement | null>(null);
+  let slotEl = $state<HTMLElement | null>(null);
+  let robotShown = $state(false);
+  let tabIcon = $state<TabIcon | null>(null);
+  let revealing = $state(false);
+  // Phone-width and narrow desktop windows: the robot's resting turn differs there.
+  const SMALL = '(max-width: 760px)';
+  let narrow = $state(window.matchMedia(SMALL).matches);
+  const restYaw = $derived(narrow ? NARROW_ROBOT_YAW : ROBOT_YAW);
+  // Dragging the time bar: the robot holds still (no restaging) and the
+  // election and the groups hold their height while each year loads, so
+  // nothing jumps; the robot is placed once more on release.
+  let scrubbing = $state(false);
+  let electionH = $state(0);
+  let groupsH = $state(0);
+  let electionHold = $state(0);
+  let groupsHold = $state(0);
+  // The tallest the groups have been at this width (.room).
+  let rowsMost = $state(0);
+
+  const e = $derived(page.election);
+  const B = $derived(e.candidates[1] ?? null);
+  const paints = $derived(paintsOf(e, page.light));
+  const colors = $derived(paints.colors);
+  const names = $derived(namesOf(e));
+  const rerun = $derived(page.rerun);
+  const slices = $derived(rerun ? rerun.slices : (page.sim?.slices ?? []));
+  // A narrow window shows all five groups every year, a missing one held in
+  // its place (groups.ts), so the rows below never change in number.
+  const rows = $derived(narrow ? withAbsent(slices) : slices);
+  const baseSlices = $derived(new Map((page.sim?.slices ?? []).map((s) => [s.key, s])));
+  const reached = $derived(new Set(page.selected.flatMap((k) => page.whatIfs.find((w) => w.key === k)?.slices ?? [])));
+  const hasOthers = $derived(slices.some((s) => s.O > 0.005));
+
+  // The composer's chips and field, held from the last loaded year while a
+  // scrubbed-to year is still loading.
+  const held: { chips: readonly WhatIf[]; closed: boolean } = { chips: [], closed: true };
+  const composer = $derived.by(() => {
+    if (!(scrubbing && !page.sim)) {
+      held.chips = page.whatIfs;
+      held.closed = page.server !== 'online' || !page.sim || e.unopposed;
+    }
+    return { chips: held.chips, closed: held.closed };
+  });
+
+  $effect(() => {
+    const y = page.year;
+    untrack(() => void page.loadSim(y));
+  });
+  $effect(() => {
+    if (page.voterKey) page.fetchVoter();
+  });
+
+  function scrub(on: boolean) {
+    scrubbing = on;
+    electionHold = on ? electionH : 0;
+    groupsHold = on ? groupsH : 0;
+    if (!on) robot?.measureSoon();
+  }
+  // While scrubbing, each block only ever grows to the tallest year passed so
+  // far (a narrow window wraps notes past the CSS reservation), never shrinks.
+  $effect(() => {
+    if (!scrubbing) return;
+    const measured = { election: electionH, groups: groupsH };
+    untrack(() => {
+      electionHold = Math.max(electionHold, measured.election);
+      groupsHold = Math.max(groupsHold, measured.groups);
+    });
+  });
+  // The tab icon cycles while a rerun works.
+  $effect(() => {
+    tabIcon?.setWorking(!!page.run);
+  });
+
+  /** A tap on the robot: a shot from its chest in the next colour, which the tab icon takes. */
+  function blast() {
+    if (tabIcon) robot?.blast(tabIcon.fire().hex);
+  }
+
+  function act(key: string) {
+    if (key === 'sample') {
+      const url = new URL(location.href);
+      url.searchParams.set('sample', '1');
+      url.searchParams.set('year', String(page.year));
+      location.assign(url.href);
+    } else if (key === 'retry') page.retry();
+    else if (key === 'rerun') page.rerunNow();
+    else if (key === 'shuffle') page.setYear(randomStory(page.year));
+  }
+
+  // ── Keys ──
+  function onKey(ev: KeyboardEvent) {
+    const t = ev.target instanceof Element ? ev.target : null;
+    if ((ev.metaKey || ev.ctrlKey) && ev.key === 'Enter') {
+      ev.preventDefault();
+      page.rerunNow();
+      return;
+    }
+    if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
+    if (t?.closest('input, textarea, select, [contenteditable="true"], [role="slider"]')) return;
+    if (ev.key === 'ArrowLeft') {
+      ev.preventDefault();
+      page.step(-1);
+    } else if (ev.key === 'ArrowRight') {
+      ev.preventDefault();
+      page.step(1);
+    } else if (ev.key === 'Escape' && page.openSlice && !document.querySelector('[role="dialog"]')) page.openSlice = null;
+  }
+
+  function describe(y: number): string {
+    const [a, b] = electionOf(y)?.candidates ?? [];
+    if (!a) return String(y);
+    return b ? `${y} · ${a.short} over ${b.short}` : `${y} · ${a.short}, unopposed`;
+  }
+
+  onMount(() => {
+    const small = window.matchMedia(SMALL);
+    const readSmall = () => (narrow = small.matches);
+    readSmall();
+    small.addEventListener('change', readSmall);
+    void tick().then(() => {
+      // The key leaves the address bar before the year is written into it.
+      if (access.hash !== null) {
+        try {
+          replaceState(`${location.pathname}${location.search}${access.hash}`, {});
+        } catch {
+          // router not ready
+        }
+      }
+      page.urlReady = true;
+      page.syncUrl();
+      robot?.measureSoon();
+    });
+    // Without an icon link the blasts still take their turns.
+    const icon = new TabIcon(document.querySelector<HTMLLinkElement>('link[rel="icon"]') ?? { href: '' });
+    tabIcon = icon;
+    return () => {
+      small.removeEventListener('change', readSmall);
+      icon.dispose();
+      tabIcon = null;
+    };
+  });
+  onDestroy(() => page.dispose());
+</script>
+
+<svelte:head>
+  <title>Simulacra Americana</title>
+</svelte:head>
+<svelte:window onkeydown={onKey} />
+
+<div class="sa" class:scrubbing class:dark={!page.light} onscroll={() => robot?.measureSoon()}>
+  <div class="page">
+    <RobotStage bind:this={robot} bind:shown={robotShown} spot={slotEl} {scrubbing} year={page.year}
+      paint={page.view === 'whatif' ? 'rerun' : 'history'} walking={page.running || revealing} observe={mainEl}
+      ontap={blast} {restYaw} />
+    <header class="top">
+      <span class="brand">Simulacra Americana</span>
+      <!-- Always there, always both: the switch sets the look and the robot's
+           paint; the numbers are the rerun's once there is one, else history's. -->
+      <div class="seg" role="radiogroup" aria-label="Show">
+        <button type="button" role="radio" aria-checked={page.view !== 'whatif'} class:on={page.view !== 'whatif'} onclick={() => (page.view = 'history')}>History</button>
+        <button type="button" role="radio" aria-checked={page.view === 'whatif'} class:on={page.view === 'whatif'} onclick={() => (page.view = 'whatif')}>Rerun</button>
+        <div class="seg-thumb" class:second={page.view === 'whatif'} aria-hidden="true"></div>
+      </div>
+      <span class="trail">
+        {#if page.api.sample}
+          <span class="pill" title="The voter groups, what-ifs and reruns are invented to show how this works. The elections are real.">Sample Data</span>
+        {/if}
+        <InfoPopover label="About Simulacra Americana" align="end">
+          <p><strong>Simulacra Americana</strong> reruns American presidential elections with one fact changed.</p>
+          <p>Every election opens as it happened. The simulation server rebuilds who could vote from census records and lets synthetic voters decide, so a rerun can change who votes, where they live or what they care about.</p>
+          {#if page.api.sample}<p>Sample data: the voter groups, what-ifs and reruns here are invented to show how it works. The elections are real.</p>{/if}
+          <AboutSources />
+        </InfoPopover>
+      </span>
+    </header>
+
+    <main class="main" bind:this={mainEl}>
+      <ElectionHeader election={e} year={page.year} {rerun} {paints} {names} light={page.light} highlight={$hoverPlaces}
+        hold={electionHold} bind:height={electionH} />
+
+      <section class="groups" aria-labelledby="sa-groups" bind:offsetHeight={groupsH} style:min-height={groupsHold ? `${groupsHold}px` : null}
+        style:--groups={GROUP_ORDER.length} style:--strip-aspect={DOTS}>
+        <div class="groups-head">
+          <h2 id="sa-groups">Who voted</h2>
+          {#if page.sim?.slices.length}<ul class="legend" aria-label="Key">
+            <li><span class="key fill" style:background={colors.A}></span>{names.A}</li>
+            {#if B}<li><span class="key fill" style:background={colors.B}></span>{names.B}</li>{/if}
+            {#if hasOthers}<li><span class="key fill" style:background={colors.O}></span>{names.O}</li>{/if}
+            <li><span class="key ring"></span>Stayed home</li>
+            <li><span class="key dot"></span>Couldn’t vote</li>
+          </ul>{:else}<ul class="legend" aria-hidden="true"></ul>{/if}
+        </div>
+        <div class="room" style:--most={rowsMost ? `${rowsMost}px` : null}>
+        <div use:tallest={(h) => (rowsMost = h)}>
+        {#if page.sim?.slices.length}
+          <div class="rows">
+            {#key page.editEpoch}
+            {#each rows as s (s.key)}
+              {#if isAbsent(s)}
+                <AbsentRow absent={s} />
+              {:else}
+                <SliceRow slice={s} base={baseSlices.get(s.key)} {colors} {names} rerun={!!rerun} lit={reached.has(s.key)}
+                  open={page.openSlice === s.key} editable={page.canEdit}
+                  ontoggle={() => page.toggleSlice(s.key)} onedit={(d) => page.editSlice(s.key, d)} />
+              {/if}
+            {/each}
+            {/key}
+          </div>
+        {:else}
+          <div class="rows ghost" aria-hidden="true">
+            {#each [0, 1, 2] as i (i)}
+              <div class="ghost-row">
+                <span class="ghost-label"></span>
+                <svg viewBox="0 0 {DOTS * 10} 10" preserveAspectRatio="xMinYMid meet">
+                  {#each Array(DOTS) as _, j (j)}<circle cx={j * 10 + 5} cy="5" r="3.9" />{/each}
+                </svg>
+                <span class="ghost-val"></span>
+              </div>
+            {/each}
+          </div>
+          {#if page.server !== 'online' && page.server !== 'connecting'}
+            <p class="groups-note">The voter groups come from the simulation server.</p>
+          {/if}
+        {/if}
+        </div>
+        </div>
+      </section>
+
+      <Narrator bind:this={narrator} bind:slot={slotEl} bind:revealing {page} {names} {robotShown}
+        still={STILLS[page.view === 'whatif' ? 'rerun' : 'history']} chips={composer.chips} closed={composer.closed} onaction={act}
+        caption={describe(page.year)} />
+    </main>
+  </div>
+</div>
+
+<div class="timebar" class:dark={!page.light} use:toBody>
+  <TimeBar dark={!page.light} years={ELECTION_YEARS} value={page.year} featured={FEATURED} {describe}
+    onchange={(y) => page.setYear(y)} onscrub={scrub} />
+</div>
+
+<style>
+  /* The page's own layout. The scrolling layer, the Rerun view's invert and
+     the time bar's glass are $lib/simulacra/theme.css. */
+  .page { position: relative; min-height: 100%; padding-bottom: 84px; }
+  /* The brand, the History / Your year switch (once there's a rerun) and
+     the sample label and About, on one toolbar row. */
+  .top {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    height: 48px;
+    padding: 0 20px;
+    margin-bottom: 18px;              /* = the gap under Who voted (.main) */
+  }
+  .top .seg { grid-column: 2; position: relative; top: 5px; }
+  .trail { grid-column: 3; justify-self: end; }
+  .brand { font-family: 'Geist Mono', ui-monospace, monospace; font-size: 12px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; color: rgba(0, 0, 0, 0.55); }
+  .trail { display: flex; align-items: center; gap: 8px; }
+  .pill {
+    height: 22px;
+    display: inline-flex;
+    align-items: center;
+    font-size: 11px;
+    font-weight: 500;
+    color: rgba(0, 0, 0, 0.6);
+  }
+  .main {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 0 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+
+  /* ── Who voted ── */
+  /* Nothing under Who voted moves with the year: its rows keep the room the
+     most a year needs, worked out from the rows' own metrics (theme.css):
+     --groups rows (GROUP_ORDER) with one-line names, --two-line-names of
+     them on two. Three is the most any year has: 1972 at a wide window; on a
+     phone "citizens" is set small (GroupLabel) and one wraps at most, so
+     three leaves room to spare there. A year that outgrows the room keeps
+     the tallest seen at this width (--most), so it moves things once, not
+     every time. */
+  .groups {
+    container-type: inline-size;   /* 100cqw: the rows' width */
+    --two-line-names: 3;
+    --strip: 0px;                  /* the dots sit beside the name */
+    --name-lh: calc(var(--name-size) * var(--name-leading));
+    --who: calc(var(--name-lh) + var(--who-gap) + var(--note-size) * var(--note-leading));
+    --row: max(var(--row-min), calc(2 * var(--row-pad-y) + var(--who) + var(--strip)));
+    --row-2: max(var(--row-min), calc(2 * var(--row-pad-y) + var(--who) + var(--name-lh) + var(--strip)));
+  }
+  .room {
+    --reserve: calc((var(--groups) - var(--two-line-names)) * var(--row) + var(--two-line-names) * var(--row-2) + (var(--groups) - 1) * var(--rows-gap));
+    min-height: max(var(--reserve), var(--most, 0px));
+  }
+  /* History / Your year: the hub's Content / Chat control
+     (MainView .hub-segmented-control), metrics and all. */
+  .seg {
+    position: relative;
+    display: flex;
+    box-sizing: content-box;
+    height: 29px;
+    width: 154px;
+    padding: 3px;
+    border-radius: 20px;
+    background: rgba(108, 108, 108, 0.15);
+    -webkit-backdrop-filter: blur(12px) saturate(150%);
+    backdrop-filter: blur(12px) saturate(150%);
+    box-shadow: inset 0 -1px 3px rgba(0, 0, 0, 0.08), inset 0 0 0 0.5px rgba(0, 0, 0, 0.04);
+    user-select: none;
+  }
+  .seg button {
+    position: relative;
+    z-index: 1;
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: none;
+    border-radius: 7px;
+    background: transparent;
+    color: #00000096;
+    font-family: 'Geist', -apple-system, sans-serif;
+    font-size: 14px;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: color 0.25s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  }
+  .seg button:hover:not(:disabled) { color: #000; }
+  /* The selected label sits on the blue indicator. */
+  .seg button.on, .seg button.on:hover { color: #fff; }
+  .seg button:disabled { opacity: 0.45; cursor: default; }
+  .seg button:focus-visible { outline: 2px solid #3876b7; outline-offset: 1px; }
+  .seg-thumb {
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: calc(50% - 3px);
+    height: calc(100% - 6px);
+    border-radius: 20px;
+    background: #007aff;                              /* = Rerun (WhatIf .run) */
+    box-shadow: inset 0 -0.5px 0 rgb(0 0 0 / 20%);   /* lit edge along the bottom */
+    transition: transform 0.25s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    pointer-events: none;
+  }
+  .seg-thumb.second { transform: translateX(100%); }
+  @media (prefers-reduced-motion: reduce) { .seg-thumb, .seg button { transition: none; } }
+  /* Scrubbing: years change faster than the fades, so they're skipped. */
+  .scrubbing :global(*) { transition: none !important; animation: none !important; }
+  .groups-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 0 10px 8px; }
+  h2 { margin: 0; font-size: 17px; font-weight: 600; }
+  .legend { --line-gap: 4px; display: flex; flex-wrap: wrap; gap: var(--line-gap) 14px; margin: 0; padding: 0; list-style: none; font-size: var(--note-size); line-height: var(--note-leading); color: rgba(0, 0, 0, 0.6); }
+  .legend li { display: inline-flex; align-items: center; gap: 6px; }
+  .key { width: 9px; height: 9px; border-radius: 999px; flex: none; }
+  .key.ring { box-sizing: border-box; border: 1.3px solid rgba(0, 0, 0, 0.45); }
+  .key.dot { width: 4px; height: 4px; margin: 0 2.5px; background: rgba(0, 0, 0, 0.25); }
+  .rows { display: flex; flex-direction: column; gap: var(--rows-gap); }
+  .ghost-row {
+    display: grid;
+    grid-template-columns: minmax(160px, 212px) minmax(0, 1fr) 124px;
+    align-items: center;
+    gap: 16px;
+    min-height: 42px;
+    padding: 4px 10px;
+  }
+  .ghost-label { height: 12px; width: 70%; border-radius: 6px; background: rgba(0, 0, 0, 0.08); }
+  .ghost-val { height: 10px; width: 60%; justify-self: end; border-radius: 5px; background: rgba(0, 0, 0, 0.06); }
+  .ghost svg { width: 100%; height: auto; display: block; }
+  .ghost circle { fill: rgba(0, 0, 0, 0.08); }
+  .groups-note { margin: 6px 10px 0; font-size: 13px; color: rgba(0, 0, 0, 0.5); }
+
+  @media (max-width: 760px) {
+    /* Phones: no wordmark; its cell stays, so the switch stays centred. */
+    .brand { visibility: hidden; }
+    /* Narrow: above the robot's layer (RobotStage .robot-host, z 3), so the
+       what-if is drawn over the robot standing behind it; the content is
+       transparent elsewhere, so the robot shows through. A sideways drag
+       over it turns the robot; vertical scrolling and pinch-zoom stay. */
+    .main { padding: 0 16px; gap: 1px; position: relative; z-index: 4; touch-action: pan-y pinch-zoom; }
+    /* Phones: the key keeps room for two lines (and keeps it while the
+       groups load), so the heading and the groups under it stay put. Every
+       year has five rows here (absent ones held, groups.ts). */
+    .legend { min-height: calc(2 * var(--note-size) * var(--note-leading) + var(--line-gap)); align-content: flex-start; }
+    .ghost-row { grid-template-columns: minmax(0, 1fr) auto; }
+    .ghost-row svg { grid-column: 1 / -1; }
+  }
+  /* ≤700px: each group's dots sit under its name (SliceRow), as tall as
+     the rows are wide over --strip-aspect. */
+  @media (max-width: 700px) {
+    .groups { --strip: calc(var(--strip-gap) + (100cqw - 2 * var(--row-pad-x)) / var(--strip-aspect)); }
+  }
+  /* The narrowest phones wrap names and their lines further: at 320px the
+     most is four extra lines of names and one of notes (2008). */
+  @media (max-width: 359px) {
+    .groups { --two-line-names: 5; }
+  }
+</style>

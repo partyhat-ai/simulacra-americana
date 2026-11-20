@@ -1,0 +1,115 @@
+<script lang="ts">
+  // The narrator: the harness robot's bubble and the what-if composer
+  // (WhatIf, which owns the bubble's 7-line clamp and More / Less), with
+  // what it says worked out from the page's state (narrator.ts say()). A
+  // finished rerun's steps come out one at a time (startReveal), and the
+  // robot walks while they do (`revealing`).
+  import { onDestroy } from 'svelte';
+  import { say, STEP_MS } from './narrator';
+  import type { WhatIf as WhatIfItem } from './schemas';
+  import type { PageState } from './state.svelte';
+  import type { Names } from './types';
+  import WhatIf from './WhatIf.svelte';
+  import type { Still } from './whatif';
+
+  interface Props {
+    page: PageState;
+    names: Names;
+    /** The live robot is drawn and settled. */
+    robotShown: boolean;
+    still: Still;
+    /** The robot's spot, for RobotStage to measure. */
+    slot?: HTMLElement | null;
+    /** The chips, held from the last loaded year while scrubbing. */
+    chips: readonly WhatIfItem[];
+    closed: boolean;
+    /** A finished rerun's steps are still coming out. */
+    revealing?: boolean;
+    onaction: (key: string) => void;
+    /** The year in words ("1920 · Harding over Cox"), shown under the opening message on a narrow window. */
+    caption?: string;
+  }
+  let {
+    page,
+    names,
+    robotShown,
+    still,
+    slot = $bindable(null),
+    chips,
+    closed,
+    revealing = $bindable(false),
+    onaction,
+    caption = '',
+  }: Props = $props();
+
+  // The robot's name, for the what-if field's label.
+  const NAME = 'ChatPro';
+
+  // Steps shown so far; Infinity once they're all out.
+  let reveal = $state(Infinity);
+  let revealTimer: ReturnType<typeof setInterval> | undefined;
+
+  /** A finished rerun's n steps come out one at a time. */
+  export function startReveal(n: number): void {
+    clearInterval(revealTimer);
+    reveal = 0;
+    revealing = true;
+    revealTimer = setInterval(() => {
+      reveal += 1;
+      if (reveal >= n) {
+        clearInterval(revealTimer);
+        reveal = Infinity;
+        revealing = false;
+      }
+    }, STEP_MS);
+  }
+  onDestroy(() => clearInterval(revealTimer));
+
+  const message = $derived(
+    say({
+      server: page.server,
+      year: page.year,
+      election: page.election,
+      run: page.run,
+      running: page.running,
+      runError: page.runError,
+      simFailed: page.simFailed,
+      sim: page.sim,
+      toggled: page.lastToggled,
+      whatIfs: page.whatIfs,
+      slice: page.openSlice,
+      showing: page.showing,
+      result: page.result,
+      names,
+      person: page.voter,
+      finding: !!page.voterKey && page.voterLoading === page.voterKey,
+      draft: page.typed,
+      shown: reveal,
+      sample: page.api.sample,
+    }),
+  );
+</script>
+
+<WhatIf
+  name={NAME}
+  {robotShown}
+  bind:slot
+  {still}
+  {message}
+  whatIfs={chips}
+  selected={page.selected}
+  slice={page.openSlice}
+  bind:value={page.typed}
+  running={page.running}
+  canRun={page.canRun}
+  canReset={!!page.result || page.selected.length > 0 || !!page.edits.get(page.year)}
+  ran={page.result?.ran ?? []}
+  dirty={page.dirty}
+  {closed}
+  ontoggle={(key) => page.toggle(key)}
+  onrun={() => page.rerunNow()}
+  onstop={() => page.stop()}
+  onreset={() => page.reset()}
+  {onaction}
+  {caption}
+/>
