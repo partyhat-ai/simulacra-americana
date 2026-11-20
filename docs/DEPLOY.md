@@ -241,19 +241,37 @@ a server log). To revoke a key, delete its name the same way and redeploy.
 
 ## Spend
 
-**Nothing caps the intake's dollars.** Every queued text is modelled to the
-end, and no stage stops for costing more than its estimate. The worker
-records each stage in `/state/sessions/spend.jsonl` (priced before it is sent
-and recorded after, with the access key's name when the request carried one).
-`SIMULACRA_KEY_DAILY_USD` and `SIMULACRA_TOTAL_USD` are still in the task
-definition, but nothing reads them.
+**Two dollar caps bound the intake, counted across every visitor together:**
+`SIMULACRA_DAILY_USD` per UTC day (20 in the task definition) and
+`SIMULACRA_MONTHLY_USD` per UTC calendar month (200). The worker records each
+stage in `/state/sessions/spend.jsonl` (priced before it is sent and recorded
+after, with the access key's name when the request carried one; every line
+counts toward the caps, keyed or not).
 
-The only limits are per IP (`serve/simulacra.ts`, `DEFAULT_LIMITS`): 1,200
+- **Before queuing** (`serve/guard.ts`, `checkCaps`): once today's or this
+  month's recorded spend reaches its cap, POST /runs queues nothing and the
+  run answers at once with `unknownWhy` saying the budget is spent.
+- **Before each text** (`simharness/intake.py`, `left`): the worker checks the
+  same ledger. With nothing left, the text is settled as `over-cap` in
+  `queue-done.jsonl` and the waiting page is told why.
+- **During a text** (`intake.Budget`): the text runs with what is left as its
+  ceiling and stops at the first stage that reaches it. A stage is priced when
+  it finishes, so a cap can be passed by at most the one stage that crosses
+  it (at most about $2, the cost of one text's interviews).
+
+A text that fails is retried once. After two failures it is settled as
+`gave-up` and copied to `/state/sessions/queue-dead.jsonl`, so a text that
+always fails is billed at most twice and never holds up the texts behind it.
+
+To change a cap, edit its value in `infra/taskdef.json.tftpl` and deploy.
+
+The per-IP limits (`serve/simulacra.ts`, `DEFAULT_LIMITS`): 1,200
 requests per 10 minutes, 120 runs per 10 minutes, and 10 queued texts an
 hour; past the last, POST /runs answers 429. The rate limits read the
 visitor's address from `X-Forwarded-For` two proxies deep (`TRUST_PROXY_HOPS`:
 Vercel, then the ALB). A request sent to the ALB directly can forge that
-header, so the per-IP limits don't bound spend either. To stop the spending,
+header, so the per-IP limits can be dodged; the dollar caps can't, since they
+count every visitor together. To stop the spending at once,
 remove or revoke the Anthropic key, or stop the service
 (`aws ecs update-service --cluster simulacra --service simulacra-api --desired-count 0`).
 
@@ -304,6 +322,6 @@ All alarms go to SNS `simulacra-alarms`, which emails cam@partyhat.ai:
 | S3, ECR, logs, alarms, Secrets Manager | | $3–5 |
 | **AWS total** | | **≈ $75–80** |
 | Vercel | Hobby is $0, but its terms exclude commercial use; Pro is $20 per member | $0–20 |
-| Anthropic | $0.74–$1.91 per new typed what-if, from access-key holders only. Repeats and precomputed combinations are free | $150 in all, by the all-time cap, until it is raised |
+| Anthropic | $0.74–$1.91 per new typed what-if, from any visitor. Repeats and precomputed combinations are free | At most $200, by the monthly cap ($20 a day) |
 
-The Anthropic line dominates. The caps above bound it.
+The Anthropic line dominates. The daily and monthly caps (Spend, above) bound it.

@@ -17,8 +17,10 @@
 //     (ts, year, text, whatIfs, matched, unknown, combo, exists; no IPs, no ids);
 //   - unmatched text is queued in sessions/queue.jsonl for
 //     `python -m simharness.run whatif --queue`, with the name of the access key
-//     the request carried (SIMULACRA_ACCESS_KEYS), if any, for the spend ledger.
-//     Nothing caps the dollars; each IP may queue a few texts an hour (guard.ts);
+//     the request carried (SIMULACRA_ACCESS_KEYS), if any, for the spend ledger,
+//     while spend is under the daily and monthly dollar caps (guard.ts, every
+//     visitor together); over a cap, the run answers at once with `unknownWhy`
+//     saying so. Each IP may queue a few texts an hour (guard.ts);
 //   - a queued text holds its run `running` (with the worker's `steps`) when
 //     SIMULACRA_AUTORUN=<config path> starts that worker in the background from
 //     the repo root (one at a time); otherwise the result says `queued`;
@@ -49,7 +51,7 @@ import {
   type TableRow,
   type Told
 } from './bundle';
-import { capLog, type KeyRing, type Limit, parseKeyRing, pruneJsonl, RateLimiter } from './guard';
+import { type Caps, capLog, capsFromEnv, checkCaps, type KeyRing, type Limit, parseKeyRing, pruneJsonl, RateLimiter } from './guard';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 
@@ -68,6 +70,8 @@ export interface SimulacraOptions {
   root: string;
   /** Access keys whose names the spend ledger records (SIMULACRA_ACCESS_KEYS). */
   keys: KeyRing;
+  /** Dollar caps on the intake, every visitor together (SIMULACRA_DAILY_USD, SIMULACRA_MONTHLY_USD). */
+  caps: Caps;
   /** Days session logs keep a line (SIMULACRA_RETAIN_DAYS). */
   retainDays: number;
   /** Per-IP rate limits. */
@@ -100,6 +104,7 @@ export function optionsFromEnv(env: NodeJS.ProcessEnv = process.env): SimulacraO
     python: env.SIMULACRA_PYTHON || path.join(homedir(), '.venvs/simharness/bin/python'),
     root: ROOT,
     keys: parseKeyRing(env.SIMULACRA_ACCESS_KEYS),
+    caps: capsFromEnv(env),
     retainDays: env.SIMULACRA_RETAIN_DAYS ? Number(env.SIMULACRA_RETAIN_DAYS) : 7,
     limits: DEFAULT_LIMITS
   };
@@ -140,13 +145,15 @@ const PENDING_MS = 10 * 60 * 1000;
 const MAX_RUNS = 10_000;
 /** The worker's plain-text log is emptied past this (CloudWatch keeps a copy). */
 const MAX_WORKER_LOG_BYTES = 20 * 1024 * 1024;
-const SESSION_LOGS = ['requests.jsonl', 'queue.jsonl', 'queue-done.jsonl', 'queue-failed.jsonl'];
+const SESSION_LOGS = ['requests.jsonl', 'queue.jsonl', 'queue-done.jsonl', 'queue-failed.jsonl', 'queue-dead.jsonl'];
 /** The spend ledger outlives the retention, without the visitor's words in `note`. */
 const LEDGER_SCRUB = ['note'];
 /** Years a bundle can exist for; any other year is answered without touching the cache. */
 const FIRST_YEAR = 1789;
 const LAST_YEAR = 2100;
 
+export const OVER_DAILY_CAP = 'Today’s budget for new what-ifs is spent. Try again tomorrow.';
+export const OVER_MONTHLY_CAP = 'This month’s budget for new what-ifs is spent.';
 const KEYS: readonly PageKey[] = ['A', 'B', 'O'];
 
 export const comboKey = (keys: readonly string[]): string => [...new Set(keys)].sort().join('+');
@@ -464,19 +471,25 @@ export function createSimulacraRouter(opts: SimulacraOptions = optionsFromEnv())
     let queued = false;
     // The access key's name, if the request carried one: the spend ledger records it.
     let who: string | null = null;
+    // Why unknown words weren't queued, when they weren't.
+    let unknownWhy: string | null = null;
     if (opts.devLog) {
       const ts = new Date().toISOString();
       appendLine('requests.jsonl', { ts, year, text, whatIfs, matched: read.keys, unknown: read.unknown, combo: comboKey(keys), exists: Boolean(done) });
       if (read.unknown) {
-        const a = limiters.intake.admit(req.ip ?? 'unknown');
-        if (!a.ok) {
-          limited(res, a.retryAfterS);
-          return;
+        const cap = checkCaps(path.join(opts.sessions, 'spend.jsonl'), opts.caps);
+        if (cap.kind === 'over') unknownWhy = cap.which === 'monthly' ? OVER_MONTHLY_CAP : OVER_DAILY_CAP;
+        else {
+          const a = limiters.intake.admit(req.ip ?? 'unknown');
+          if (!a.ok) {
+            limited(res, a.retryAfterS);
+            return;
+          }
+          who = opts.keys.identify(req.get('authorization'));
+          appendLine('queue.jsonl', { ts, year, text: read.unknown, who });
+          queued = true;
+          startWorker();
         }
-        who = opts.keys.identify(req.get('authorization'));
-        appendLine('queue.jsonl', { ts, year, text: read.unknown, who });
-        queued = true;
-        startWorker();
       }
     }
     // With the worker on, new words hold the run open (GET reports the
@@ -493,6 +506,7 @@ export function createSimulacraRouter(opts: SimulacraOptions = optionsFromEnv())
     }
     let result: RunResult = done.result;
     if (queued && read.unknown) result = { ...result, queued: { text: read.unknown, worker: Boolean(worker) } };
+    else if (unknownWhy) result = { ...result, unknownWhy };
     res.json({ id: newRun({ state: 'done', year, created: Date.now(), key: done.key, result }) });
   });
 

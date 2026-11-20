@@ -338,7 +338,8 @@ class AnswerCache:
 
 LEDGER = ROOT / 'sessions/spend.jsonl'
 # Who the spend is for: the access key's name while the intake worker models
-# that key's text (intake.process_queue), else None. The caps read it.
+# that key's text (intake.process_queue), else None. For the record only: the
+# caps count every line, whoever's it was.
 SPEND_WHO: str | None = None
 
 
@@ -352,23 +353,24 @@ def record_spend(stage: str, dollars: float, run: str = '', note: str = ''):
                             'stage': stage, 'dollars': round(dollars, 5), 'run': run, 'note': note, 'who': SPEND_WHO}) + '\n')
 
 
-def spent(day: str | None = None, ledger: Path = LEDGER) -> tuple[float, dict[str, float]]:
-    """(every dollar recorded against an access key, ever: the intake's all-time total;
-    the dollars each key's name recorded on `day`, UTC, default today).
-    Lines without a key (before keys, or a run started by hand) count toward neither.
-    serve/guard.ts reads the ledger the same way before it queues text."""
+def spent(day: str | None = None, ledger: Path = LEDGER) -> tuple[float, float]:
+    """(dollars recorded on `day`, UTC, default today; dollars recorded in that day's
+    calendar month), counting every line whoever's text it was. These are what the
+    intake's caps are measured against (intake.left). serve/guard.ts `spent` reads
+    the ledger the same way before it queues text."""
     day = day or time.strftime('%Y-%m-%d', time.gmtime())
-    total, today = 0.0, {}
+    month = day[:7]
+    today, this_month = 0.0, 0.0
     for line in ledger.read_text().splitlines() if ledger.exists() else []:
         try:
             r = json.loads(line)
             d = float(r['dollars'])
+            line_day = str(r['day'])
         except (ValueError, KeyError, TypeError):
             continue
-        if not r.get('who'):
-            continue
-        total += d
-        if r.get('day') == day:
-            today[r['who']] = today.get(r['who'], 0.0) + d
-    return total, today
+        if line_day.startswith(month):
+            this_month += d
+        if line_day == day:
+            today += d
+    return today, this_month
 

@@ -6,7 +6,7 @@
 //   - trust proxy TRUST_PROXY_HOPS (default 2: the request comes through
 //     Vercel's proxy, then the ALB), so req.ip is the visitor's address for
 //     the per-IP rate limits. A request sent to the ALB directly can forge
-//     X-Forwarded-For; the dollar caps hang on access keys, not IPs;
+//     X-Forwarded-For; the dollar caps count every visitor together, not per IP;
 //   - SIGTERM: stop accepting, let in-flight requests finish, exit. A running
 //     worker is killed with the container; its queue item stays un-done and is
 //     retried by the next worker.

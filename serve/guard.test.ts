@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { parseKeyRing, pruneJsonl, RateLimiter } from './guard';
+import { capsFromEnv, checkCaps, parseKeyRing, pruneJsonl, RateLimiter, spent } from './guard';
 
 const dir = mkdtempSync(path.join(tmpdir(), 'simulacra-guard-'));
 const DAY = 86_400_000;
@@ -54,6 +54,41 @@ describe('RateLimiter', () => {
     // The oldest windows were dropped: 'a' starts afresh, 'e' is still limited.
     expect(rl.admit('a').ok).toBe(true);
     expect(rl.admit('e').ok).toBe(false);
+  });
+});
+
+describe('dollar caps', () => {
+  const now = Date.parse('2026-10-15T12:00:00Z');
+  const ledger = path.join(dir, 'spend.jsonl');
+  writeFileSync(
+    ledger,
+    `${[
+      { day: '2026-10-15', dollars: 3, who: 'ana' },
+      { day: '2026-10-15', dollars: 2, who: null },
+      { day: '2026-10-15', dollars: 1 },
+      { day: '2026-10-02', dollars: 40, who: 'ben' },
+      { day: '2026-09-30', dollars: 500, who: 'ana' },
+      { day: '2026-10-15', dollars: 'x', who: 'ana' }
+    ]
+      .map((r) => JSON.stringify(r))
+      .join('\n')}\nnot json\n`
+  );
+
+  it("counts every visitor's spend, today and this month (UTC); other months and bad lines count for nothing", () => {
+    expect(spent(ledger, now)).toEqual({ today: 6, month: 46 });
+    expect(spent(path.join(dir, 'missing.jsonl'), now)).toEqual({ today: 0, month: 0 });
+  });
+
+  it("is over when today's or this month's total reaches its cap, the month first", () => {
+    expect(checkCaps(ledger, { daily: 10, monthly: 100 }, now)).toEqual({ kind: 'ok' });
+    expect(checkCaps(ledger, { daily: 6, monthly: 100 }, now)).toEqual({ kind: 'over', which: 'daily' });
+    expect(checkCaps(ledger, { daily: 6, monthly: 46 }, now)).toEqual({ kind: 'over', which: 'monthly' });
+  });
+
+  it('defaults to $20 a day and $200 a month, and refuses a bad value', () => {
+    expect(capsFromEnv({})).toEqual({ daily: 20, monthly: 200 });
+    expect(capsFromEnv({ SIMULACRA_DAILY_USD: '5', SIMULACRA_MONTHLY_USD: '50' })).toEqual({ daily: 5, monthly: 50 });
+    expect(() => capsFromEnv({ SIMULACRA_DAILY_USD: 'lots' })).toThrow();
   });
 });
 

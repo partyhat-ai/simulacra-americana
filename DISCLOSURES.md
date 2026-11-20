@@ -934,7 +934,11 @@ Every paid call is still priced first and recorded in sessions/spend.jsonl.
 Caps later returned for the live intake: $100 per access key per day and $150
 in all. On 2026-10-02 they were removed again, with the access-key requirement
 and the stop for a stage costing over 1.5x its estimate: any visitor may queue
-a typed what-if, and nothing caps its cost (docs/DEPLOY.md, Spend).
+a typed what-if. On 2026-11-20 caps returned without the access-key
+requirement: $20 a day and $200 a month, counted across every visitor
+together, checked before a text is queued and again by the worker before and
+during each text; a text that fails twice is given up instead of retried
+(docs/DEPLOY.md, Spend).
 
 **D34 · High · fixed (compiler c4) · a typed what-if silently replaced**
 "America loses WW2", typed into 1940, was compiled as "Britain Falls, America

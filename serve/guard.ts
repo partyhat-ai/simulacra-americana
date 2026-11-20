@@ -1,10 +1,15 @@
-// What stands between a visitor and the API: per-IP rate limits, access keys
-// (whose names the spend ledger records), and how long session logs keep
-// visitors' words.
+// What stands between a visitor and the API: the intake's dollar caps, per-IP
+// rate limits, access keys (whose names the spend ledger records), and how long
+// session logs keep visitors' words.
 //
 // Only typed text the page doesn't already know costs anything (the intake
-// worker's compile, research and interviews). Nothing caps those dollars: any
-// visitor may queue text, a few texts per IP an hour.
+// worker's compile, research and interviews). Any visitor may queue text, a few
+// texts per IP an hour, while the spend ledger (sessions/spend.jsonl) is under
+// both caps, counted across every visitor together: SIMULACRA_DAILY_USD per UTC
+// day (default 20) and SIMULACRA_MONTHLY_USD per UTC month (default 200). The
+// worker (simharness/intake.py) checks the same ledger again before each text
+// and stops a text at the stage that crosses what is left. The caps don't
+// depend on IPs or keys, so a forged X-Forwarded-For can't raise them.
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { readFileSync, renameSync, statSync, truncateSync, writeFileSync } from 'node:fs';
 import { z } from 'zod';
@@ -22,7 +27,7 @@ export interface KeyRing {
   readonly size: number;
 }
 
-/** Parses SIMULACRA_ACCESS_KEYS; unset is an empty ring (nobody may queue), malformed throws at startup. */
+/** Parses SIMULACRA_ACCESS_KEYS; unset is an empty ring (no names recorded), malformed throws at startup. */
 export function parseKeyRing(raw: string | undefined): KeyRing {
   const keys = raw?.trim() ? Object.entries(AccessKeys.parse(JSON.parse(raw))) : [];
   const hashed = keys.map(([name, key]) => ({ name, hash: digest(key) }));
@@ -77,6 +82,67 @@ export class RateLimiter {
     }
     return { ok: true };
   }
+}
+
+// ── Dollar caps ──
+
+export interface Caps {
+  /** Dollars per UTC day, every visitor together. */
+  readonly daily: number;
+  /** Dollars per UTC calendar month, every visitor together. */
+  readonly monthly: number;
+}
+
+export function capsFromEnv(env: NodeJS.ProcessEnv = process.env): Caps {
+  const usd = z.coerce.number().finite().nonnegative();
+  return {
+    daily: env.SIMULACRA_DAILY_USD ? usd.parse(env.SIMULACRA_DAILY_USD) : 20,
+    monthly: env.SIMULACRA_MONTHLY_USD ? usd.parse(env.SIMULACRA_MONTHLY_USD) : 200
+  };
+}
+
+const SpendLine = z.looseObject({ day: z.string(), dollars: z.number() });
+
+export const utcDay = (t: number): string => new Date(t).toISOString().slice(0, 10);
+
+/**
+ * Every dollar the ledger records today and this month (UTC), whoever's text it
+ * was. simharness/llm.py `spent` counts the same way, for the worker.
+ */
+export function spent(ledger: string, now: number = Date.now()): { today: number; month: number } {
+  const day = utcDay(now);
+  const month = day.slice(0, 7);
+  let text = '';
+  try {
+    text = readFileSync(ledger, 'utf8');
+  } catch {
+    return { today: 0, month: 0 };
+  }
+  let today = 0;
+  let thisMonth = 0;
+  for (const line of text.split('\n')) {
+    if (!line) continue;
+    let row: unknown;
+    try {
+      row = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const r = SpendLine.safeParse(row);
+    if (!r.success) continue;
+    if (r.data.day.startsWith(month)) thisMonth += r.data.dollars;
+    if (r.data.day === day) today += r.data.dollars;
+  }
+  return { today, month: thisMonth };
+}
+
+export type CapCheck = { readonly kind: 'ok' } | { readonly kind: 'over'; readonly which: 'daily' | 'monthly' };
+
+export function checkCaps(ledger: string, caps: Caps, now: number = Date.now()): CapCheck {
+  const s = spent(ledger, now);
+  if (s.month >= caps.monthly) return { kind: 'over', which: 'monthly' };
+  if (s.today >= caps.daily) return { kind: 'over', which: 'daily' };
+  return { kind: 'ok' };
 }
 
 // ── Session log retention ──

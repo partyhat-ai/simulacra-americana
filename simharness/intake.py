@@ -27,8 +27,19 @@ configs run them on Opus at high effort; the per-voter interviews stay on the
 bulk model, with only the answers that fail a check re-asked on a stronger one.
 
 Money: every stage is priced before it is sent and recorded after, with the
-name of the access key that queued the text, if any (llm.SPEND_WHO). Nothing
-caps the dollars: every queued text is modelled to the end.
+name of the access key that queued the text, if any (llm.SPEND_WHO). Queued
+text is modelled only while the spend ledger is under both caps, counted across
+every visitor together: DAILY_USD per UTC day (SIMULACRA_DAILY_USD, default 20)
+and MONTHLY_USD per UTC month (SIMULACRA_MONTHLY_USD, default 200). The router
+(serve/guard.ts) checks the same caps before it queues; the worker checks again
+before each text, and a text's Budget stops at the first stage that crosses
+what is left. A stage is priced when it finishes, so a cap can be passed by at
+most the one stage that crosses it.
+
+Failures: a text that fails is retried once. After MAX_ATTEMPTS failures it is
+settled as given up (queue-done.jsonl, status `gave-up`) and copied to
+queue-dead.jsonl, so one bad text can't be re-billed forever or hold up the
+texts queued behind it.
 """
 from __future__ import annotations
 
@@ -48,9 +59,15 @@ SESSIONS = ROOT / 'sessions'
 QUEUE = SESSIONS / 'queue.jsonl'
 DONE = SESSIONS / 'queue-done.jsonl'
 FAILED = SESSIONS / 'queue-failed.jsonl'
+DEAD = SESSIONS / 'queue-dead.jsonl'
 LOCK = SESSIONS / 'intake.lock'
 SERVE_BUNDLES = ROOT / 'serve/bundles'
 STATUS = SESSIONS / 'intake-status.json'
+DAILY_USD = float(os.environ.get('SIMULACRA_DAILY_USD') or 20)
+MONTHLY_USD = float(os.environ.get('SIMULACRA_MONTHLY_USD') or 200)
+OVER_CAP = 'The budget for new what-ifs is spent for now. Try again tomorrow.'
+MAX_ATTEMPTS = 2
+GAVE_UP = 'I couldn’t model that, after two tries.'
 
 
 class Progress:
@@ -83,16 +100,18 @@ class Progress:
 
 
 class Budget:
-    """What a typed what-if has spent, stage by stage."""
+    """What a typed what-if has spent, stage by stage, and the most it may (None: no ceiling)."""
 
-    def __init__(self):
-        self.spent, self.lines = 0.0, []
+    def __init__(self, ceiling: float | None = None):
+        self.spent, self.lines, self.ceiling = 0.0, [], ceiling
 
     def add(self, dollars: float, stage: str, typical: float | None = None, note: str = '', record: bool = True):
         self.spent += dollars
         self.lines.append({'stage': stage, 'dollars': round(dollars, 4), 'typical': typical})
         if record:
             llm.record_spend(stage, dollars, note=note)
+        if self.ceiling is not None and self.spent >= self.ceiling:
+            raise SystemExit(OVER_CAP)
 
 
 # Typical output tokens by call (measured: a compile answer ran ~1,300 tokens on Sonnet 5.5).
@@ -284,10 +303,18 @@ def report(year: int, key: str) -> dict:
                          for e in r.get('evidence', [])]}
 
 
-def whatif(text: str, config_path: str | Path, refresh: bool = False) -> dict:
+def left(ledger: Path | None = None, daily: float | None = None, monthly: float | None = None) -> float:
+    """Dollars the intake may still spend: the smaller of what's left of today's
+    cap and this month's, every visitor together (llm.spent)."""
+    today, month = llm.spent(ledger=ledger or llm.LEDGER)
+    rest = min((DAILY_USD if daily is None else daily) - today, (MONTHLY_USD if monthly is None else monthly) - month)
+    return max(rest, 0.0)
+
+
+def whatif(text: str, config_path: str | Path, refresh: bool = False, ceiling: float | None = None) -> dict:
     config_path = Path(config_path)
     cfg = RunConfig.load(config_path)
-    budget = Budget()
+    budget = Budget(ceiling)
     progress = Progress(text)
     progress.step('Turning your words into a change I can model.')
     raw = compile_text(text, cfg, budget)
@@ -367,9 +394,17 @@ def _config_for(year: int, fallback: Path | None = None) -> Path | None:
     return fallback if fallback and Path(fallback).exists() and RunConfig.load(fallback).election == year else None
 
 
+def _settle(year: int, text: str, status: str, why: str | None = None, key: str | None = None,
+            dollars: float | None = None):
+    with open(DONE, 'a') as f:
+        f.write(json.dumps({'text': text, 'year': year, 'ts': dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds'),
+                            'status': status, 'key': key, 'why': why, 'dollars': dollars}) + '\n')
+
+
 def process_queue(config_path: str | Path, limit: int = 3) -> list[dict]:
-    """Model up to `limit` distinct queued (year, text) pairs, oldest first.
-    Each is modelled in its own year's live config, its spend recorded against the key that queued it, if any."""
+    """Model up to `limit` distinct queued (year, text) pairs, oldest first, within the caps.
+    Each is modelled in its own year's live config, its spend recorded against the key that queued it, if any.
+    A text that has failed MAX_ATTEMPTS times is given up (queue-dead.jsonl) instead of retried."""
     SESSIONS.mkdir(exist_ok=True)
     if LOCK.exists() and _pid_alive(int(LOCK.read_text().strip() or 0)):
         return [{'status': 'busy', 'pid': LOCK.read_text().strip()}]
@@ -380,6 +415,12 @@ def process_queue(config_path: str | Path, limit: int = 3) -> list[dict]:
             if l.strip():
                 x = json.loads(l)
                 done.add((x.get('year', 1920), x['text']))
+        attempts: dict[tuple[int, str], int] = {}
+        for l in FAILED.read_text().splitlines() if FAILED.exists() else []:
+            if l.strip():
+                x = json.loads(l)
+                k = (int(x.get('year') or 1920), x['text'])
+                attempts[k] = attempts.get(k, 0) + 1
         pending, who = [], {}
         for l in QUEUE.read_text().splitlines() if QUEUE.exists() else []:
             if l.strip():
@@ -390,24 +431,48 @@ def process_queue(config_path: str | Path, limit: int = 3) -> list[dict]:
                     who[key] = q.get('who')
         results = []
         for year, t in pending[:limit]:
+            if attempts.get((year, t), 0) >= MAX_ATTEMPTS:
+                # Failed before, every time: settled, not retried again.
+                with open(DEAD, 'a') as f:
+                    f.write(json.dumps({'text': t, 'year': year, 'attempts': attempts[(year, t)], 'at': time.time()}) + '\n')
+                _settle(year, t, 'gave-up', GAVE_UP)
+                results.append({'text': t, 'year': year, 'status': 'gave-up', 'why': GAVE_UP})
+                continue
             cfg_path = _config_for(year, Path(config_path))
             llm.SPEND_WHO = who[(year, t)]
+            budget_left = left()
+            if budget_left <= 0:
+                # Settled, not retried: later budget isn't spent on text nobody is waiting for.
+                _settle(year, t, 'over-cap', OVER_CAP)
+                results.append({'text': t, 'year': year, 'status': 'over-cap', 'why': OVER_CAP})
+                continue
             try:
                 if cfg_path is None:
                     r = {'status': 'not-modelable', 'why': f'I haven’t simulated {year} yet.'}
                 else:
-                    r = whatif(t, cfg_path)
+                    r = whatif(t, cfg_path, ceiling=budget_left)
             except (SystemExit, Exception) as e:
-                # A stop or a bug: the text stays queued (not in DONE),
-                # and the waiting page is told why (FAILED, read by the router).
-                r = {'text': t, 'year': year, 'status': 'stopped' if isinstance(e, SystemExit) else 'error', 'why': str(e) or repr(e)}
+                why = str(e) or repr(e)
+                if isinstance(e, SystemExit) and why == OVER_CAP:
+                    # The cap was reached mid-text: settled. The texts after it find nothing left
+                    # and are settled the same way, so no waiting page times out.
+                    _settle(year, t, 'over-cap', OVER_CAP)
+                    results.append({'text': t, 'year': year, 'status': 'over-cap', 'why': OVER_CAP})
+                    continue
+                # A stop or a bug: recorded (FAILED, read by the router, which tells the waiting
+                # page why). The text stays queued for one more try, then is given up.
+                r = {'text': t, 'year': year, 'status': 'stopped' if isinstance(e, SystemExit) else 'error', 'why': why}
                 with open(FAILED, 'a') as f:
                     f.write(json.dumps(r | {'at': time.time()}) + '\n')
+                attempts[(year, t)] = attempts.get((year, t), 0) + 1
+                if attempts[(year, t)] >= MAX_ATTEMPTS:
+                    with open(DEAD, 'a') as f:
+                        f.write(json.dumps({'text': t, 'year': year, 'attempts': attempts[(year, t)], 'why': why,
+                                            'at': time.time()}) + '\n')
+                    _settle(year, t, 'gave-up', GAVE_UP)
                 results.append(r)
-                break
-            with open(DONE, 'a') as f:
-                f.write(json.dumps({'text': t, 'year': year, 'ts': dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds'),
-                                    'status': r['status'], 'key': r.get('key'), 'why': r.get('why'), 'dollars': r.get('dollars')}) + '\n')
+                continue
+            _settle(year, t, r['status'], r.get('why'), r.get('key'), r.get('dollars'))
             results.append({'text': t, **r})
         return results
     finally:

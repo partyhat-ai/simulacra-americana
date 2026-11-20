@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { createApp } from './app';
 import { Bundle } from './bundle';
 import { parseKeyRing } from './guard';
-import { DEFAULT_LIMITS, IMMUTABLE, SHORT_CACHE, type SimulacraOptions } from './simulacra';
+import { DEFAULT_LIMITS, IMMUTABLE, OVER_DAILY_CAP, OVER_MONTHLY_CAP, SHORT_CACHE, type SimulacraOptions } from './simulacra';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const scratch = mkdtempSync(path.join(tmpdir(), 'simulacra-test-'));
@@ -21,6 +21,7 @@ const options: SimulacraOptions = {
   python: 'python3',
   root: ROOT,
   keys: parseKeyRing(undefined),
+  caps: { daily: 20, monthly: 200 },
   retainDays: 7,
   limits: DEFAULT_LIMITS
 };
@@ -226,5 +227,71 @@ describe('/api/simulacra intake guard', () => {
   it('answers a year outside any election without caching it', async () => {
     const res = await fetch(`${url}/elections/123456`);
     expect(await res.json()).toEqual({ slices: [], whatIfs: [], simulated: false });
+  });
+});
+
+// The dollar caps: every visitor's spend together, read from the ledger before anything is queued.
+describe('/api/simulacra intake dollar caps', () => {
+  const sessions = path.join(scratch, 'capped-sessions');
+  const ledger = path.join(sessions, 'spend.jsonl');
+  const today = new Date().toISOString().slice(0, 10);
+  let capped: Server;
+  let url = '';
+
+  beforeAll(async () => {
+    mkdirSync(sessions, { recursive: true });
+    const opts: SimulacraOptions = { ...options, sessions, devLog: true, caps: { daily: 5, monthly: 50 } };
+    capped = createApp({ simulacra: opts, build: path.join(scratch, 'none') }).listen(0);
+    await new Promise<void>((resolve) => capped.once('listening', resolve));
+    // SAFETY: listen(0) on a TCP port always reports an AddressInfo, never a pipe name.
+    url = `http://127.0.0.1:${(capped.address() as AddressInfo).port}/api/simulacra`;
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => capped.close(() => resolve()));
+  });
+
+  const Result = z.looseObject({ unknownWhy: z.string().optional(), queued: z.unknown().optional() });
+
+  async function ask(text: string): Promise<z.infer<typeof Result>> {
+    const posted = await fetch(`${url}/runs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ year: 1920, text })
+    });
+    expect(posted.status).toBe(200);
+    const { id } = RunId.parse(await posted.json());
+    return z.object({ result: Result }).parse(await (await fetch(`${url}/runs/${id}`)).json()).result;
+  }
+
+  const queued = (): number => {
+    try {
+      return readFileSync(path.join(sessions, 'queue.jsonl'), 'utf8').split('\n').filter(Boolean).length;
+    } catch {
+      return 0;
+    }
+  };
+
+  it("queues nothing once today's spend, from anyone, reaches the daily cap, and says why", async () => {
+    // Two visitors' lines, one with a key's name and one without: both count.
+    writeFileSync(ledger, `${JSON.stringify({ day: today, dollars: 3, who: 'ana' })}\n${JSON.stringify({ day: today, dollars: 2, who: null })}\n`);
+    const r = await ask('the moon votes');
+    expect(r.unknownWhy).toBe(OVER_DAILY_CAP);
+    expect(r.queued).toBeUndefined();
+    expect(queued()).toBe(0);
+  });
+
+  it("queues nothing once this month's spend reaches the monthly cap", async () => {
+    writeFileSync(ledger, `${JSON.stringify({ day: `${today.slice(0, 8)}01`, dollars: 50, who: null })}\n`);
+    const r = await ask('mars votes');
+    expect(r.unknownWhy).toBe(OVER_MONTHLY_CAP);
+    expect(queued()).toBe(0);
+  });
+
+  it('queues again under both caps', async () => {
+    writeFileSync(ledger, `${JSON.stringify({ day: '2000-01-01', dollars: 500, who: null })}\n`);
+    const r = await ask('venus votes');
+    expect(r.queued).toBeDefined();
+    expect(queued()).toBe(1);
   });
 });

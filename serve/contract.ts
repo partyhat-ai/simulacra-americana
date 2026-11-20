@@ -225,7 +225,7 @@ export type BundleResult = z.infer<typeof BundleResultSchema>;
 
 /** A rerun as the page receives it: the bundle's result plus what the server adds from the rest of the bundle. */
 export const RunResultSchema = BundleResultSchema.extend({
-  /** Why `unknown` wasn't modelled (no access key, a budget spent, the worker's reason). */
+  /** Why `unknown` wasn't modelled (a daily or monthly budget spent, or the worker's reason). */
   unknownWhy: z.string().optional(),
   pre: PreSchema.optional(),
   told: z.record(z.string(), ToldSchema).optional(),

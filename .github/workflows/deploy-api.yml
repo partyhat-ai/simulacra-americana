@@ -106,7 +106,7 @@ jobs:
           env = {e['name'] for e in c['environment']}
           sec = {s['name'] for s in c['secrets']}
           required_env = {'NODE_ENV', 'PORT', 'SIMULACRA_LOG', 'SIMULACRA_AUTORUN', 'SIMULACRA_PYTHON', 'SIMULACRA_BUNDLES', 'SIMHARNESS_CACHE',
-                          'SIMULACRA_KEY_DAILY_USD', 'SIMULACRA_TOTAL_USD', 'SIMULACRA_RETAIN_DAYS', 'TRUST_PROXY_HOPS'}
+                          'SIMULACRA_DAILY_USD', 'SIMULACRA_MONTHLY_USD', 'SIMULACRA_RETAIN_DAYS', 'TRUST_PROXY_HOPS'}
           required_sec = {'ANTHROPIC_API_KEY', 'SIMULACRA_ACCESS_KEYS'}
           if required_env - env or required_sec - sec:
               sys.exit(f'::error::task def lacks env {sorted(required_env - env)} / secrets {sorted(required_sec - sec)}')
