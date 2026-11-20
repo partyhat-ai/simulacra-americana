@@ -1,6 +1,6 @@
-# synthetic-electorate-toy: source and docs, part 4 of 15
+# synthetic-electorate-toy: source and docs, part 4 of 16
 
-Generated from commit `be1682104fbe` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy. Regenerate whenever the code changes.
+Generated from commit `c4694839a0a9` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 Files `scripts/harness/build_population.py` to `scripts/harness/build_population_republic.py`. Lines are numbered as in the repository.
 
 ## `scripts/harness/build_population.py`

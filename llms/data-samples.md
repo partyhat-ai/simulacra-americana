@@ -1,12 +1,12 @@
 # synthetic-electorate-toy: data samples
 
-Generated from commit `be1682104fbe` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy. Regenerate whenever the code changes.
+Generated from commit `c4694839a0a9` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 
-Data files are not reproduced in full. One sample per directory, first 40 lines:
+Data files are not reproduced in full. One sample per top-level folder, first 40 lines:
 
 ## `configs/` (63 files)
 
-Sample: [`configs/live-1789.json`](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/configs/live-1789.json)
+Sample: `configs/live-1789.json`
 
 ```json
 {
@@ -53,7 +53,7 @@ Sample: [`configs/live-1789.json`](https://raw.githubusercontent.com/partyhat-ai
 
 ## `extracts/` (2 files)
 
-Sample: [`extracts/ipums-1920-fullcount.json`](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/extracts/ipums-1920-fullcount.json)
+Sample: `extracts/ipums-1920-fullcount.json`
 
 ```json
 {
@@ -82,7 +82,7 @@ Sample: [`extracts/ipums-1920-fullcount.json`](https://raw.githubusercontent.com
 
 ## `profiles/` (58 files)
 
-Sample: [`profiles/1789.json`](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/profiles/1789.json)
+Sample: `profiles/1789.json`
 
 ```json
 {
@@ -129,7 +129,7 @@ Sample: [`profiles/1789.json`](https://raw.githubusercontent.com/partyhat-ai/syn
 
 ## `runs/` (604 files)
 
-Sample: [`runs/1789-1fe17615d3/analysis.json`](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/runs/1789-1fe17615d3/analysis.json)
+Sample: `runs/1789-1fe17615d3/analysis.json`
 
 ```json
 {
@@ -176,7 +176,7 @@ Sample: [`runs/1789-1fe17615d3/analysis.json`](https://raw.githubusercontent.com
 
 ## `serve/` (60 files)
 
-Sample: [`serve/bundles/1789.json`](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/serve/bundles/1789.json)
+Sample: `serve/bundles/1789.json`
 
 ```json
 {
@@ -223,7 +223,7 @@ Sample: [`serve/bundles/1789.json`](https://raw.githubusercontent.com/partyhat-a
 
 ## `tests/` (1 files)
 
-Sample: [`tests/fixtures/bundle.example.json`](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/tests/fixtures/bundle.example.json)
+Sample: `tests/fixtures/bundle.example.json`
 
 ```json
 {
@@ -270,7 +270,7 @@ Sample: [`tests/fixtures/bundle.example.json`](https://raw.githubusercontent.com
 
 ## `whatifs/` (109 files)
 
-Sample: [`whatifs/america-loses-the-second-world-war.json`](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/whatifs/america-loses-the-second-world-war.json)
+Sample: `whatifs/america-loses-the-second-world-war.json`
 
 ```json
 {

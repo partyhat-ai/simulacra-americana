@@ -1,7 +1,7 @@
-# synthetic-electorate-toy: source and docs, part 15 of 15
+# synthetic-electorate-toy: source and docs, part 15 of 16
 
-Generated from commit `be1682104fbe` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy. Regenerate whenever the code changes.
-Files `src/lib/simulacra/stories.ts` to `vite.config.ts`. Lines are numbered as in the repository.
+Generated from commit `c4694839a0a9` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Files `src/lib/simulacra/stories.ts` to `tests/test_isolation.py`. Lines are numbered as in the repository.
 
 ## `src/lib/simulacra/stories.ts`
 
@@ -1757,37 +1757,124 @@ Files `src/lib/simulacra/stories.ts` to `vite.config.ts`. Lines are numbered as 
 ## `tests/test_intake_spend.py`
 
 ```python
-    1| """The intake's spend: recorded per access key, never capped (intake.py, Money)."""
-    2| import json
-    3| import time
-    4| 
-    5| from simharness import intake, llm
-    6| 
+    1| """The intake's spend: daily and monthly caps across every visitor, and how a
+    2| failing text is retried once, then given up (intake.py, Money and Failures)."""
+    3| import json
+    4| import time
+    5| 
+    6| import pytest
     7| 
-    8| def _ledger(tmp_path, rows):
-    9|     f = tmp_path / 'spend.jsonl'
-   10|     f.write_text(''.join(json.dumps(r) + '\n' for r in rows) + 'not json\n')
-   11|     return f
-   12| 
-   13| 
-   14| def test_spent_counts_keyed_lines_all_time_and_today(tmp_path):
-   15|     today = time.strftime('%Y-%m-%d', time.gmtime())
-   16|     f = _ledger(tmp_path, [
-   17|         {'day': today, 'dollars': 12.5, 'who': 'ana'},
-   18|         {'day': today, 'dollars': 4.0, 'who': 'ben'},
-   19|         {'day': '2000-01-01', 'dollars': 30.0, 'who': 'ana'},  # another day: all-time only
-   20|         {'day': today, 'dollars': 99.0, 'who': None},            # no key: neither
-   21|         {'day': today, 'dollars': 99.0},
-   22|     ])
-   23|     assert llm.spent(ledger=f) == (46.5, {'ana': 12.5, 'ben': 4.0})
-   24| 
-   25| 
-   26| def test_budget_never_stops_a_text():
-   27|     b = intake.Budget()
-   28|     b.add(500.0, 'compile', record=False)
-   29|     b.add(9.0, 'extract', typical=0.05, record=False)  # far over its estimate: recorded, not stopped
-   30|     assert b.spent == 509.0
-   31|     assert [x['stage'] for x in b.lines] == ['compile', 'extract']
+    8| from simharness import intake, llm
+    9| 
+   10| 
+   11| def _ledger(tmp_path, rows):
+   12|     f = tmp_path / 'spend.jsonl'
+   13|     f.write_text(''.join(json.dumps(r) + '\n' for r in rows) + 'not json\n')
+   14|     return f
+   15| 
+   16| 
+   17| def _today():
+   18|     return time.strftime('%Y-%m-%d', time.gmtime())
+   19| 
+   20| 
+   21| def test_spent_counts_every_line_today_and_this_month(tmp_path):
+   22|     today = _today()
+   23|     other_day_this_month = today[:8] + ('01' if today[8:] != '01' else '02')
+   24|     f = _ledger(tmp_path, [
+   25|         {'day': today, 'dollars': 12.5, 'who': 'ana'},
+   26|         {'day': today, 'dollars': 4.0, 'who': None},              # no key: still counts
+   27|         {'day': today, 'dollars': 1.0},                           # no `who` at all: still counts
+   28|         {'day': other_day_this_month, 'dollars': 30.0},           # this month, not today
+   29|         {'day': '2000-01-01', 'dollars': 500.0, 'who': 'ana'},    # another month: neither
+   30|         {'day': today, 'dollars': 'x'},                           # unreadable: skipped
+   31|     ])
+   32|     assert llm.spent(ledger=f) == (17.5, 47.5)
+   33| 
+   34| 
+   35| def test_left_is_the_smaller_remainder_and_never_negative(tmp_path):
+   36|     f = _ledger(tmp_path, [{'day': _today(), 'dollars': 15.0}])
+   37|     assert intake.left(f, daily=20, monthly=200) == pytest.approx(5.0)    # today's cap binds
+   38|     assert intake.left(f, daily=100, monthly=18) == pytest.approx(3.0)    # this month's cap binds
+   39|     assert intake.left(f, daily=10, monthly=200) == 0.0                   # already over: nothing, not negative
+   40| 
+   41| 
+   42| def test_budget_stops_at_its_ceiling():
+   43|     b = intake.Budget(ceiling=5.0)
+   44|     b.add(3.0, 'compile', record=False)
+   45|     with pytest.raises(SystemExit, match='budget for new what-ifs is spent'):
+   46|         b.add(2.5, 'research', record=False)
+   47|     assert b.spent == 5.5  # the stage that crossed is still counted
+   48| 
+   49| 
+   50| def test_budget_without_a_ceiling_never_stops():
+   51|     b = intake.Budget()
+   52|     b.add(500.0, 'compile', record=False)
+   53|     assert b.spent == 500.0
+   54| 
+   55| 
+   56| @pytest.fixture
+   57| def sessions(tmp_path, monkeypatch):
+   58|     for name, file in [('SESSIONS', ''), ('QUEUE', 'queue.jsonl'), ('DONE', 'queue-done.jsonl'),
+   59|                        ('FAILED', 'queue-failed.jsonl'), ('DEAD', 'queue-dead.jsonl'), ('LOCK', 'intake.lock')]:
+   60|         monkeypatch.setattr(intake, name, tmp_path / file if file else tmp_path)
+   61|     monkeypatch.setattr(llm, 'LEDGER', tmp_path / 'spend.jsonl')
+   62|     monkeypatch.setattr(intake, '_config_for', lambda year, fallback=None: tmp_path / 'cfg.json')
+   63|     return tmp_path
+   64| 
+   65| 
+   66| def _queue(sessions, *texts):
+   67|     (sessions / 'queue.jsonl').write_text(''.join(json.dumps({'year': 1920, 'text': t, 'who': None}) + '\n' for t in texts))
+   68| 
+   69| 
+   70| def _lines(path):
+   71|     return [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
+   72| 
+   73| 
+   74| def test_a_failing_text_is_retried_once_then_given_up_without_blocking_the_queue(sessions, monkeypatch):
+   75|     calls = []
+   76| 
+   77|     def fake_whatif(text, cfg, refresh=False, ceiling=None):
+   78|         calls.append(text)
+   79|         if text == 'always breaks':
+   80|             raise RuntimeError('boom')
+   81|         return {'status': 'modelled', 'key': 'k', 'dollars': 1.0}
+   82| 
+   83|     monkeypatch.setattr(intake, 'whatif', fake_whatif)
+   84|     _queue(sessions, 'always breaks', 'fine')
+   85| 
+   86|     first = intake.process_queue('cfg.json')
+   87|     assert [r['status'] for r in first] == ['error', 'modelled']   # the text behind the failure still runs
+   88|     assert not (sessions / 'queue-dead.jsonl').exists()
+   89| 
+   90|     second = intake.process_queue('cfg.json')
+   91|     assert [r['status'] for r in second] == ['error']               # retried once
+   92|     assert _lines(sessions / 'queue-dead.jsonl')[0]['attempts'] == intake.MAX_ATTEMPTS
+   93|     assert _lines(sessions / 'queue-done.jsonl')[-1]['status'] == 'gave-up'
+   94| 
+   95|     assert intake.process_queue('cfg.json') == []                    # settled: never billed again
+   96|     assert calls == ['always breaks', 'fine', 'always breaks']
+   97| 
+   98| 
+   99| def test_nothing_runs_once_the_cap_is_spent(sessions, monkeypatch):
+  100|     monkeypatch.setattr(intake, 'whatif', lambda *a, **k: pytest.fail('modelled over the cap'))
+  101|     (sessions / 'spend.jsonl').write_text(json.dumps({'day': _today(), 'dollars': intake.DAILY_USD}) + '\n')
+  102|     _queue(sessions, 'one', 'two')
+  103|     out = intake.process_queue('cfg.json')
+  104|     assert [r['status'] for r in out] == ['over-cap', 'over-cap']    # both settled, so no page waits for nothing
+  105|     assert [x['status'] for x in _lines(sessions / 'queue-done.jsonl')] == ['over-cap', 'over-cap']
+  106| 
+  107| 
+  108| def test_a_text_that_crosses_the_cap_mid_run_is_settled_and_stops_the_rest(sessions, monkeypatch):
+  109|     def fake_whatif(text, cfg, refresh=False, ceiling=None):
+  110|         b = intake.Budget(ceiling)
+  111|         b.add(ceiling + 1, 'ask')  # recorded in the ledger, and crosses
+  112|         return {'status': 'modelled'}
+  113| 
+  114|     monkeypatch.setattr(intake, 'whatif', fake_whatif)
+  115|     _queue(sessions, 'expensive', 'next')
+  116|     out = intake.process_queue('cfg.json')
+  117|     assert [r['status'] for r in out] == ['over-cap', 'over-cap']
+  118|     assert not (sessions / 'queue-failed.jsonl').exists()            # a cap stop is not a failure to retry
 ```
 
 ## `tests/test_isolation.py`
@@ -1943,133 +2030,4 @@ Files `src/lib/simulacra/stories.ts` to `vite.config.ts`. Lines are numbered as 
   148|     assert violations(src.replace('class Run', 'class Other'), 'simharness/pipeline.py')
   149|     # Mentioning the benchmark in a docstring or comment is fine.
   150|     assert violations('"""Scored against benchmarks/ later."""\n# benchmarks/\nx = 1\n', 'simharness/x.py') == []
-```
-
-## `tests/test_whatif.py`
-
-```python
-    1| """What-ifs and their evidence: source tiers, grounding, blending and confidence (evidence.py)."""
-    2| import numpy as np
-    3| 
-    4| from simharness.evidence import blend, combine_tiers, confidence, ground, tier_of
-    5| 
-    6| 
-    7| def test_source_tiers():
-    8|     assert tier_of('https://www.jstor.org/stable/1') == 'A'
-    9|     assert tier_of('https://history.house.gov/x') == 'A'
-   10|     assert tier_of('https://www.britannica.com/event/x') == 'B'
-   11|     assert tier_of('https://en.wikipedia.org/wiki/X') == 'C'
-   12|     assert tier_of('https://example.com/x') == 'C'
-   13| 
-   14| 
-   15| def test_ground_drops_unreturned_sources_and_flips_reversed():
-   16|     notes = {'sources': [{'id': 'S1', 'url': 'https://www.jstor.org/x', 'title': 't', 'tier': 'A', 'cited': []}]}
-   17|     pop = {'sex': 'any', 'group': 'any', 'region': 'any'}
-   18|     f = {'claim': 'c', 'population': pop, 'situation': '', 'when': '', 'match': 'same-event', 'limits': '', 'effects': [{'measure': 'r2', 'pp': 3.0, 'pm': 1.0}]}
-   19|     ev = ground({'findings': [f | {'source_ids': ['S9'], 'relation': 'like-scenario', 'direction': 'toward-R'},
-   20|                               f | {'source_ids': ['S1'], 'relation': 'reverses-scenario', 'direction': 'toward-R'}]}, notes)
-   21|     assert ev['dropped_ungrounded'] == 1 and len(ev['findings']) == 1
-   22|     assert ev['findings'][0]['direction'] == 'toward-D' and ev['findings'][0]['effects'][0]['pp'] == -3.0
-   23| 
-   24| 
-   25| def test_confidence_tiers():
-   26|     fantasy = {'kind': 'candidate', 'mode': 'agents', 'plausibility': 'fantastical', 'candidate': None}
-   27|     assert confidence(fantasy, None, None, None, True)['tier'] == 'very-low'
-   28|     franchise = {'kind': 'franchise', 'mode': 'backbone', 'plausibility': 'documented'}
-   29|     shaky = {'n': 2, 'spans_zero': True, 'paraphrase_flip': True}
-   30|     assert confidence(franchise, None, None, shaky, False)['tier'] == 'high'  # cross-check interviews move nothing
-   31|     both = combine_tiers([confidence(franchise, None, None, None, False), confidence(fantasy, None, None, None, True)])
-   32|     assert both['tier'] == 'very-low'
-   33| 
-   34| 
-   35| def test_blend_weak_evidence_barely_moves():
-   36|     d = np.full(200, 0.3) + np.linspace(-0.05, 0.05, 200)
-   37|     out = blend({'draws': {'dt': d.copy(), 'dr': d.copy(), 'do': d.copy()}}, {'dr': (2.0, 5.0, 1)})
-   38|     assert abs(out['draws']['dr'].mean() - 0.3) < 0.01 and out['evidence_blend']['dr']['evidence_weight'] < 0.01
-   39| 
-   40| 
-   41| def test_misread_forces_very_low():
-   42|     """When half or more of the people interviewed took the news to be about the
-   43|     other candidate, the tier is very-low whatever it started at; fewer misreads
-   44|     only flag it (and over a quarter costs one step)."""
-   45|     spec = {'kind': 'franchise', 'mode': 'agents', 'plausibility': 'documented'}
-   46|     steady = {'n': 40, 'spans_zero': False, 'paraphrase_flip': False, 'exposed': False}
-   47|     assert confidence(spec, None, None, steady | {'checked': 40, 'misread': 0}, False)['tier'] == 'high'
-   48|     for wrong in (20, 31, 40):
-   49|         c = confidence(spec, None, None, steady | {'checked': 40, 'misread': wrong}, False)
-   50|         assert c['tier'] == 'very-low', (wrong, c)
-   51|         assert 'misread-change' in c['flags']
-   52|     c = confidence(spec, None, None, steady | {'checked': 40, 'misread': 4}, False)
-   53|     assert c['tier'] == 'high' and 'misread-change' in c['flags']
-   54|     assert confidence(spec, None, None, steady | {'checked': 40, 'misread': 12}, False)['tier'] == 'medium'
-   55|     # A combination is as sure as its least sure what-if.
-   56|     assert combine_tiers([confidence(spec, None, None, steady | {'checked': 4, 'misread': 2}, False),
-   57|                           confidence(spec, None, None, steady, False)])['tier'] == 'very-low'
-```
-
-## `tsconfig.json`
-
-```json
-    1| {
-    2|   "extends": "./.svelte-kit/tsconfig.json",
-    3|   "compilerOptions": {
-    4|     "strict": true,
-    5|     "noUncheckedIndexedAccess": true,
-    6|     "noImplicitOverride": true,
-    7|     "noFallthroughCasesInSwitch": true,
-    8|     "exactOptionalPropertyTypes": false,
-    9|     "allowJs": false,
-   10|     "checkJs": false,
-   11|     "resolveJsonModule": true,
-   12|     "esModuleInterop": true,
-   13|     "skipLibCheck": true,
-   14|     "sourceMap": true,
-   15|     "moduleResolution": "bundler",
-   16|     "module": "esnext",
-   17|     "target": "es2022",
-   18|     "verbatimModuleSyntax": true
-   19|   },
-   20|   "include": [
-   21|     ".svelte-kit/types/**/$types.d.ts",
-   22|     ".svelte-kit/non-ambient.d.ts",
-   23|     ".svelte-kit/ambient.d.ts",
-   24|     "src/**/*.ts",
-   25|     "src/**/*.svelte",
-   26|     "serve/**/*.ts",
-   27|     "scripts/**/*.ts",
-   28|     "tests/**/*.ts",
-   29|     "vite.config.ts",
-   30|     "svelte.config.js"
-   31|   ]
-   32| }
-```
-
-## `vercel.json`
-
-```json
-    1| {
-    2|   "$schema": "https://openapi.vercel.sh/vercel.json",
-    3|   "framework": null,
-    4|   "installCommand": "pnpm install --frozen-lockfile",
-    5|   "buildCommand": "pnpm build",
-    6|   "outputDirectory": "build",
-    7|   "rewrites": [
-    8|     { "source": "/api/simulacra/:path*", "destination": "https://api.simulacraamericana.com/api/simulacra/:path*" },
-    9|     { "source": "/((?!api/).*)", "destination": "/index.html" }
-   10|   ]
-   11| }
-```
-
-## `vite.config.ts`
-
-```ts
-    1| import { sveltekit } from '@sveltejs/kit/vite';
-    2| import { defineConfig } from 'vitest/config';
-    3| 
-    4| // In development the page calls /api/simulacra on the local server (pnpm serve).
-    5| export default defineConfig({
-    6|   plugins: [sveltekit()],
-    7|   server: { proxy: { '/api': 'http://localhost:8787' } },
-    8|   test: { include: ['src/**/*.test.ts', 'serve/**/*.test.ts'] }
-    9| });
 ```

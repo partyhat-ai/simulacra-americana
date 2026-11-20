@@ -1,7 +1,7 @@
-# synthetic-electorate-toy: source and docs, part 2 of 15
+# synthetic-electorate-toy: source and docs, part 2 of 16
 
-Generated from commit `be1682104fbe` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy. Regenerate whenever the code changes.
-Files `EVAL.md` to `infra/backup.tf`. Lines are numbered as in the repository.
+Generated from commit `c4694839a0a9` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Files `EVAL.md` to `infra/alb.tf`. Lines are numbered as in the repository.
 
 ## `EVAL.md`
 
@@ -1551,72 +1551,90 @@ Files `EVAL.md` to `infra/backup.tf`. Lines are numbered as in the repository.
   241| 
   242| ## Spend
   243| 
-  244| **Nothing caps the intake's dollars.** Every queued text is modelled to the
-  245| end, and no stage stops for costing more than its estimate. The worker
-  246| records each stage in `/state/sessions/spend.jsonl` (priced before it is sent
-  247| and recorded after, with the access key's name when the request carried one).
-  248| `SIMULACRA_KEY_DAILY_USD` and `SIMULACRA_TOTAL_USD` are still in the task
-  249| definition, but nothing reads them.
+  244| **Two dollar caps bound the intake, counted across every visitor together:**
+  245| `SIMULACRA_DAILY_USD` per UTC day (20 in the task definition) and
+  246| `SIMULACRA_MONTHLY_USD` per UTC calendar month (200). The worker records each
+  247| stage in `/state/sessions/spend.jsonl` (priced before it is sent and recorded
+  248| after, with the access key's name when the request carried one; every line
+  249| counts toward the caps, keyed or not).
   250| 
-  251| The only limits are per IP (`serve/simulacra.ts`, `DEFAULT_LIMITS`): 1,200
-  252| requests per 10 minutes, 120 runs per 10 minutes, and 10 queued texts an
-  253| hour; past the last, POST /runs answers 429. The rate limits read the
-  254| visitor's address from `X-Forwarded-For` two proxies deep (`TRUST_PROXY_HOPS`:
-  255| Vercel, then the ALB). A request sent to the ALB directly can forge that
-  256| header, so the per-IP limits don't bound spend either. To stop the spending,
-  257| remove or revoke the Anthropic key, or stop the service
-  258| (`aws ecs update-service --cluster simulacra --service simulacra-api --desired-count 0`).
-  259| 
-  260| Session logs (`requests.jsonl` and the queue files) keep 7 days of lines
-  261| (`SIMULACRA_RETAIN_DAYS`), pruned at start and hourly while no worker runs.
-  262| `spend.jsonl` keeps every line, but drops a line's `note` (the visitor's
-  263| words) after the same 7 days. The worker's `intake.log` is emptied past 20 MB (CloudWatch keeps its
-  264| copy). To read them, run a one-off task, or download the latest AWS Backup
-  265| recovery point.
-  266| 
-  267| AWS can't see Anthropic spend. Set a usage alert on the production key in the
-  268| Anthropic console.
-  269| 
-  270| ## Census data
-  271| 
-  272| The NHGIS/IPUMS extracts and the derived `population/*_nhgis.csv` files are
-  273| not for redistribution. They live only in `s3://simulacra-americana-data/cache/`
-  274| (the derived part, everything except `*/raw/`) and on EFS. They are never in
-  275| git, an image, Vercel or the assets bucket.
-  276| 
-  277| To re-sync after rebuilding the cache on a laptop, run
-  278| `scripts/sync-data.sh upload-cache`, then `scripts/sync-data.sh cache`. Run
-  279| ids hash the cache manifest, so a changed cache means new run ids.
-  280| 
-  281| ## Alarms
-  282| 
-  283| All alarms go to SNS `simulacra-alarms`, which emails cam@partyhat.ai:
-  284| - no healthy target for 3 minutes;
-  285| - more than 5 target 5xx in 5 minutes;
-  286| - more than 10 ELB 5xx in 5 minutes;
-  287| - any worker STOP, refusal or traceback (the entrypoint echoes worker lines
-  288|   to the log with a `[worker]` prefix);
-  289| - the AWS Budget forecast passing 80%, and actual spend passing 100% of $150
-  290|   a month. The budget filters on the `project` cost-allocation tag. AWS can
-  291|   take up to 24 hours to see a new tag, so activating it may fail on the
-  292|   first apply; re-apply the next day.
-  293| 
-  294| ## Cost estimate (us-east-1, October 2026 list prices)
-  295| 
-  296| | Item | Basis | ~/month |
-  297| |---|---|---|
-  298| | ALB | $16.43 base plus about 1 LCU | $22 |
-  299| | Fargate | 1 vCPU, 4 GB, ARM, 24/7 | $34 |
-  300| | Public IPv4 | Task plus 2 ALB addresses at $3.65 each | $11 |
-  301| | EFS (elastic) | About 1–2 GB, growing 5–7 MB per new what-if, plus I/O | $1–3 |
-  302| | AWS Backup | EFS warm storage | <$1 |
-  303| | CloudFront | About 19 MB per first-time visitor; inside the 1 TB/month free tier up to about 50k visitors | $0 |
-  304| | S3, ECR, logs, alarms, Secrets Manager | | $3–5 |
-  305| | **AWS total** | | **≈ $75–80** |
-  306| | Vercel | Hobby is $0, but its terms exclude commercial use; Pro is $20 per member | $0–20 |
-  307| | Anthropic | $0.74–$1.91 per new typed what-if, from access-key holders only. Repeats and precomputed combinations are free | $150 in all, by the all-time cap, until it is raised |
-  308| 
-  309| The Anthropic line dominates. The caps above bound it.
+  251| - **Before queuing** (`serve/guard.ts`, `checkCaps`): once today's or this
+  252|   month's recorded spend reaches its cap, POST /runs queues nothing and the
+  253|   run answers at once with `unknownWhy` saying the budget is spent.
+  254| - **Before each text** (`simharness/intake.py`, `left`): the worker checks the
+  255|   same ledger. With nothing left, the text is settled as `over-cap` in
+  256|   `queue-done.jsonl` and the waiting page is told why.
+  257| - **During a text** (`intake.Budget`): the text runs with what is left as its
+  258|   ceiling and stops at the first stage that reaches it. A stage is priced when
+  259|   it finishes, so a cap can be passed by at most the one stage that crosses
+  260|   it (at most about $2, the cost of one text's interviews).
+  261| 
+  262| A text that fails is retried once. After two failures it is settled as
+  263| `gave-up` and copied to `/state/sessions/queue-dead.jsonl`, so a text that
+  264| always fails is billed at most twice and never holds up the texts behind it.
+  265| 
+  266| To change a cap, edit its value in `infra/taskdef.json.tftpl` and deploy.
+  267| 
+  268| The per-IP limits (`serve/simulacra.ts`, `DEFAULT_LIMITS`): 1,200
+  269| requests per 10 minutes, 120 runs per 10 minutes, and 10 queued texts an
+  270| hour; past the last, POST /runs answers 429. The rate limits read the
+  271| visitor's address from `X-Forwarded-For` two proxies deep (`TRUST_PROXY_HOPS`:
+  272| Vercel, then the ALB). A request sent to the ALB directly can forge that
+  273| header, so the per-IP limits can be dodged; the dollar caps can't, since they
+  274| count every visitor together. To stop the spending at once,
+  275| remove or revoke the Anthropic key, or stop the service
+  276| (`aws ecs update-service --cluster simulacra --service simulacra-api --desired-count 0`).
+  277| 
+  278| Session logs (`requests.jsonl` and the queue files) keep 7 days of lines
+  279| (`SIMULACRA_RETAIN_DAYS`), pruned at start and hourly while no worker runs.
+  280| `spend.jsonl` keeps every line, but drops a line's `note` (the visitor's
+  281| words) after the same 7 days. The worker's `intake.log` is emptied past 20 MB (CloudWatch keeps its
+  282| copy). To read them, run a one-off task, or download the latest AWS Backup
+  283| recovery point.
+  284| 
+  285| AWS can't see Anthropic spend. Set a usage alert on the production key in the
+  286| Anthropic console.
+  287| 
+  288| ## Census data
+  289| 
+  290| The NHGIS/IPUMS extracts and the derived `population/*_nhgis.csv` files are
+  291| not for redistribution. They live only in `s3://simulacra-americana-data/cache/`
+  292| (the derived part, everything except `*/raw/`) and on EFS. They are never in
+  293| git, an image, Vercel or the assets bucket.
+  294| 
+  295| To re-sync after rebuilding the cache on a laptop, run
+  296| `scripts/sync-data.sh upload-cache`, then `scripts/sync-data.sh cache`. Run
+  297| ids hash the cache manifest, so a changed cache means new run ids.
+  298| 
+  299| ## Alarms
+  300| 
+  301| All alarms go to SNS `simulacra-alarms`, which emails cam@partyhat.ai:
+  302| - no healthy target for 3 minutes;
+  303| - more than 5 target 5xx in 5 minutes;
+  304| - more than 10 ELB 5xx in 5 minutes;
+  305| - any worker STOP, refusal or traceback (the entrypoint echoes worker lines
+  306|   to the log with a `[worker]` prefix);
+  307| - the AWS Budget forecast passing 80%, and actual spend passing 100% of $150
+  308|   a month. The budget filters on the `project` cost-allocation tag. AWS can
+  309|   take up to 24 hours to see a new tag, so activating it may fail on the
+  310|   first apply; re-apply the next day.
+  311| 
+  312| ## Cost estimate (us-east-1, October 2026 list prices)
+  313| 
+  314| | Item | Basis | ~/month |
+  315| |---|---|---|
+  316| | ALB | $16.43 base plus about 1 LCU | $22 |
+  317| | Fargate | 1 vCPU, 4 GB, ARM, 24/7 | $34 |
+  318| | Public IPv4 | Task plus 2 ALB addresses at $3.65 each | $11 |
+  319| | EFS (elastic) | About 1–2 GB, growing 5–7 MB per new what-if, plus I/O | $1–3 |
+  320| | AWS Backup | EFS warm storage | <$1 |
+  321| | CloudFront | About 19 MB per first-time visitor; inside the 1 TB/month free tier up to about 50k visitors | $0 |
+  322| | S3, ECR, logs, alarms, Secrets Manager | | $3–5 |
+  323| | **AWS total** | | **≈ $75–80** |
+  324| | Vercel | Hobby is $0, but its terms exclude commercial use; Pro is $20 per member | $0–20 |
+  325| | Anthropic | $0.74–$1.91 per new typed what-if, from any visitor. Repeats and precomputed combinations are free | At most $200, by the monthly cap ($20 a day) |
+  326| 
+  327| The Anthropic line dominates. The daily and monthly caps (Spend, above) bound it.
 ```
 
 ## `docs/harness/README.md`
@@ -1947,57 +1965,4 @@ Files `EVAL.md` to `infra/backup.tf`. Lines are numbered as in the repository.
    51|     target_group_arn = aws_lb_target_group.api.arn
    52|   }
    53| }
-```
-
-## `infra/backup.tf`
-
-```hcl
-    1| # Daily EFS backups, 35 days. Production state diverges from git the moment
-    2| # the worker models anything, and 46 of the 60 bundles can't be regenerated.
-    3| 
-    4| resource "aws_backup_vault" "state" {
-    5|   name = "${local.name}-state"
-    6| }
-    7| 
-    8| resource "aws_backup_plan" "state" {
-    9|   name = "${local.name}-state-daily"
-   10|   rule {
-   11|     rule_name         = "daily"
-   12|     target_vault_name = aws_backup_vault.state.name
-   13|     schedule          = "cron(0 7 * * ? *)"
-   14|     lifecycle { delete_after = 35 }
-   15|   }
-   16| }
-   17| 
-   18| data "aws_iam_policy_document" "backup_assume" {
-   19|   statement {
-   20|     actions = ["sts:AssumeRole"]
-   21|     principals {
-   22|       type        = "Service"
-   23|       identifiers = ["backup.amazonaws.com"]
-   24|     }
-   25|   }
-   26| }
-   27| 
-   28| resource "aws_iam_role" "backup" {
-   29|   name               = "${local.name}-backup"
-   30|   assume_role_policy = data.aws_iam_policy_document.backup_assume.json
-   31| }
-   32| 
-   33| resource "aws_iam_role_policy_attachment" "backup" {
-   34|   role       = aws_iam_role.backup.name
-   35|   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup"
-   36| }
-   37| 
-   38| resource "aws_iam_role_policy_attachment" "restore" {
-   39|   role       = aws_iam_role.backup.name
-   40|   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForRestores"
-   41| }
-   42| 
-   43| resource "aws_backup_selection" "state" {
-   44|   name         = "${local.name}-efs"
-   45|   plan_id      = aws_backup_plan.state.id
-   46|   iam_role_arn = aws_iam_role.backup.arn
-   47|   resources    = [aws_efs_file_system.state.arn]
-   48| }
 ```

@@ -1,7 +1,7 @@
-# synthetic-electorate-toy: source and docs, part 5 of 15
+# synthetic-electorate-toy: source and docs, part 5 of 16
 
-Generated from commit `be1682104fbe` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy. Regenerate whenever the code changes.
-Files `scripts/harness/build_republic.py` to `serve/contract.ts`. Lines are numbered as in the repository.
+Generated from commit `c4694839a0a9` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Files `scripts/harness/build_republic.py` to `serve/contract.test.ts`. Lines are numbered as in the repository.
 
 ## `scripts/harness/build_republic.py`
 
@@ -1288,6 +1288,249 @@ Files `scripts/harness/build_republic.py` to `serve/contract.ts`. Lines are numb
    86|     main()
 ```
 
+## `scripts/llms_digest.py`
+
+```python
+    1| #!/usr/bin/env python3
+    2| """Build llms.txt and llms/: a plain-text copy of this repository for tools that
+    3| read text at a URL rather than cloning (llmstxt.org convention).
+    4| 
+    5|     python3 scripts/llms_digest.py           # write llms.txt and llms/
+    6|     python3 scripts/llms_digest.py --check   # exit 1 if they don't match the code
+    7| 
+    8| .github/workflows/llms-digest.yml runs this on every push to main and commits
+    9| the result, so the text always matches the code at the commit it names.
+   10| Standard library only.
+   11| 
+   12|   llms.txt              index: the README's opening section, then links to everything below
+   13|   llms/MAP.md           every tracked file: size, lines, first descriptive line, digest part
+   14|   llms/HISTORY.md       commit history, verbatim from git (commits that only regenerate
+   15|                         the digest are left out)
+   16|   llms/code-N.md        full text of every source and doc file, line-numbered, in parts
+   17|                         small enough to fetch whole
+   18|   llms/data-samples.md  the first lines of one data file per top-level folder
+   19| """
+   20| from __future__ import annotations
+   21| 
+   22| import argparse
+   23| import os
+   24| import re
+   25| import shutil
+   26| import subprocess
+   27| import sys
+   28| import tempfile
+   29| from pathlib import Path
+   30| 
+   31| PART_CHARS = 120_000
+   32| OWN = ("llms.txt", "llms/")  # this script's output: never part of its own input
+   33| SKIP_DIRS = {"node_modules", "dist", "build", ".svelte-kit", "__pycache__", ".venv", "venv", ".git", ".next"}
+   34| LOCKFILES = {"package-lock.json", "pnpm-lock.yaml", "yarn.lock", "uv.lock", "poetry.lock", "Cargo.lock"}
+   35| DATA_EXT = {".json", ".jsonl", ".csv", ".tsv", ".parquet", ".npy", ".npz", ".arrow", ".pkl"}
+   36| BINARY_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".woff", ".woff2", ".ttf", ".otf", ".pdf",
+   37|               ".zip", ".gz", ".safetensors", ".bin", ".pt", ".onnx", ".mp4", ".mp3", ".wav"}
+   38| LANG = {".py": "python", ".ts": "ts", ".js": "js", ".svelte": "svelte", ".tf": "hcl", ".sh": "bash",
+   39|         ".md": "markdown", ".yml": "yaml", ".yaml": "yaml", ".toml": "toml", ".json": "json", ".html": "html",
+   40|         ".css": "css", ".txt": "text", ".sql": "sql", ".go": "go", ".rs": "rust"}
+   41| 
+   42| 
+   43| def git(*args: str, cwd: Path) -> str:
+   44|     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout
+   45| 
+   46| 
+   47| def first_descriptive_line(text: str, ext: str) -> str:
+   48|     """A file's own first line of description: a docstring, a leading comment, or a heading."""
+   49|     if ext == ".py":
+   50|         m = re.search(r'^\s*(?:#![^\n]*\n)?\s*(?:"""|\'\'\')\s*(.+)', text)
+   51|         if m:
+   52|             return m.group(1).strip().rstrip("\"'")
+   53|     for line in text.splitlines()[:15]:
+   54|         s = line.strip()
+   55|         m = re.match(r"^(?:#{1,6}\s+|//+\s*|#\s*|/\*+\s*|\*\s+|<!--\s*)(.{8,})", s)
+   56|         if m and not s.startswith("#!") and not s.startswith("// @ts"):
+   57|             return m.group(1).strip().rstrip("*/ -").strip()
+   58|     return ""
+   59| 
+   60| 
+   61| def classify(path: str, size: int, raw: bytes) -> str:
+   62|     name, ext = os.path.basename(path), os.path.splitext(path)[1].lower()
+   63|     parts = path.split("/")
+   64|     if any(p in SKIP_DIRS for p in parts[:-1]):
+   65|         return "skip: generated or vendored directory"
+   66|     if name in LOCKFILES:
+   67|         return "skip: lockfile"
+   68|     if ext in BINARY_EXT or b"\0" in raw[:4096]:
+   69|         return "skip: binary"
+   70|     if raw.startswith(b"version https://git-lfs"):
+   71|         return "skip: Git LFS pointer (content not in the repo)"
+   72|     if ext in DATA_EXT and not (len(parts) == 1 and size <= 20_000):  # root configs stay
+   73|         return "data: sampled in data-samples.md"
+   74|     if size > 200_000:
+   75|         return "skip: larger than 200 KB"
+   76|     return "include"
+   77| 
+   78| 
+   79| def repo_identity(root: Path) -> tuple[str, str, str]:
+   80|     """(owner, name, branch) from GitHub Actions, else from the origin remote."""
+   81|     full = os.environ.get("GITHUB_REPOSITORY")
+   82|     if not full:
+   83|         url = git("remote", "get-url", "origin", cwd=root).strip()
+   84|         m = re.search(r"github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?$", url)
+   85|         if not m:
+   86|             sys.exit(f"can't tell the GitHub repository from {url!r}; set GITHUB_REPOSITORY=owner/name")
+   87|         full = f"{m.group(1)}/{m.group(2)}"
+   88|     owner, name = full.split("/", 1)
+   89|     branch = os.environ.get("LLMS_BRANCH", "main")
+   90|     return owner, name, branch
+   91| 
+   92| 
+   93| def build(root: Path, out: Path) -> dict:
+   94|     owner, name, branch = repo_identity(root)
+   95|     sha = git("rev-parse", "HEAD", cwd=root).strip()
+   96|     date = git("log", "-1", "--format=%cs", cwd=root).strip()
+   97|     raw_base = f"https://raw.githubusercontent.com/{owner}/{name}/{branch}/"
+   98|     files = [f for f in git("ls-files", cwd=root).splitlines() if f and not f.startswith(OWN)]
+   99|     stamp = (f"Generated from commit `{sha[:12]}` ({date}) of github.com/{owner}/{name} by "
+  100|              f"`scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to "
+  101|              f"`{branch}`, so this text matches the code at that commit.")
+  102| 
+  103|     rows, included, data_dirs = [], [], {}
+  104|     for f in files:
+  105|         raw = (root / f).read_bytes()
+  106|         verdict = classify(f, len(raw), raw)
+  107|         ext = os.path.splitext(f)[1].lower()
+  108|         text = "" if verdict == "skip: binary" else raw.decode("utf-8", "replace")
+  109|         lines = text.count("\n") + (1 if text and not text.endswith("\n") else 0)
+  110|         desc = first_descriptive_line(text, ext) if verdict == "include" else ""
+  111|         rows.append((f, len(raw), lines, desc, verdict))
+  112|         if verdict == "include":
+  113|             included.append((f, text, ext))
+  114|         elif verdict.startswith("data"):
+  115|             data_dirs.setdefault(f.split("/")[0] if "/" in f else "(root)", []).append((f, text))
+  116| 
+  117|     # Parts: whole files in path order, never split across parts.
+  118|     parts, cur, cur_len = [], [], 0
+  119|     for f, text, ext in included:
+  120|         numbered = "\n".join(f"{i:>5}| {l}" for i, l in enumerate(text.splitlines(), 1))
+  121|         block = f"\n## `{f}`\n\n```{LANG.get(ext, '')}\n{numbered}\n```\n"
+  122|         if cur and cur_len + len(block) > PART_CHARS:
+  123|             parts.append(cur)
+  124|             cur, cur_len = [], 0
+  125|         cur.append((f, block))
+  126|         cur_len += len(block)
+  127|     if cur:
+  128|         parts.append(cur)
+  129| 
+  130|     (out / "llms").mkdir(parents=True, exist_ok=True)
+  131|     part_index, file_part = [], {}
+  132|     for i, part in enumerate(parts, 1):
+  133|         fname = f"llms/code-{i}.md"
+  134|         body = "".join(b for _, b in part)
+  135|         (out / fname).write_text(
+  136|             f"# {name}: source and docs, part {i} of {len(parts)}\n\n{stamp}\nFiles `{part[0][0]}` to "
+  137|             f"`{part[-1][0]}`. Lines are numbered as in the repository.\n" + body)
+  138|         part_index.append((fname, part[0][0], part[-1][0], len(part), len(body)))
+  139|         for f, _ in part:
+  140|             file_part[f] = f"code-{i}.md"
+  141| 
+  142|     m = [f"# {name}: file map", "", stamp, "",
+  143|          f"{len(files)} tracked files. {len(included)} are reproduced in full in the `code-N.md` parts; "
+  144|          "the rest are listed with the reason they are not.", "",
+  145|          f"Every path below is relative to {raw_base} (append the path to fetch the raw file).", "",
+  146|          "| File | Bytes | Lines | Description | In digest |", "|---|---|---|---|---|"]
+  147|     for f, size, lines, desc, verdict in rows:
+  148|         if not verdict.startswith("data"):
+  149|             m.append(f"| `{f}` | {size:,} | {lines:,} | {desc.replace('|', '/')[:100]} | {file_part.get(f, verdict)} |")
+  150|     if data_dirs:
+  151|         m += ["", "### Data files (not reproduced; one sample per folder in `data-samples.md`)", "",
+  152|               "| Folder | Files | Bytes |", "|---|---|---|"]
+  153|         sizes = {r[0]: r[1] for r in rows}
+  154|         for d, items in sorted(data_dirs.items()):
+  155|             m.append(f"| `{d}/` | {len(items)} | {sum(sizes[f] for f, _ in items):,} |")
+  156|     (out / "llms" / "MAP.md").write_text("\n".join(m) + "\n")
+  157| 
+  158|     if data_dirs:
+  159|         ds = [f"# {name}: data samples", "", stamp, "",
+  160|               "Data files are not reproduced in full. One sample per top-level folder, first 40 lines:", ""]
+  161|         for d, items in sorted(data_dirs.items()):
+  162|             f, text = items[0]
+  163|             sample = "\n".join(text.splitlines()[:40])
+  164|             ds += [f"## `{d}/` ({len(items)} files)", "", f"Sample: `{f}`", "",
+  165|                    f"```{LANG.get(os.path.splitext(f)[1].lower(), '')}\n{sample}\n```", ""]
+  166|         (out / "llms" / "data-samples.md").write_text("\n".join(ds))
+  167| 
+  168|     # Commits that touched anything besides the digest itself, verbatim.
+  169|     log = git("log", "--format=%h  %ad  %an  %s", "--date=short", "--", ".", ":(exclude)llms.txt", ":(exclude)llms",
+  170|               cwd=root).strip()
+  171|     count = len(log.splitlines()) if log else 0
+  172|     (out / "llms" / "HISTORY.md").write_text(
+  173|         f"# {name}: commit history\n\n{stamp}\n\n{count} commit(s), verbatim from `git log` "
+  174|         f"(commits that only regenerate this digest are left out):\n\n```\n{log}\n```\n")
+  175| 
+  176|     readme = next((f for f in files if f.lower() == "readme.md"), None)
+  177|     total = sum(p[4] for p in part_index)
+  178|     idx = [f"# {name}", ""]
+  179|     if readme:
+  180|         intro = re.split(r"(?m)^##\s", (root / readme).read_text(errors="replace"))[0]
+  181|         intro = re.sub(r"(?m)^#\s.*\n", "", intro).strip()
+  182|         if intro:
+  183|             idx += ["## Summary (the README's opening section, verbatim)", "", intro[:3000], ""]
+  184|     idx += [stamp, "", "## Start here", ""]
+  185|     if readme:
+  186|         idx.append(f"- [README]({raw_base}{readme}): overview")
+  187|     idx += [f"- [File map]({raw_base}llms/MAP.md): all {len(files)} files with size, line count, description, "
+  188|             "and which digest part holds each one",
+  189|             f"- [Commit history]({raw_base}llms/HISTORY.md): {count} commit(s)", ""]
+  190|     docs = [r[0] for r in rows if r[0].lower().endswith(".md") and r[0] != readme]
+  191|     if docs:
+  192|         idx += ["## Documentation", ""] + [f"- [{d}]({raw_base}{d})" for d in docs[:30]] + [""]
+  193|     idx += [f"## Full source text ({total:,} characters, about {total // 4:,} tokens, in {len(part_index)} part(s))", ""]
+  194|     idx += [f"- [{fn}]({raw_base}{fn}): {n} files, `{a}` to `{b}` ({size:,} characters)"
+  195|             for fn, a, b, n, size in part_index]
+  196|     if data_dirs:
+  197|         idx += ["", "## Data", "", f"- [Data samples]({raw_base}llms/data-samples.md): "
+  198|                 f"{sum(len(v) for v in data_dirs.values())} data files in {len(data_dirs)} folder(s), one sample each"]
+  199|     (out / "llms.txt").write_text("\n".join(idx) + "\n")
+  200|     return {"files": len(files), "included": len(included), "parts": len(part_index), "chars": total}
+  201| 
+  202| 
+  203| def snapshot(d: Path) -> dict[str, str]:
+  204|     out = {}
+  205|     if (d / "llms.txt").exists():
+  206|         out["llms.txt"] = (d / "llms.txt").read_text()
+  207|     for p in sorted((d / "llms").glob("*")) if (d / "llms").is_dir() else []:
+  208|         out[f"llms/{p.name}"] = p.read_text()
+  209|     return out
+  210| 
+  211| 
+  212| def main() -> None:
+  213|     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+  214|     ap.add_argument("--check", action="store_true", help="exit 1 if llms.txt and llms/ don't match the code")
+  215|     args = ap.parse_args()
+  216|     root = Path(git("rev-parse", "--show-toplevel", cwd=Path.cwd()).strip())
+  217|     tmp = Path(tempfile.mkdtemp(prefix="llms-digest-"))
+  218|     try:
+  219|         stats = build(root, tmp)
+  220|         fresh = snapshot(tmp)
+  221|         if args.check:
+  222|             # The stamp names a commit; compare everything else.
+  223|             norm = lambda d: {k: re.sub(r"commit `[0-9a-f]{12}` \(\d{4}-\d\d-\d\d\)", "commit", v) for k, v in d.items()}
+  224|             if norm(fresh) != norm(snapshot(root)):
+  225|                 sys.exit("llms.txt / llms/ don't match the code. Run: python3 scripts/llms_digest.py")
+  226|             print("llms.txt and llms/ match the code.")
+  227|             return
+  228|         shutil.rmtree(root / "llms", ignore_errors=True)
+  229|         (root / "llms").mkdir()
+  230|         for rel, text in fresh.items():
+  231|             (root / rel).write_text(text)
+  232|         print(f"{stats['included']} of {stats['files']} files in {stats['parts']} part(s), {stats['chars']:,} characters.")
+  233|     finally:
+  234|         shutil.rmtree(tmp, ignore_errors=True)
+  235| 
+  236| 
+  237| if __name__ == "__main__":
+  238|     main()
+```
+
 ## `scripts/mirror-portraits.py`
 
 ```python
@@ -1811,352 +2054,4 @@ Files `scripts/harness/build_republic.py` to `serve/contract.ts`. Lines are numb
    76|     expect(ok({ year: 1920, edits: { women: { nobody: 0.1 } } })).toBe(false);
    77|   });
    78| });
-```
-
-## `serve/contract.ts`
-
-```ts
-    1| // The page's contract with the simulation server, one definition for both
-    2| // sides: serve/bundle.ts parses the published bundles and request bodies with
-    3| // these, and the page (src/lib/simulacra/schemas.ts) parses every answer with
-    4| // them. It lives under serve/ because the server's image is built from serve/
-    5| // alone (Dockerfile); it imports nothing but zod, so the page can import it too.
-    6| // The bundle mirrors simharness.serialize.Bundle; both sides test against
-    7| // tests/fixtures/bundle.example.json (serve/contract.test.ts, tests/test_contract.py).
-    8| //
-    9| // Objects that come from a bundle are loose: fields added on the Python side
-   10| // pass through the server to the page, which reads only what's named here.
-   11| // Candidate keys follow history.ts: A is the winner, B the runner-up, O
-   12| // everyone else.
-   13| //
-   14| // GET  /manifest → Manifest { years: { [year]: runId } }
-   15| // GET  /elections/:year → ElectionResponse { slices, whatIfs, simulated, runId }
-   16| // POST /runs RunRequest { year, whatIfs: [key], text, edits } → StartedRun { id }
-   17| // GET  /runs/:id → RunStatus (running | done with a RunResult | failed)
-   18| // POST /runs/:id/cancel → { ok }
-   19| // GET  /elections/:year/voters/:slice?run=:id → Voter
-   20| import { z } from 'zod';
-   21| 
-   22| /** A what-if's kind: who can vote, who lives where, what people care about, who is on the ballot. */
-   23| export const KindSchema = z.enum(['franchise', 'population', 'issue', 'candidate']);
-   24| export type Kind = z.infer<typeof KindSchema>;
-   25| 
-   26| /** What one person did: voted for A, B or someone else, stayed home, or couldn't vote. */
-   27| export const ChoiceSchema = z.enum(['A', 'B', 'O', 'home', 'barred']);
-   28| export type Choice = z.infer<typeof ChoiceSchema>;
-   29| 
-   30| /** Where a vote is counted: the winner, the runner-up, or everyone else. */
-   31| export const BucketSchema = z.enum(['A', 'B', 'O']);
-   32| export type Bucket = z.infer<typeof BucketSchema>;
-   33| 
-   34| /** The five shares every slice and table row splits its adults into. */
-   35| export const FIELDS = ['barred', 'home', 'A', 'B', 'O'] as const;
-   36| export type Field = (typeof FIELDS)[number];
-   37| 
-   38| /** One group of adults; the five fractions are of the group's adults. `adults` is in millions. */
-   39| export const SliceSchema = z.looseObject({
-   40|   key: z.string(),
-   41|   label: z.string(),
-   42|   adults: z.number(),
-   43|   barred: z.number(),
-   44|   home: z.number(),
-   45|   A: z.number(),
-   46|   B: z.number(),
-   47|   O: z.number(),
-   48|   source: z.string().optional()
-   49| });
-   50| export type Slice = z.infer<typeof SliceSchema>;
-   51| 
-   52| export const WhatIfSchema = z.looseObject({
-   53|   key: z.string(),
-   54|   label: z.string(),
-   55|   kind: KindSchema,
-   56|   detail: z.string(),
-   57|   /** The groups it reaches. */
-   58|   slices: z.array(z.string()).default([]),
-   59|   assumption: z.string().optional(),
-   60|   confidenceTier: z.string().optional(),
-   61|   evidence: z.string().optional(),
-   62|   exploratory: z.boolean().optional()
-   63| });
-   64| export type WhatIf = z.infer<typeof WhatIfSchema>;
-   65| 
-   66| /** A year's groups and what-ifs, as its bundle holds them. */
-   67| export const ElectionSchema = z.looseObject({
-   68|   slices: z.array(SliceSchema),
-   69|   whatIfs: z.array(WhatIfSchema)
-   70| });
-   71| 
-   72| /** GET /elections/:year. A year without a simulation answers empty lists and `simulated: false`. */
-   73| export const ElectionResponseSchema = ElectionSchema.extend({
-   74|   simulated: z.boolean().optional(),
-   75|   /** The run this year's bundle came from; absent when there's no bundle. */
-   76|   runId: z.string().optional()
-   77| });
-   78| export type ElectionResponse = z.infer<typeof ElectionResponseSchema>;
-   79| 
-   80| /** GET /manifest: every published year and its run. */
-   81| export const ManifestSchema = z.object({ years: z.record(z.string(), z.string()) });
-   82| 
-   83| const EvSchema = z.object({ A: z.number(), B: z.number(), O: z.number() });
-   84| const PairSchema = z.tuple([z.number(), z.number()]);
-   85| 
-   86| export const StateResultSchema = z.looseObject({
-   87|   code: z.string(),
-   88|   /** A candidate key ('A', 'B', 'C', …) or 'O'. */
-   89|   won: z.string(),
-   90|   // serialize writes a numpy bool through json's default=float, 0.0 / 1.0, in
-   91|   // published bundles; the sample and hand-edited runs write a boolean.
-   92|   flipped: z.union([z.boolean(), z.number()]).transform((v) => v !== false && v !== 0),
-   93|   margin: z.number(),
-   94|   marginRange: PairSchema.optional(),
-   95|   pFlip: z.number().optional()
-   96| });
-   97| export type StateResult = z.infer<typeof StateResultSchema>;
-   98| 
-   99| export const AppliedSchema = z.looseObject({ key: z.string(), label: z.string(), kind: KindSchema });
-  100| export type Applied = z.infer<typeof AppliedSchema>;
-  101| 
-  102| const SourceSchema = z.looseObject({ title: z.string(), url: z.string().optional(), tier: z.string().optional() });
-  103| 
-  104| const FindingSchema = z.looseObject({
-  105|   claim: z.string(),
-  106|   when: z.string().optional(),
-  107|   match: z.string().optional(),
-  108|   tier: z.string().optional(),
-  109|   sources: z.array(SourceSchema).default([])
-  110| });
-  111| 
-  112| export const EvidenceSchema = z.looseObject({
-  113|   whatIf: z.string(),
-  114|   strength: z.string().optional(),
-  115|   summary: z.string().optional(),
-  116|   agreement: z.string().optional(),
-  117|   agreementDetail: z.string().nullable().optional(),
-  118|   findings: z.array(FindingSchema).default([]),
-  119|   caveats: z.array(z.string()).optional(),
-  120|   researchedAt: z.string().optional()
-  121| });
-  122| export type Evidence = z.infer<typeof EvidenceSchema>;
-  123| 
-  124| export const CohortEffectSchema = z.looseObject({
-  125|   whatIf: z.string(),
-  126|   cohort: z.string(),
-  127|   n: z.number(),
-  128|   bias: z.number().optional(),
-  129|   weight: z.number().optional(),
-  130|   exposed: z.boolean().optional(),
-  131|   dr: z.number().optional(),
-  132|   dt: z.number().optional()
-  133| });
-  134| export type CohortEffect = z.infer<typeof CohortEffectSchema>;
-  135| 
-  136| /** The interviews before any change: the baseline, and the leakage probes when the run had them. */
-  137| export const PreSchema = z.looseObject({
-  138|   voters: z.number(),
-  139|   interviews: z.number(),
-  140|   items: z.array(z.number()).optional(),
-  141|   asOf: z.string().optional(),
-  142|   wordings: z.number().optional(),
-  143|   recall: z.object({ n: z.number(), winnerRate: z.number() }).optional(),
-  144|   swap: z.object({ platformRate: z.number() }).optional()
-  145| });
-  146| export type Pre = z.infer<typeof PreSchema>;
-  147| 
-  148| /** What a what-if's voters were told: settled facts, news on a nominee's line, planks added and dropped. */
-  149| export const ToldSchema = z.looseObject({
-  150|   facts: z.array(z.string()).optional(),
-  151|   news: z.array(z.string()).optional(),
-  152|   added: z.array(z.string()).optional(),
-  153|   dropped: z.array(z.string()).optional(),
-  154|   /** A staged what-if: news from the changed world, added to the voters' newspapers. */
-  155|   items: z.array(z.object({ date: z.string(), text: z.string() })).optional(),
-  156|   /** A staged what-if: how many real newspaper items the change makes false, taken out. */
-  157|   removed: z.number().int().nonnegative().optional()
-  158| });
-  159| export type Told = z.infer<typeof ToldSchema>;
-  160| 
-  161| /** A dated newspaper item in the voters' briefs. */
-  162| export const ReadingSchema = z.looseObject({
-  163|   date: z.string(),
-  164|   newspaper: z.string(),
-  165|   place: z.string(),
-  166|   summary: z.string().optional()
-  167| });
-  168| export type Reading = z.infer<typeof ReadingSchema>;
-  169| 
-  170| const AnswerSideSchema = z.looseObject({
-  171|   choice: z.string(),
-  172|   pVote: z.number().nullable().optional(),
-  173|   quote: z.string(),
-  174|   reason: z.string().optional()
-  175| });
-  176| 
-  177| export const InterviewAnswerSchema = z.looseObject({
-  178|   /** Index into the interview's questions. */
-  179|   question: z.number(),
-  180|   name: z.string(),
-  181|   cohort: z.string(),
-  182|   line: z.string(),
-  183|   misread: z.boolean().optional(),
-  184|   before: AnswerSideSchema,
-  185|   after: AnswerSideSchema
-  186| });
-  187| export type InterviewAnswer = z.infer<typeof InterviewAnswerSchema>;
-  188| 
-  189| /** The interviews behind a rerun: the questions once, each person's answers per applied what-if. */
-  190| export const InterviewSchema = z.object({
-  191|   questions: z.array(z.string()),
-  192|   byWhatIf: z.array(z.object({ whatIf: z.string(), answers: z.array(InterviewAnswerSchema) }))
-  193| });
-  194| export type Interview = z.infer<typeof InterviewSchema>;
-  195| 
-  196| /** One combination of what-ifs as a bundle holds it (serialize.Result). */
-  197| export const BundleResultSchema = z.looseObject({
-  198|   ev: EvSchema,
-  199|   /** null: no one has a majority. */
-  200|   winner: BucketSchema.nullable(),
-  201|   states: z.array(StateResultSchema),
-  202|   slices: z.array(SliceSchema),
-  203|   summary: z.string(),
-  204|   /** null: nothing was applied. */
-  205|   confidence: z.enum(['high', 'medium', 'low']).nullable(),
-  206|   applied: z.array(AppliedSchema),
-  207|   /** The part of the typed text the server couldn't use. */
-  208|   unknown: z.string().nullable(),
-  209|   confidenceTier: z.string().optional(),
-  210|   confidenceLabel: z.string().optional(),
-  211|   confidenceFlags: z.array(z.string()).optional(),
-  212|   confidenceReasons: z.array(z.string()).optional(),
-  213|   range: z.object({ A: PairSchema, B: PairSchema, O: PairSchema }).optional(),
-  214|   drawsWon: z.record(z.string(), z.number()).optional(),
-  215|   popular: EvSchema.optional(),
-  216|   assumptions: z.array(z.string()).optional(),
-  217|   howIGotThis: z.array(z.string()).optional(),
-  218|   sources: z.array(SourceSchema).optional(),
-  219|   evidence: z.array(EvidenceSchema).optional(),
-  220|   cohortEffects: z.array(CohortEffectSchema).optional(),
-  221|   mode: z.string().optional(),
-  222|   runId: z.string().optional()
-  223| });
-  224| export type BundleResult = z.infer<typeof BundleResultSchema>;
-  225| 
-  226| /** A rerun as the page receives it: the bundle's result plus what the server adds from the rest of the bundle. */
-  227| export const RunResultSchema = BundleResultSchema.extend({
-  228|   /** Why `unknown` wasn't modelled (no access key, a budget spent, the worker's reason). */
-  229|   unknownWhy: z.string().optional(),
-  230|   pre: PreSchema.optional(),
-  231|   told: z.record(z.string(), ToldSchema).optional(),
-  232|   reading: z.array(ReadingSchema).optional(),
-  233|   interview: InterviewSchema.optional(),
-  234|   queued: z.object({ text: z.string(), worker: z.boolean() }).optional()
-  235| });
-  236| export type RunResult = z.infer<typeof RunResultSchema>;
-  237| 
-  238| export const StepSchema = z.object({ text: z.string(), state: z.enum(['done', 'doing']) });
-  239| export type Step = z.infer<typeof StepSchema>;
-  240| 
-  241| /** GET /runs/:id. */
-  242| export const RunStatusSchema = z.discriminatedUnion('status', [
-  243|   z.object({
-  244|     status: z.literal('running'),
-  245|     done: z.number(),
-  246|     total: z.number(),
-  247|     /** New words being modelled on the server: its working so far. */
-  248|     steps: z.array(StepSchema).optional()
-  249|   }),
-  250|   z.object({ status: z.literal('done'), done: z.number(), total: z.number(), result: RunResultSchema }),
-  251|   z.object({ status: z.literal('failed'), error: z.string().nullable() })
-  252| ]);
-  253| export type RunStatus = z.infer<typeof RunStatusSchema>;
-  254| 
-  255| /** POST /runs. */
-  256| export const StartedRunSchema = z.object({ id: z.string() });
-  257| export type StartedRun = z.infer<typeof StartedRunSchema>;
-  258| 
-  259| /** POST /runs/:id/cancel. */
-  260| export const CancelledSchema = z.object({ ok: z.boolean().optional() });
-  261| 
-  262| /** One simulated person from a group: what they did in history, and in the run. */
-  263| export const VoterSchema = z.looseObject({
-  264|   name: z.string(),
-  265|   line: z.string(),
-  266|   quote: z.string(),
-  267|   history: ChoiceSchema,
-  268|   now: ChoiceSchema,
-  269|   cohort: z.string().optional()
-  270| });
-  271| export type Voter = z.infer<typeof VoterSchema>;
-  272| 
-  273| // ── The published bundle (serve/bundles/<year>.json) ──
-  274| 
-  275| /** One state × group cell of a run: what hand edits are applied to (serve/simulacra.ts applyEdits). */
-  276| export const TableRowSchema = z.object({
-  277|   state: z.string(),
-  278|   slice: z.string(),
-  279|   adults: z.number(),
-  280|   barred: z.number(),
-  281|   home: z.number(),
-  282|   A: z.number(),
-  283|   B: z.number(),
-  284|   O: z.number()
-  285| });
-  286| export type TableRow = z.infer<typeof TableRowSchema>;
-  287| 
-  288| /** What the server holds for a year; it answers the page from it. */
-  289| export const BundleSchema = z.object({
-  290|   year: z.number().int(),
-  291|   runId: z.string(),
-  292|   election: ElectionSchema,
-  293|   /** Each precomputed combination of what-ifs ('' is history; 'a+b' sorted), by key. */
-  294|   runs: z.record(z.string(), BundleResultSchema),
-  295|   /** The same keys as runs. */
-  296|   tables: z.record(z.string(), z.array(TableRowSchema)),
-  297|   /** Run key → slice key → one person. */
-  298|   voters: z.record(z.string(), z.record(z.string(), VoterSchema)),
-  299|   /** {} when the run had no interviews. */
-  300|   interviews: z.object({
-  301|     questions: z.array(z.string()).optional(),
-  302|     byWhatIf: z.record(z.string(), z.array(InterviewAnswerSchema)).optional()
-  303|   }),
-  304|   /** Electoral votes and history's winner by state. */
-  305|   ev: z.record(z.string(), z.number()),
-  306|   historyWinner: z.record(z.string(), BucketSchema),
-  307|   /** Keywords that read typed text as a what-if. */
-  308|   words: z.array(z.object({ key: z.string(), words: z.array(z.string()) })),
-  309|   // Bundles published before the briefs record (1916, 1924) lack these three.
-  310|   pre: PreSchema.nullable().optional(),
-  311|   told: z.record(z.string(), ToldSchema).optional(),
-  312|   reading: z.array(ReadingSchema).optional()
-  313| });
-  314| export type Bundle = z.infer<typeof BundleSchema>;
-  315| 
-  316| // ── POST /runs ──
-  317| 
-  318| /** What one rerun may ask for. The page's field stops at `text` (WhatIfComposer). */
-  319| export const RUN_LIMITS = {
-  320|   firstYear: 1789,
-  321|   lastYear: 2100,
-  322|   /** Characters of typed words, trimmed. */
-  323|   text: 300,
-  324|   /** What-if keys, and characters in each. */
-  325|   whatIfs: 32,
-  326|   key: 80,
-  327|   /** Groups edited by hand. */
-  328|   edits: 64
-  329| } as const;
-  330| 
-  331| /** Hand edits: per slice, changes in fractions of its adults (summing to 0). */
-  332| export const EditsSchema = z
-  333|   .record(z.string().max(RUN_LIMITS.key), z.partialRecord(z.enum(FIELDS), z.number().min(-1).max(1)))
-  334|   .refine((e) => Object.keys(e).length <= RUN_LIMITS.edits, { message: `At most ${RUN_LIMITS.edits} groups.` });
-  335| export type Edits = z.infer<typeof EditsSchema>;
-  336| 
-  337| export const RunRequestSchema = z.object({
-  338|   year: z.coerce.number().int().min(RUN_LIMITS.firstYear).max(RUN_LIMITS.lastYear),
-  339|   whatIfs: z.array(z.string().max(RUN_LIMITS.key)).max(RUN_LIMITS.whatIfs).default([]),
-  340|   text: z.string().trim().max(RUN_LIMITS.text).default(''),
-  341|   edits: EditsSchema.default({})
-  342| });
-  343| export type RunRequest = z.infer<typeof RunRequestSchema>;
 ```

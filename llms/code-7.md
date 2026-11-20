@@ -1,7 +1,332 @@
-# synthetic-electorate-toy: source and docs, part 7 of 15
+# synthetic-electorate-toy: source and docs, part 7 of 16
 
-Generated from commit `be1682104fbe` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy. Regenerate whenever the code changes.
-Files `simharness/backbone.py` to `simharness/evaluate.py`. Lines are numbered as in the repository.
+Generated from commit `c4694839a0a9` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Files `simharness/agents.py` to `simharness/data.py`. Lines are numbered as in the repository.
+
+## `simharness/agents.py`
+
+```python
+    1| """Agents: invented people drawn from a cohort's documented makeup.
+    2| 
+    3| A cohort is a stratum (region × sex × race/nativity/citizenship). Each agent
+    4| gets:
+    5| - a state, drawn in proportion to the cohort's adults there;
+    6| - urban or rural, from that state's published urban share;
+    7| - an age, from the cohort's published age distribution when there is one;
+    8| - a household economy, imputed [I] and used only for persona diversity (it is
+    9|   never a cohort dimension, and nothing is counted by it);
+   10| - two to four dated items from the period corpus, preferring its own state.
+   11| 
+   12| The person is invented; the circumstances come from the census row and the
+   13| dated items. Names come from small, plain lists and carry no information.
+   14| """
+   15| from __future__ import annotations
+   16| 
+   17| import random
+   18| 
+   19| from .geo import REGION_OF, STATE_NAME
+   20| 
+   21| GROUP_WORDS = {
+   22|     'native_white': 'a white {noun} born in the United States',
+   23|     'foreign_white_naturalized': 'a white {noun} born abroad and naturalized as a United States citizen',
+   24|     'foreign_white_alien': 'a white {noun} born abroad who is not a United States citizen',
+   25|     'black': 'a Black {noun}',
+   26|     'other': 'an American Indian or Asian American {noun}',
+   27| }
+   28| 
+   29| FIRST = {
+   30|     'M': ['John', 'William', 'James', 'George', 'Charles', 'Frank', 'Joseph', 'Henry', 'Robert', 'Thomas',
+   31|           'Edward', 'Harry', 'Walter', 'Arthur', 'Fred', 'Albert', 'Samuel', 'Clarence', 'Louis', 'Ernest'],
+   32|     'F': ['Mary', 'Anna', 'Margaret', 'Helen', 'Elizabeth', 'Ruth', 'Florence', 'Ethel', 'Emma', 'Clara',
+   33|           'Bertha', 'Minnie', 'Alice', 'Grace', 'Edna', 'Ida', 'Mabel', 'Lillian', 'Rose', 'Sarah'],
+   34| }
+   35| # Surnames: common American surnames for native-born and Black agents; for
+   36| # foreign-born agents, surnames of the largest 1920 immigrant origins. p1 drew
+   37| # every agent from one mixed list, which gave a Black North Carolina farmer a
+   38| # Swedish surname; p2 separates them. Names still carry no modelled meaning.
+   39| LAST_COMMON = ['Adams', 'Baker', 'Carter', 'Dawson', 'Ellis', 'Foster', 'Graham', 'Hayes', 'Irwin', 'Jordan',
+   40|                'Lawson', 'Mercer', 'Owens', 'Porter', 'Reed', 'Sutton', 'Tate', 'Walker', 'Young', 'Johnson',
+   41|                'Williams', 'Brown', 'Jones', 'Davis', 'Harris', 'Jackson', 'Thomas', 'Robinson', 'Green', 'Hill']
+   42| LAST_IMMIGRANT = ['Brandt', 'Weber', 'Schmidt', 'Rossi', 'Esposito', 'Russo', 'Kowalski', 'Nowak', 'Novak',
+   43|                   'Lindqvist', 'Johansson', 'Olsen', 'Murphy', 'Kelly', 'Sullivan', 'Cohen', 'Levy', 'Kaplan',
+   44|                   'Horvath', 'Kovac', 'Dubois', 'Papadopoulos', 'Garcia', 'Lopez', 'Svoboda', 'Petrov']
+   45| LAST = LAST_COMMON + LAST_IMMIGRANT  # p1's list, kept for reproducing p1 runs
+   46| 
+   47| ECONOMY = {
+   48|     'farm': 'The household lives by farming.',
+   49|     'wage': 'The household lives on wages from a mill, shop, mine or railroad.',
+   50|     'trade': 'The household lives by a trade, a store or office work.',
+   51|     'proprietor': 'The household lives by a business or a profession.',
+   52| }
+   53| 
+   54| 
+   55| # Other eras' wording (1920's ECONOMY is unchanged so its briefs stay byte-identical).
+   56| ECONOMY_EARLY = {**ECONOMY, 'wage': 'The household lives on wages from a mill, workshop, the docks or hired farm work.'}
+   57| ECONOMY_MODERN = {
+   58|     'farm': 'The household lives by farming.',
+   59|     'wage': 'The household lives on wages from a factory, warehouse, store or hospital.',
+   60|     'trade': 'The household lives by a trade, a small business or office work.',
+   61|     'proprietor': 'The household lives by a business or a profession.',
+   62| }
+   63| 
+   64| 
+   65| def economy_for(year: int = 1920) -> dict:
+   66|     return ECONOMY_EARLY if year < 1868 else ECONOMY_MODERN if year >= 1972 else ECONOMY
+   67| 
+   68| 
+   69| def economy_weights(urban: bool, year: int = 1920) -> dict:
+   70|     # [I] imputed for persona diversity only. Replace with OCC1950 × FARM from
+   71|     # the IPUMS 1920 full count (extracts/ipums-1920-fullcount.json).
+   72|     if year >= 1972:  # [I] farm households are a small share of rural America by the 1970s
+   73|         return {'farm': 0.01, 'wage': 0.5, 'trade': 0.34, 'proprietor': 0.15} if urban else \
+   74|                {'farm': 0.15, 'wage': 0.45, 'trade': 0.3, 'proprietor': 0.1}
+   75|     if year < 1868:
+   76|         return {'farm': 0.1, 'wage': 0.5, 'trade': 0.25, 'proprietor': 0.15} if urban else \
+   77|                {'farm': 0.85, 'wage': 0.08, 'trade': 0.05, 'proprietor': 0.02}
+   78|     return {'farm': 0.05, 'wage': 0.5, 'trade': 0.3, 'proprietor': 0.15} if urban else \
+   79|            {'farm': 0.7, 'wage': 0.15, 'trade': 0.1, 'proprietor': 0.05}
+   80| 
+   81| 
+   82| def pick(rng: random.Random, weights: dict):
+   83|     keys = list(weights)
+   84|     return rng.choices(keys, weights=[weights[k] for k in keys])[0]
+   85| 
+   86| 
+   87| def sample_agents(cohort: dict, n: int, corpus: list[dict], seed: int, urban_share: dict,
+   88|                   age_bands: dict | None = None, year: int = 1920, min_age: int = 21) -> list[dict]:
+   89|     """cohort: {key, region, sex, group, adults_by_state: {state: n}, adults}."""
+   90|     rng = random.Random(f'{seed}:{cohort["key"]}')
+   91|     out = []
+   92|     for i in range(n):
+   93|         state = pick(rng, cohort['adults_by_state'])
+   94|         urban = rng.random() < urban_share.get(state, 0.5)
+   95|         if age_bands:
+   96|             band = pick(rng, age_bands)
+   97|             lo, hi = band
+   98|             age = rng.randint(lo, hi)
+   99|         else:
+  100|             age = rng.choice(range(min_age, 76 if year < 1972 else 81))  # [I] uniform when no age table
+  101|         econ = pick(rng, economy_weights(urban, year))
+  102|         sex = cohort['sex']
+  103|         surnames = LAST_IMMIGRANT if cohort['group'].startswith('foreign') else LAST_COMMON
+  104|         name = f'{rng.choice(FIRST[sex])} {rng.choice(surnames)}'
+  105|         items = choose_items(rng, corpus, state, cohort)
+  106|         out.append({
+  107|             'id': f'{cohort["key"]}-{i}',
+  108|             'cohort': cohort['key'],
+  109|             'state': state,
+  110|             'region': REGION_OF.get(state, 'west'),
+  111|             'sex': sex,
+  112|             'group': cohort['group'],
+  113|             'age': age,
+  114|             'urban': urban,
+  115|             'economy': econ,
+  116|             'name': name,
+  117|             'items': items,
+  118|             'weight': cohort['adults'] / n,
+  119|         })
+  120|     return out
+  121| 
+  122| 
+  123| TOPIC_PRIORITY = {
+  124|     # Which dated topics a cohort's people are likeliest to have met, by group.
+  125|     'F': ['T1', 'T7', 'T8', 'T3', 'T2', 'T4'],
+  126|     'black': ['T5', 'T3', 'T2'],
+  127|     'foreign_white_naturalized': ['T6', 'T3', 'T2'],
+  128|     'foreign_white_alien': ['T6', 'T3'],
+  129|     'default': ['T3', 'T2', 'T4', 'T6'],
+  130| }
+  131| 
+  132| 
+  133| TOPIC_CODES = {t for ts in TOPIC_PRIORITY.values() for t in ts}
+  134| 
+  135| 
+  136| def choose_items(rng: random.Random, corpus: list[dict], state: str, cohort: dict, k: int = 3) -> list[dict]:
+  137|     order = TOPIC_PRIORITY.get(cohort['group']) or (TOPIC_PRIORITY['F'] if cohort['sex'] == 'F' else TOPIC_PRIORITY['default'])
+  138|     if cohort['sex'] == 'F' and cohort['group'] == 'black':
+  139|         order = ['T5', 'T1', 'T3']
+  140|     region = REGION_OF.get(state, 'west')
+  141|     chosen, used = [], set()
+  142|     if corpus and not any(c['topic'] in TOPIC_CODES for c in corpus):
+  143|         # Another year's corpus with its own topics: nearest items first, any topic.
+  144|         own = [c for c in corpus if c.get('state') == state]
+  145|         near = [c for c in corpus if REGION_OF.get(c.get('state')) == region and c not in own]
+  146|         rest = [c for c in corpus if c not in own and c not in near]
+  147|         for src in (own, near, rest):
+  148|             src = src[:]
+  149|             rng.shuffle(src)
+  150|             chosen += src[:k - len(chosen)]
+  151|         return chosen
+  152|     for topic in order:
+  153|         if len(chosen) >= k:
+  154|             break
+  155|         pool = [c for c in corpus if c['topic'] == topic and c['id'] not in used]
+  156|         if topic == 'T8':  # women already voting in the West: only relevant where it is local
+  157|             pool = [c for c in pool if REGION_OF.get(c.get('state')) == region]
+  158|         own = [c for c in pool if c.get('state') == state]
+  159|         near = [c for c in pool if REGION_OF.get(c.get('state')) == region]
+  160|         src = own or near or pool
+  161|         if src:
+  162|             it = rng.choice(src)
+  163|             chosen.append(it)
+  164|             used.add(it['id'])
+  165|     return chosen
+  166| 
+  167| 
+  168| STATUS_WORDS = {'enslaved': 'an enslaved Black {noun}', 'free': 'a free Black {noun}'}
+  169| 
+  170| 
+  171| def persona_lines(agent: dict, eligibility_line: str, year: int = 1920) -> list[str]:
+  172|     noun = 'man' if agent['sex'] == 'M' else 'woman'
+  173|     if 1868 <= year < 1972:
+  174|         who = GROUP_WORDS[agent['group']].format(noun=noun)
+  175|     else:
+  176|         from .agentlayer import groups_for
+  177|         words = groups_for(year)['words']
+  178|         tmpl = STATUS_WORDS.get(agent.get('status'), words[agent['group']]) if agent['group'] == 'black' else words[agent['group']]
+  179|         who = tmpl.format(noun=noun, origin=agent.get('origin', 'Hispanic'))
+  180|         if who.startswith('a A'):
+  181|             who = 'an ' + who[2:]
+  182|     place = f'{"a city or town" if agent["urban"] else "the countryside"} in {STATE_NAME.get(agent["state"], agent["state"])}'
+  183|     return [
+  184|         f'{agent["name"]}, {agent["age"]}, {who}, living in {place}.',
+  185|         economy_for(year)[agent['economy']],
+  186|         eligibility_line,
+  187|     ]
+```
+
+## `simharness/aggregate.py`
+
+```python
+    1| """From cell draws to states, electoral votes, ranges and the draw count.
+    2| 
+    3| A World is a set of draw-major arrays over cells (state × sex × group):
+    4|     adults [D, C]   adults 21+
+    5|     can    [D, C]   the fraction who can vote (legally and in practice)
+    6|     t      [D, C]   turnout among those who can
+    7|     share  [D, C, 3] R, D, O shares among voters
+    8| """
+    9| from __future__ import annotations
+   10| 
+   11| from dataclasses import dataclass, replace
+   12| 
+   13| import numpy as np
+   14| 
+   15| PARTIES = ['R', 'D', 'O']
+   16| 
+   17| 
+   18| @dataclass
+   19| class World:
+   20|     adults: np.ndarray
+   21|     can: np.ndarray
+   22|     t: np.ndarray
+   23|     share: np.ndarray
+   24|     # Split of the barred fraction by reason, for slices: {reason: [D, C]}
+   25|     barred_by: dict
+   26| 
+   27|     def copy(self) -> 'World':
+   28|         return replace(self, adults=self.adults.copy(), can=self.can.copy(), t=self.t.copy(),
+   29|                        share=self.share.copy(), barred_by={k: v.copy() for k, v in self.barred_by.items()})
+   30| 
+   31|     def votes(self) -> np.ndarray:
+   32|         """[D, C, 3] votes by cell."""
+   33|         return (self.adults * self.can * self.t)[..., None] * self.share
+   34| 
+   35| 
+   36| def by_state(world: World, state_index: np.ndarray, n_states: int) -> np.ndarray:
+   37|     """[D, S, 3] votes by state."""
+   38|     v = world.votes()
+   39|     out = np.zeros((v.shape[0], n_states, 3))
+   40|     for p in range(3):
+   41|         np.add.at(out[:, :, p], (slice(None), state_index), v[:, :, p])
+   42|     return out
+   43| 
+   44| 
+   45| def outcome(state_votes: np.ndarray, ev: np.ndarray, fixed: np.ndarray | None = None,
+   46|             split: np.ndarray | None = None, o_single: np.ndarray | None = None) -> dict:
+   47|     """state_votes [D, S, 3]; ev [S] (or [D, S] for reapportionment).
+   48|     A state with no votes in a draw (its legislature chose the electors) casts no
+   49|     electoral votes, unless fixed [S, 3] gives its electors by party (NaN rows: none):
+   50|     then they count as given, and its winner is the party with the most.
+   51|     split [S, 3] (NaN rows: none): a state whose electors historically divided (district
+   52|     systems, split tickets, ME/NE) divides them as it did while its plurality winner is
+   53|     the historical one; a state that flips goes winner-take-all. A fourth column in
+   54|     split, when present, is the historical popular winner (MD 1908 went R by 605 votes
+   55|     while 6 of its 8 electors were D).
+   56|     o_single [S]: the largest single candidate's share of "other" (O lumps several:
+   57|     Bell and Breckinridge in 1860); only that candidate can carry a state."""
+   58|     if o_single is not None:
+   59|         ranked = state_votes * np.concatenate([np.ones((len(o_single), 2)), np.asarray(o_single, dtype=float)[:, None]], axis=1)[None]
+   60|         winner = ranked.argmax(axis=2)
+   61|     else:
+   62|         winner = state_votes.argmax(axis=2)                       # [D, S]
+   63|     total = state_votes.sum(axis=2)
+   64|     srt = np.sort(state_votes, axis=2)
+   65|     margin = (srt[:, :, -1] - srt[:, :, -2]) / np.maximum(total, 1) * 100
+   66|     ev = np.broadcast_to(ev, winner.shape)
+   67|     none = total <= 0
+   68|     if none.any():
+   69|         ev = np.where(none, 0, ev)
+   70|     ev_by = np.stack([(ev * (winner == p)).sum(axis=1) for p in range(3)], axis=1)  # [D, 3]
+   71|     if split is not None:
+   72|         sp = np.asarray(split, dtype=float)
+   73|         has = ~np.isnan(sp).all(axis=1)
+   74|         if has.any():
+   75|             sp0 = np.nan_to_num(sp)
+   76|             hist = sp0[:, :3].argmax(axis=1)                  # [S] the party with most of the split electors
+   77|             if sp.shape[1] > 3:
+   78|                 hist = np.where(np.isnan(sp[:, 3]), hist, np.nan_to_num(sp[:, 3])).astype(int)
+   79|                 sp0 = sp0[:, :3]
+   80|             keep = has[None, :] & (winner == hist[None, :]) & ~none   # [D, S]
+   81|             # Replace those states' winner-take-all electors with the historical division.
+   82|             wta = np.stack([(ev * keep * (winner == p)) for p in range(3)], axis=2).sum(axis=1)
+   83|             ev_by = ev_by - wta.astype(ev_by.dtype) + (keep[:, :, None] * sp0[None, :, :]).sum(axis=1).astype(ev_by.dtype)
+   84|     if fixed is not None and none.any():
+   85|         fx = np.nan_to_num(np.asarray(fixed, dtype=float))
+   86|         has = ~np.isnan(np.asarray(fixed, dtype=float)).all(axis=1)
+   87|         use = none & has[None, :]                             # [D, S]
+   88|         ev_by = ev_by + (use[:, :, None] * fx[None, :, :]).sum(axis=1).astype(ev_by.dtype)
+   89|         winner = np.where(use, fx.argmax(axis=1)[None, :], winner)
+   90|         ev = np.where(use, fx.sum(axis=1)[None, :], ev)
+   91|     need = ev.sum(axis=1)[:, None] / 2
+   92|     nat_winner = np.where((ev_by > need).any(axis=1), ev_by.argmax(axis=1), -1)
+   93|     return {'winner': winner, 'margin': margin, 'ev': ev_by, 'national_winner': nat_winner,
+   94|             'popular': state_votes.sum(axis=1), 'total': total}
+   95| 
+   96| 
+   97| def summarize(out: dict, base_winner: np.ndarray, level: float = 0.8) -> dict:
+   98|     """Point = median draw; ranges = central `level` interval; draw counts."""
+   99|     lo, hi = (1 - level) / 2, 1 - (1 - level) / 2
+  100|     ev = out['ev']
+  101|     D = ev.shape[0]
+  102|     # The point run: the draw whose EV split is closest to the median split.
+  103|     med = np.median(ev, axis=0)
+  104|     point = int(np.argmin(np.abs(ev - med).sum(axis=1)))
+  105|     flipped = out['winner'] != base_winner[None, :]
+  106|     return {
+  107|         'draws': D,
+  108|         'point': point,
+  109|         'ev_point': ev[point].tolist(),
+  110|         'ev_range': {p: [float(np.quantile(ev[:, i], lo)), float(np.quantile(ev[:, i], hi))] for i, p in enumerate(PARTIES)},
+  111|         'draws_won': {p: int((out['national_winner'] == i).sum()) for i, p in enumerate(PARTIES)},
+  112|         'draws_no_majority': int((out['national_winner'] == -1).sum()),
+  113|         'state_winner_point': out['winner'][point].tolist(),
+  114|         'state_margin_point': out['margin'][point].tolist(),
+  115|         # additive: states with no popular vote in the point draw (legislature-chosen electors)
+  116|         'state_no_vote_point': (out['total'][point] <= 0).tolist() if 'total' in out else None,
+  117|         'state_margin_range': np.stack([np.quantile(out['margin'], lo, axis=0), np.quantile(out['margin'], hi, axis=0)], axis=1).tolist(),
+  118|         'state_p_flip': flipped.mean(axis=0).tolist(),
+  119|         'popular_point': out['popular'][point].tolist(),
+  120|         'popular_range': np.stack([np.quantile(out['popular'], lo, axis=0), np.quantile(out['popular'], hi, axis=0)], axis=1).tolist(),
+  121|         # Signed margin (R minus D, points) for flips and near misses
+  122|         'rd_margin': None,
+  123|     }
+  124| 
+  125| 
+  126| def rd_margin(state_votes: np.ndarray) -> np.ndarray:
+  127|     total = np.maximum(state_votes.sum(axis=2), 1)
+  128|     return (state_votes[:, :, 0] - state_votes[:, :, 1]) / total * 100
+```
 
 ## `simharness/backbone.py`
 
@@ -1755,159 +2080,4 @@ Files `simharness/backbone.py` to `simharness/evaluate.py`. Lines are numbered a
   600|         'manifest': manifest(files),
   601|     }
   602|     return inp, extras
-```
-
-## `simharness/evaluate.py`
-
-```python
-    1| """Validation of the 1920 prototype (EVAL.md). Benchmarks are read only here.
-    2| 
-    3| Every check returns {id, name, value, threshold, pass, note}. `pass` is True,
-    4| False, or None ("not run", with the reason in `note`).
-    5| """
-    6| from __future__ import annotations
-    7| 
-    8| import numpy as np
-    9| 
-   10| from .geo import SOUTH
-   11| from .stats import bayes_ols, brier, expit, logit, rmse, spearman
-   12| 
-   13| 
-   14| def check(id_, name, value, threshold, ok, note=''):
-   15|     return {'id': id_, 'name': name, 'value': value, 'threshold': threshold, 'pass': ok, 'note': note}
-   16| 
-   17| 
-   18| def r1_reproduction(fit, inp, state_votes) -> dict:
-   19|     """state_votes [D, S, 3] from the unchanged world."""
-   20|     states = fit.diagnostics['states']
-   21|     cert = np.array(inp.returns.reindex(states)[['R20', 'D20', 'O20']].fillna(0), dtype=float)
-   22|     cert[[st in (getattr(inp, 'no_popular', None) or ()) for st in states]] = 0.0
-   23|     err = np.abs(state_votes - cert[None, :, :])
-   24|     worst = float(err.max())
-   25|     ev = inp.ev.reindex(states).fillna(0).to_numpy()
-   26|     winners = state_votes.argmax(axis=2)
-   27|     ev_r = (ev[None, :] * (winners == 0)).sum(axis=1)
-   28|     ev_d = (ev[None, :] * (winners == 1)).sum(axis=1)
-   29|     ok = worst <= 1.0 and bool(np.all(ev_r == 404)) and bool(np.all(ev_d == 127))
-   30|     return check('R1', 'Unchanged rerun reproduces every state exactly', round(worst, 4),
-   31|                  '≤ 1 vote per state and party in every draw; EV 404–127 in every draw', ok,
-   32|                  f'EV R range {int(ev_r.min())}–{int(ev_r.max())}, D range {int(ev_d.min())}–{int(ev_d.max())}; {state_votes.shape[0]} draws')
-   33| 
-   34| 
-   35| def holdout(fit, inp, holdout_states: list, draws: int, seed: int) -> dict:
-   36|     """B1–B5: predict held-out states from training states only."""
-   37|     rng = np.random.default_rng(seed + 7)
-   38|     dg = fit.diagnostics
-   39|     states = dg['states']
-   40|     idx = {s: i for i, s in enumerate(states)}
-   41|     H = [idx[s] for s in holdout_states]
-   42|     Tr = [i for i in range(len(states)) if states[i] not in holdout_states]
-   43|     ret = inp.returns.loc[states]
-   44|     old = np.array([s in inp.women16 for s in states])
-   45|     closed = np.array([s in inp.closed_1920 for s in states])
-   46|     south = np.array([s in SOUTH for s in states])
-   47|     E16, E20 = dg['E16'], dg['E20']
-   48|     T16, T20 = dg['T16'], dg['T20']
-   49|     M20, F20, m16 = dg['M20'], dg['F20'], dg['m16']
-   50|     D = E16.shape[0]
-   51| 
-   52|     # κ from training old states only
-   53|     tr_old = [i for i in Tr if old[i]]
-   54|     k = logit(T20[None, tr_old] / E20[:, tr_old]) - logit(T16[None, tr_old] / E16[:, tr_old])
-   55|     kap = k.mean(axis=1)[:, None] + rng.normal(0, 1, (D, len(states))) * k.std(axis=1, ddof=1)[:, None]
-   56|     m20 = expit(logit(m16) + kap)
-   57|     # ρ from training new non-Southern states
-   58|     tr_new = [i for i in Tr if not old[i] and not south[i] and not closed[i]]
-   59|     W = T20[None, tr_new] - m20[:, tr_new] * M20[:, tr_new]
-   60|     rho = np.clip(W / np.maximum(F20[:, tr_new], 1) / m20[:, tr_new], 0.05, 1.5)
-   61|     rho_d = rho[np.arange(D), rng.integers(0, len(tr_new), D)]
-   62|     votes_hat = m20 * M20 + np.where(closed, 0, rho_d[:, None] * m20 * F20)
-   63|     # Old states: 1916 votes already included women's, so project turnout per
-   64|     # eligible adult by κ, as the backbone's T1 does. (Fixed after the first
-   65|     # evaluation used men's-only m16 here; see EVAL.md, deviations.)
-   66|     t_old = expit(logit(T16[None, :] / E16) + kap) * E20
-   67|     votes_hat = np.where(old[None, :], t_old, votes_hat)
-   68|     sidx = np.array([idx[s] for s in fit.cells.state])
-   69|     A = np.zeros((D, len(states)))
-   70|     np.add.at(A, (slice(None), sidx), fit.world.adults)
-   71|     turn_hat = votes_hat / A
-   72|     turn_act = T20[None, :] / A
-   73|     # Persistence: 1916 votes ÷ 1916 adults
-   74|     A16 = np.zeros(len(states))
-   75|     np.add.at(A16, sidx, fit.cells.adults16.to_numpy())
-   76|     turn_persist = T16 / A16
-   77| 
-   78|     # Two-party share: swing + women's tilt, fitted on training states
-   79|     rd16 = logit((ret.R16 / (ret.R16 + ret.D16)).to_numpy())
-   80|     rd20 = logit((ret.R20 / (ret.R20 + ret.D20)).to_numpy())
-   81|     f_hat = np.where(~old & ~closed, 1 - (m20 * M20) / np.maximum(votes_hat, 1), 0.0)
-   82|     pred = np.empty((D, len(H)))
-   83|     for d in range(D):
-   84|         f_tr = np.where(~old & ~closed, dg['votes_F'][d] / T20, 0.0)
-   85|         X = np.column_stack([~south, south, f_tr]).astype(float)[Tr]
-   86|         b, sig, _ = bayes_ols(X, (rd20 - rd16)[Tr], 1, rng)
-   87|         Xh = np.column_stack([~south, south, f_hat[d]]).astype(float)[H]
-   88|         pred[d] = rd16[H] + Xh @ b[0] + rng.normal(0, sig[0], len(H))
-   89|     share_hat = expit(np.median(pred, axis=0)) * 100
-   90|     actual = expit(rd20[H]) * 100
-   91|     # Baselines
-   92|     w = (ret.R20 + ret.D20).to_numpy()
-   93|     persist = expit(rd16[H]) * 100
-   94|     swing = np.average((rd20 - rd16)[Tr], weights=w[Tr])
-   95|     uniform = expit(rd16[H] + swing) * 100
-   96|     us_sd = float(np.std((rd20 - rd16)[Tr] - swing, ddof=1))
-   97|     # Demographic regression (no lag)
-   98|     comp = composition(fit, states)
-   99|     Xd = np.column_stack([np.ones(len(states)), south, comp['black'], comp['foreign'], comp['new_women']])
-  100|     bd, *_ = np.linalg.lstsq(Xd[Tr], rd20[Tr], rcond=None)
-  101|     demo = expit(Xd[H] @ bd) * 100
-  102| 
-  103|     p_win = (pred > 0).mean(axis=0)
-  104|     p_us = 1 - _norm_cdf(-(rd16[H] + swing) / us_sd)
-  105|     won = (rd20[H] > 0).astype(float)
-  106|     ev = inp.ev.loc[holdout_states].to_numpy()
-  107|     ev_pred = float(np.sum(ev * (share_hat > 50)))
-  108|     ev_act = float(np.sum(ev * won))
-  109|     close = [s for s, a in zip(holdout_states, actual) if abs(a - 50) * 2 < 5]
-  110|     ev_tol = float(min(inp.ev.loc[close])) if close else 0.0
-  111| 
-  112|     b1 = rmse(share_hat, actual)
-  113|     b2 = rmse(np.median(turn_hat[:, H], axis=0) * 100, np.median(turn_act[:, H], axis=0) * 100)
-  114|     b2p = rmse(turn_persist[H] * 100, np.median(turn_act[:, H], axis=0) * 100)
-  115|     rows = [{'state': s, 'actual': round(float(a), 2), 'backbone': round(float(p), 2), 'persistence': round(float(q), 2),
-  116|              'uniform_swing': round(float(u), 2), 'demographic': round(float(g), 2), 'p_R_win': round(float(pw), 3),
-  117|              'turnout_actual': round(float(np.median(turn_act[:, i]) * 100), 1),
-  118|              'turnout_backbone': round(float(np.median(turn_hat[:, i]) * 100), 1),
-  119|              'turnout_persistence': round(float(turn_persist[i] * 100), 1)}
-  120|             for s, a, p, q, u, g, pw, i in zip(holdout_states, actual, share_hat, persist, uniform, demo, p_win, H)]
-  121|     checks = [
-  122|         check('B1', 'Holdout two-party RMSE (points)', {'backbone': round(b1, 2), 'uniform_swing': round(rmse(uniform, actual), 2),
-  123|               'persistence': round(rmse(persist, actual), 2), 'demographic': round(rmse(demo, actual), 2)},
-  124|               'backbone ≤ uniform swing and ≤ persistence', b1 <= rmse(uniform, actual) and b1 <= rmse(persist, actual)),
-  125|         check('B2', 'Holdout turnout RMSE (points of adults 21+)', {'backbone': round(b2, 2), 'persistence': round(b2p, 2)},
-  126|               'backbone ≤ persistence', b2 <= b2p),
-  127|         check('B3', 'Holdout Spearman ρ, two-party share', round(spearman(share_hat, actual), 3), '≥ 0.8',
-  128|               spearman(share_hat, actual) >= 0.8),
-  129|         check('B4', 'Holdout Brier score, state winner', {'backbone': round(brier(p_win, won), 4), 'uniform_swing': round(brier(p_us, won), 4)},
-  130|               'backbone ≤ uniform swing', brier(p_win, won) <= brier(p_us, won)),
-  131|         check('B5', 'Holdout electoral-vote error (Harding)', abs(ev_pred - ev_act), f'≤ {ev_tol:g}',
-  132|               abs(ev_pred - ev_act) <= ev_tol, f'predicted {ev_pred:g}, actual {ev_act:g}; states decided by < 5 points: {close or "none"}'),
-  133|     ]
-  134|     return {'checks': checks, 'rows': rows}
-  135| 
-  136| 
-  137| def _norm_cdf(x):
-  138|     from scipy.stats import norm
-  139|     return norm.cdf(x)
-  140| 
-  141| 
-  142| def composition(fit, states) -> dict:
-  143|     c = fit.cells
-  144|     a = c.groupby('state').adults20.sum()
-  145|     blk = c[c.group == 'black'].groupby('state').adults20.sum().reindex(states, fill_value=0) / a.reindex(states)
-  146|     fb = c[c.group.str.startswith('foreign')].groupby('state').adults20.sum().reindex(states, fill_value=0) / a.reindex(states)
-  147|     nw = c[(c.sex == 'F') & (c.group != 'foreign_white_alien')].groupby('state').adults20.sum().reindex(states, fill_value=0) / a.reindex(states)
-  148|     old = fit.diagnostics['old_states']
-  149|     nw = nw.where(~nw.index.isin(old), 0.0)
-  150|     return {'black': blk.to_numpy(), 'foreign': fb.to_numpy(), 'new_women': nw.to_numpy()}
 ```

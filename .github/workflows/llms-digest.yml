@@ -1,0 +1,40 @@
+name: llms digest
+
+# Keeps llms.txt and llms/ (a plain-text copy of this repository for tools that
+# read text at a URL) matching the code. On every push to main that changes
+# anything besides the digest, it rebuilds them and commits the result. Pushes
+# made with GITHUB_TOKEN don't start workflows, so the commit doesn't loop.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['llms.txt', 'llms/**']
+  workflow_dispatch:
+
+concurrency:
+  group: llms-digest
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # the history page needs every commit
+      - name: Rebuild
+        run: python3 scripts/llms_digest.py
+      - name: Commit if it changed
+        run: |
+          if [ -z "$(git status --porcelain -- llms.txt llms)" ]; then
+            echo "Digest already matches the code."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898732+github-actions[bot]@users.noreply.github.com"
+          git add llms.txt llms
+          git commit -m "Regenerate llms digest for ${GITHUB_SHA::12}"
+          git pull --rebase --quiet origin main
+          git push origin HEAD:main

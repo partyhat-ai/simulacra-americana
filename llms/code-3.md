@@ -1,7 +1,60 @@
-# synthetic-electorate-toy: source and docs, part 3 of 15
+# synthetic-electorate-toy: source and docs, part 3 of 16
 
-Generated from commit `be1682104fbe` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy. Regenerate whenever the code changes.
-Files `infra/bootstrap.sh` to `scripts/harness/build_franchise.py`. Lines are numbered as in the repository.
+Generated from commit `c4694839a0a9` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Files `infra/backup.tf` to `scripts/harness/build_franchise.py`. Lines are numbered as in the repository.
+
+## `infra/backup.tf`
+
+```hcl
+    1| # Daily EFS backups, 35 days. Production state diverges from git the moment
+    2| # the worker models anything, and 46 of the 60 bundles can't be regenerated.
+    3| 
+    4| resource "aws_backup_vault" "state" {
+    5|   name = "${local.name}-state"
+    6| }
+    7| 
+    8| resource "aws_backup_plan" "state" {
+    9|   name = "${local.name}-state-daily"
+   10|   rule {
+   11|     rule_name         = "daily"
+   12|     target_vault_name = aws_backup_vault.state.name
+   13|     schedule          = "cron(0 7 * * ? *)"
+   14|     lifecycle { delete_after = 35 }
+   15|   }
+   16| }
+   17| 
+   18| data "aws_iam_policy_document" "backup_assume" {
+   19|   statement {
+   20|     actions = ["sts:AssumeRole"]
+   21|     principals {
+   22|       type        = "Service"
+   23|       identifiers = ["backup.amazonaws.com"]
+   24|     }
+   25|   }
+   26| }
+   27| 
+   28| resource "aws_iam_role" "backup" {
+   29|   name               = "${local.name}-backup"
+   30|   assume_role_policy = data.aws_iam_policy_document.backup_assume.json
+   31| }
+   32| 
+   33| resource "aws_iam_role_policy_attachment" "backup" {
+   34|   role       = aws_iam_role.backup.name
+   35|   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup"
+   36| }
+   37| 
+   38| resource "aws_iam_role_policy_attachment" "restore" {
+   39|   role       = aws_iam_role.backup.name
+   40|   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForRestores"
+   41| }
+   42| 
+   43| resource "aws_backup_selection" "state" {
+   44|   name         = "${local.name}-efs"
+   45|   plan_id      = aws_backup_plan.state.id
+   46|   iam_role_arn = aws_iam_role.backup.arn
+   47|   resources    = [aws_efs_file_system.state.arn]
+   48| }
+```
 
 ## `infra/bootstrap.sh`
 
@@ -981,8 +1034,8 @@ Files `infra/bootstrap.sh` to `scripts/harness/build_franchise.py`. Lines are nu
    34|         { "name": "SIMULACRA_PYTHON", "value": "/opt/venv/bin/python" },
    35|         { "name": "SIMULACRA_BUNDLES", "value": "/app/serve/bundles" },
    36|         { "name": "SIMHARNESS_CACHE", "value": "/state/cache" },
-   37|         { "name": "SIMULACRA_KEY_DAILY_USD", "value": "100" },
-   38|         { "name": "SIMULACRA_TOTAL_USD", "value": "150" },
+   37|         { "name": "SIMULACRA_DAILY_USD", "value": "20" },
+   38|         { "name": "SIMULACRA_MONTHLY_USD", "value": "200" },
    39|         { "name": "SIMULACRA_RETAIN_DAYS", "value": "7" },
    40|         { "name": "TRUST_PROXY_HOPS", "value": "2" }
    41|       ],

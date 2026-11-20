@@ -1,8 +1,8 @@
 # synthetic-electorate-toy: file map
 
-Generated from commit `be1682104fbe` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy. Regenerate whenever the code changes.
+Generated from commit `c4694839a0a9` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 
-1095 tracked files. 185 are reproduced in full in the `code-N.md` parts; the rest are listed with the reason they are not.
+1097 tracked files. 187 are reproduced in full in the `code-N.md` parts; the rest are listed with the reason they are not.
 
 Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/ (append the path to fetch the raw file).
 
@@ -11,11 +11,12 @@ Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/sy
 | `.dockerignore` | 485 | 34 | Build context hygiene: the API image needs serve/, simharness/, extracts/, | code-1.md |
 | `.env.example` | 243 | 4 | Base URL for the robot model, paint textures and portraits. | code-1.md |
 | `.github/workflows/ci.yml` | 757 | 30 |  | code-1.md |
-| `.github/workflows/deploy-api.yml` | 7,545 | 174 | Builds the API image and rolls the ECS service behind | code-1.md |
+| `.github/workflows/deploy-api.yml` | 7,543 | 174 | Builds the API image and rolls the ECS service behind | code-1.md |
+| `.github/workflows/llms-digest.yml` | 1,287 | 40 | Keeps llms.txt and llms/ (a plain-text copy of this repository for tools that | code-1.md |
 | `.gitignore` | 181 | 16 |  | code-1.md |
 | `AGENTS.md` | 1,723 | 34 | Rules for coding agents | code-1.md |
 | `CONTEXT.md` | 1,382 | 19 | Vocabulary | code-1.md |
-| `DISCLOSURES.md` | 72,257 | 1,308 | Disclosures: inaccuracies and intellectual-honesty flags | code-1.md |
+| `DISCLOSURES.md` | 72,502 | 1,312 | Disclosures: inaccuracies and intellectual-honesty flags | code-1.md |
 | `Dockerfile` | 4,134 | 95 | syntax=docker/dockerfile:1 | code-1.md |
 | `EVAL.md` | 18,600 | 336 | EVAL: the 1920 prototype | code-2.md |
 | `METHOD.md` | 24,001 | 489 | Simulacra Americana: how the harness works | code-2.md |
@@ -23,13 +24,13 @@ Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/sy
 | `VALIDITY.md` | 25,202 | 341 | Validity: goals, contamination, leakage and historical bias | code-2.md |
 | `biome.json` | 775 | 40 |  | code-2.md |
 | `docker/entrypoint.sh` | 652 | 17 | The API container's entrypoint: check the state mount, surface the worker's | code-2.md |
-| `docs/DEPLOY.md` | 16,094 | 309 | Deploying Simulacra Americana | code-2.md |
+| `docs/DEPLOY.md` | 17,170 | 327 | Deploying Simulacra Americana | code-2.md |
 | `docs/harness/README.md` | 12,296 | 190 | Simulacra Americana harness | code-2.md |
 | `infra/.gitignore` | 60 | 5 |  | code-2.md |
 | `infra/.terraform.lock.hcl` | 1,481 | 26 | This file is maintained automatically by "terraform init". | code-2.md |
 | `infra/acm.tf` | 1,386 | 31 | Certificates for api. (ALB) and assets. (CloudFront; must be us-east-1, | code-2.md |
 | `infra/alb.tf` | 1,465 | 53 | Default 60s idle timeout: every route answers fast (runs are polled). | code-2.md |
-| `infra/backup.tf` | 1,424 | 48 | Daily EFS backups, 35 days. Production state diverges from git the moment | code-2.md |
+| `infra/backup.tf` | 1,424 | 48 | Daily EFS backups, 35 days. Production state diverges from git the moment | code-3.md |
 | `infra/bootstrap.sh` | 1,092 | 18 | One-time: the Terraform state bucket. Re-runnable (every step is idempotent). | code-3.md |
 | `infra/cloudfront.tf` | 2,568 | 71 | assets.simulacraamericana.com: CloudFront over the private assets bucket. | code-3.md |
 | `infra/ecs.tf` | 6,546 | 181 | One cluster, one service, ONE task, on purpose: run state is an in-process | code-3.md |
@@ -40,7 +41,7 @@ Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/sy
 | `infra/outputs.tf` | 1,630 | 49 | infra/vercel-dns.sh reads these (terraform output -json); deploy-api.yml's | code-3.md |
 | `infra/s3.tf` | 3,553 | 118 | Two private buckets. | code-3.md |
 | `infra/secrets.tf` | 691 | 13 | The shell only. The value is put by hand, never through Terraform, so it | code-3.md |
-| `infra/taskdef.json.tftpl` | 2,074 | 56 |  | code-3.md |
+| `infra/taskdef.json.tftpl` | 2,071 | 56 |  | code-3.md |
 | `infra/terraform.tfvars.example` | 570 | 12 | Copy to terraform.tfvars (gitignored) and fill in. | code-3.md |
 | `infra/variables.tf` | 2,538 | 65 |  | code-3.md |
 | `infra/vercel-dns.sh` | 1,801 | 49 | Every DNS record the AWS side needs, added in Vercel DNS (the zone lives | code-3.md |
@@ -64,6 +65,7 @@ Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/sy
 | `scripts/harness/nhgis_extract_modern.py` | 2,728 | 52 | Submit, wait for and download the NHGIS state-level extract behind the | code-5.md |
 | `scripts/harness/nhgis_extract_republic.py` | 1,702 | 29 | Submit, wait for and download the NHGIS state-level extract behind the | code-5.md |
 | `scripts/harness/sessions-report.py` | 3,727 | 86 | What people typed into the page, and what the robot couldn't model. | code-5.md |
+| `scripts/llms_digest.py` | 12,022 | 238 | Build llms.txt and llms/: a plain-text copy of this repository for tools that | code-5.md |
 | `scripts/mirror-portraits.py` | 5,354 | 139 | Mirror the candidates' Wikimedia Commons portraits for the assets bucket. | code-5.md |
 | `scripts/model-check.ts` | 1,242 | 24 | Prints the sample model's outcome for every what-if of every story | code-5.md |
 | `scripts/publish-assets.sh` | 2,895 | 52 | Publish the robot assets and mirrored portraits to s3://simulacra-americana-assets | code-5.md |
@@ -73,27 +75,27 @@ Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/sy
 | `serve/bundle.ts` | 2,144 | 71 | What enters the server, parsed once with zod: the bundle contract and the | code-5.md |
 | `serve/bundles/RUN_ID` | 16 | 1 |  | code-5.md |
 | `serve/contract.test.ts` | 4,015 | 78 | Published bundles write State.flipped as 0 / 1: parsed, it is a boolean. | code-5.md |
-| `serve/contract.ts` | 13,637 | 343 | The page's contract with the simulation server, one definition for both | code-5.md |
-| `serve/guard.test.ts` | 4,137 | 99 |  | code-6.md |
-| `serve/guard.ts` | 5,315 | 145 | What stands between a visitor and the API: per-IP rate limits, access keys | code-6.md |
+| `serve/contract.ts` | 13,642 | 343 | The page's contract with the simulation server, one definition for both | code-6.md |
+| `serve/guard.test.ts` | 5,757 | 134 |  | code-6.md |
+| `serve/guard.ts` | 7,742 | 211 | What stands between a visitor and the API: the intake's dollar caps, per-IP | code-6.md |
 | `serve/index.ts` | 305 | 7 | `pnpm serve`: the page and its API on PORT (default 8787). | code-6.md |
-| `serve/server.ts` | 1,753 | 37 | The production entry (the API container's CMD, bundled to dist/server.mjs). | code-6.md |
-| `serve/simulacra.test.ts` | 9,993 | 230 | The real router and app, in process, over real HTTP, reading the real bundles in serve/bundles/. | code-6.md |
-| `serve/simulacra.ts` | 23,033 | 559 | /api/simulacra: serves precomputed harness bundles in the page's contract. | code-6.md |
+| `serve/server.ts` | 1,765 | 37 | The production entry (the API container's CMD, bundled to dist/server.mjs). | code-6.md |
+| `serve/simulacra.test.ts` | 12,885 | 297 | The real router and app, in process, over real HTTP, reading the real bundles in serve/bundles/. | code-6.md |
+| `serve/simulacra.ts` | 23,956 | 573 | /api/simulacra: serves precomputed harness bundles in the page's contract. | code-6.md |
 | `simharness/__init__.py` | 220 | 6 | Simulacra Americana simulation harness. | code-6.md |
 | `simharness/agentlayer.py` | 29,408 | 486 | Builds every model request for a run (control, counterfactuals, label swap, | code-6.md |
-| `simharness/agents.py` | 8,964 | 187 | Agents: invented people drawn from a cohort's documented makeup. | code-6.md |
-| `simharness/aggregate.py` | 6,449 | 128 | From cell draws to states, electoral votes, ranges and the draw count. | code-6.md |
+| `simharness/agents.py` | 8,964 | 187 | Agents: invented people drawn from a cohort's documented makeup. | code-7.md |
+| `simharness/aggregate.py` | 6,449 | 128 | From cell draws to states, electoral votes, ranges and the draw count. | code-7.md |
 | `simharness/backbone.py` | 41,720 | 800 | The statistical backbone: turnout and choice by cell, calibrated exactly. | code-7.md |
 | `simharness/benchmarks.py` | 9,433 | 150 | Held-out benchmarks. Only the validation stages (Run.evaluate, and | code-7.md |
 | `simharness/cohorts.py` | 3,405 | 76 | Agent cohorts: strata of the cell table, merged to a cost cap. | code-7.md |
 | `simharness/config.py` | 5,344 | 101 | Run configuration: everything that determines a run, hashed into its id. | code-7.md |
 | `simharness/data.py` | 28,589 | 602 | Loaders for the harness cache. Benchmarks are not loaded here (see | code-7.md |
-| `simharness/evaluate.py` | 8,202 | 150 | Validation of the 1920 prototype (EVAL.md). Benchmarks are read only here. | code-7.md |
+| `simharness/evaluate.py` | 8,202 | 150 | Validation of the 1920 prototype (EVAL.md). Benchmarks are read only here. | code-8.md |
 | `simharness/evidence.py` | 37,527 | 605 | Historical evidence for a what-if: what reliable sources say about how the | code-8.md |
 | `simharness/geo.py` | 3,224 | 52 | States, regions and 1920 electoral votes (and AK, HI, DC for 1960 on). | code-8.md |
-| `simharness/intake.py` | 20,970 | 415 | Typed what-if intake: a reader's words → a what-if the page can serve. | code-8.md |
-| `simharness/llm.py` | 16,720 | 374 | The voice layer's model calls, behind one interface with three backends. | code-8.md |
+| `simharness/intake.py` | 25,014 | 480 | Typed what-if intake: a reader's words → a what-if the page can serve. | code-8.md |
+| `simharness/llm.py` | 16,770 | 376 | The voice layer's model calls, behind one interface with three backends. | code-8.md |
 | `simharness/paired.py` | 8,367 | 180 | Paired control/counterfactual answers → per-cohort effects on the backbone. | code-8.md |
 | `simharness/pipeline.py` | 45,929 | 767 | The pipeline's stages other than publish (publish.py): backbone, plan, ask, | code-9.md |
 | `simharness/profiles.py` | 7,064 | 122 | Everything about one election that the pipeline needs and the data can't say: | code-9.md |
@@ -200,12 +202,12 @@ Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/sy
 | `tests/test_backbone.py` | 1,423 | 33 | The statistical backbone's building blocks (stats.py). | code-15.md |
 | `tests/test_contract.py` | 5,425 | 109 | The page's contract: what serialize emits and the bundle the server reads. | code-15.md |
 | `tests/test_evaluate.py` | 3,400 | 60 | The evaluate-stage checks (EVAL.md). | code-15.md |
-| `tests/test_intake_spend.py` | 1,148 | 31 | The intake's spend: recorded per access key, never capped (intake.py, Money). | code-15.md |
+| `tests/test_intake_spend.py` | 5,214 | 118 | The intake's spend: daily and monthly caps across every visitor, and how a | code-15.md |
 | `tests/test_isolation.py` | 7,700 | 150 | Held-out benchmark isolation. | code-15.md |
-| `tests/test_whatif.py` | 3,554 | 57 | What-ifs and their evidence: source tiers, grounding, blending and confidence (evidence.py). | code-15.md |
-| `tsconfig.json` | 795 | 32 |  | code-15.md |
-| `vercel.json` | 396 | 11 |  | code-15.md |
-| `vite.config.ts` | 359 | 9 | In development the page calls /api/simulacra on the local server (pnpm serve). | code-15.md |
+| `tests/test_whatif.py` | 3,554 | 57 | What-ifs and their evidence: source tiers, grounding, blending and confidence (evidence.py). | code-16.md |
+| `tsconfig.json` | 795 | 32 |  | code-16.md |
+| `vercel.json` | 396 | 11 |  | code-16.md |
+| `vite.config.ts` | 359 | 9 | In development the page calls /api/simulacra on the local server (pnpm serve). | code-16.md |
 
 ### Data files (not reproduced; one sample per folder in `data-samples.md`)
 

@@ -1,7 +1,162 @@
-# synthetic-electorate-toy: source and docs, part 8 of 15
+# synthetic-electorate-toy: source and docs, part 8 of 16
 
-Generated from commit `be1682104fbe` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy. Regenerate whenever the code changes.
-Files `simharness/evidence.py` to `simharness/paired.py`. Lines are numbered as in the repository.
+Generated from commit `c4694839a0a9` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Files `simharness/evaluate.py` to `simharness/paired.py`. Lines are numbered as in the repository.
+
+## `simharness/evaluate.py`
+
+```python
+    1| """Validation of the 1920 prototype (EVAL.md). Benchmarks are read only here.
+    2| 
+    3| Every check returns {id, name, value, threshold, pass, note}. `pass` is True,
+    4| False, or None ("not run", with the reason in `note`).
+    5| """
+    6| from __future__ import annotations
+    7| 
+    8| import numpy as np
+    9| 
+   10| from .geo import SOUTH
+   11| from .stats import bayes_ols, brier, expit, logit, rmse, spearman
+   12| 
+   13| 
+   14| def check(id_, name, value, threshold, ok, note=''):
+   15|     return {'id': id_, 'name': name, 'value': value, 'threshold': threshold, 'pass': ok, 'note': note}
+   16| 
+   17| 
+   18| def r1_reproduction(fit, inp, state_votes) -> dict:
+   19|     """state_votes [D, S, 3] from the unchanged world."""
+   20|     states = fit.diagnostics['states']
+   21|     cert = np.array(inp.returns.reindex(states)[['R20', 'D20', 'O20']].fillna(0), dtype=float)
+   22|     cert[[st in (getattr(inp, 'no_popular', None) or ()) for st in states]] = 0.0
+   23|     err = np.abs(state_votes - cert[None, :, :])
+   24|     worst = float(err.max())
+   25|     ev = inp.ev.reindex(states).fillna(0).to_numpy()
+   26|     winners = state_votes.argmax(axis=2)
+   27|     ev_r = (ev[None, :] * (winners == 0)).sum(axis=1)
+   28|     ev_d = (ev[None, :] * (winners == 1)).sum(axis=1)
+   29|     ok = worst <= 1.0 and bool(np.all(ev_r == 404)) and bool(np.all(ev_d == 127))
+   30|     return check('R1', 'Unchanged rerun reproduces every state exactly', round(worst, 4),
+   31|                  '≤ 1 vote per state and party in every draw; EV 404–127 in every draw', ok,
+   32|                  f'EV R range {int(ev_r.min())}–{int(ev_r.max())}, D range {int(ev_d.min())}–{int(ev_d.max())}; {state_votes.shape[0]} draws')
+   33| 
+   34| 
+   35| def holdout(fit, inp, holdout_states: list, draws: int, seed: int) -> dict:
+   36|     """B1–B5: predict held-out states from training states only."""
+   37|     rng = np.random.default_rng(seed + 7)
+   38|     dg = fit.diagnostics
+   39|     states = dg['states']
+   40|     idx = {s: i for i, s in enumerate(states)}
+   41|     H = [idx[s] for s in holdout_states]
+   42|     Tr = [i for i in range(len(states)) if states[i] not in holdout_states]
+   43|     ret = inp.returns.loc[states]
+   44|     old = np.array([s in inp.women16 for s in states])
+   45|     closed = np.array([s in inp.closed_1920 for s in states])
+   46|     south = np.array([s in SOUTH for s in states])
+   47|     E16, E20 = dg['E16'], dg['E20']
+   48|     T16, T20 = dg['T16'], dg['T20']
+   49|     M20, F20, m16 = dg['M20'], dg['F20'], dg['m16']
+   50|     D = E16.shape[0]
+   51| 
+   52|     # κ from training old states only
+   53|     tr_old = [i for i in Tr if old[i]]
+   54|     k = logit(T20[None, tr_old] / E20[:, tr_old]) - logit(T16[None, tr_old] / E16[:, tr_old])
+   55|     kap = k.mean(axis=1)[:, None] + rng.normal(0, 1, (D, len(states))) * k.std(axis=1, ddof=1)[:, None]
+   56|     m20 = expit(logit(m16) + kap)
+   57|     # ρ from training new non-Southern states
+   58|     tr_new = [i for i in Tr if not old[i] and not south[i] and not closed[i]]
+   59|     W = T20[None, tr_new] - m20[:, tr_new] * M20[:, tr_new]
+   60|     rho = np.clip(W / np.maximum(F20[:, tr_new], 1) / m20[:, tr_new], 0.05, 1.5)
+   61|     rho_d = rho[np.arange(D), rng.integers(0, len(tr_new), D)]
+   62|     votes_hat = m20 * M20 + np.where(closed, 0, rho_d[:, None] * m20 * F20)
+   63|     # Old states: 1916 votes already included women's, so project turnout per
+   64|     # eligible adult by κ, as the backbone's T1 does. (Fixed after the first
+   65|     # evaluation used men's-only m16 here; see EVAL.md, deviations.)
+   66|     t_old = expit(logit(T16[None, :] / E16) + kap) * E20
+   67|     votes_hat = np.where(old[None, :], t_old, votes_hat)
+   68|     sidx = np.array([idx[s] for s in fit.cells.state])
+   69|     A = np.zeros((D, len(states)))
+   70|     np.add.at(A, (slice(None), sidx), fit.world.adults)
+   71|     turn_hat = votes_hat / A
+   72|     turn_act = T20[None, :] / A
+   73|     # Persistence: 1916 votes ÷ 1916 adults
+   74|     A16 = np.zeros(len(states))
+   75|     np.add.at(A16, sidx, fit.cells.adults16.to_numpy())
+   76|     turn_persist = T16 / A16
+   77| 
+   78|     # Two-party share: swing + women's tilt, fitted on training states
+   79|     rd16 = logit((ret.R16 / (ret.R16 + ret.D16)).to_numpy())
+   80|     rd20 = logit((ret.R20 / (ret.R20 + ret.D20)).to_numpy())
+   81|     f_hat = np.where(~old & ~closed, 1 - (m20 * M20) / np.maximum(votes_hat, 1), 0.0)
+   82|     pred = np.empty((D, len(H)))
+   83|     for d in range(D):
+   84|         f_tr = np.where(~old & ~closed, dg['votes_F'][d] / T20, 0.0)
+   85|         X = np.column_stack([~south, south, f_tr]).astype(float)[Tr]
+   86|         b, sig, _ = bayes_ols(X, (rd20 - rd16)[Tr], 1, rng)
+   87|         Xh = np.column_stack([~south, south, f_hat[d]]).astype(float)[H]
+   88|         pred[d] = rd16[H] + Xh @ b[0] + rng.normal(0, sig[0], len(H))
+   89|     share_hat = expit(np.median(pred, axis=0)) * 100
+   90|     actual = expit(rd20[H]) * 100
+   91|     # Baselines
+   92|     w = (ret.R20 + ret.D20).to_numpy()
+   93|     persist = expit(rd16[H]) * 100
+   94|     swing = np.average((rd20 - rd16)[Tr], weights=w[Tr])
+   95|     uniform = expit(rd16[H] + swing) * 100
+   96|     us_sd = float(np.std((rd20 - rd16)[Tr] - swing, ddof=1))
+   97|     # Demographic regression (no lag)
+   98|     comp = composition(fit, states)
+   99|     Xd = np.column_stack([np.ones(len(states)), south, comp['black'], comp['foreign'], comp['new_women']])
+  100|     bd, *_ = np.linalg.lstsq(Xd[Tr], rd20[Tr], rcond=None)
+  101|     demo = expit(Xd[H] @ bd) * 100
+  102| 
+  103|     p_win = (pred > 0).mean(axis=0)
+  104|     p_us = 1 - _norm_cdf(-(rd16[H] + swing) / us_sd)
+  105|     won = (rd20[H] > 0).astype(float)
+  106|     ev = inp.ev.loc[holdout_states].to_numpy()
+  107|     ev_pred = float(np.sum(ev * (share_hat > 50)))
+  108|     ev_act = float(np.sum(ev * won))
+  109|     close = [s for s, a in zip(holdout_states, actual) if abs(a - 50) * 2 < 5]
+  110|     ev_tol = float(min(inp.ev.loc[close])) if close else 0.0
+  111| 
+  112|     b1 = rmse(share_hat, actual)
+  113|     b2 = rmse(np.median(turn_hat[:, H], axis=0) * 100, np.median(turn_act[:, H], axis=0) * 100)
+  114|     b2p = rmse(turn_persist[H] * 100, np.median(turn_act[:, H], axis=0) * 100)
+  115|     rows = [{'state': s, 'actual': round(float(a), 2), 'backbone': round(float(p), 2), 'persistence': round(float(q), 2),
+  116|              'uniform_swing': round(float(u), 2), 'demographic': round(float(g), 2), 'p_R_win': round(float(pw), 3),
+  117|              'turnout_actual': round(float(np.median(turn_act[:, i]) * 100), 1),
+  118|              'turnout_backbone': round(float(np.median(turn_hat[:, i]) * 100), 1),
+  119|              'turnout_persistence': round(float(turn_persist[i] * 100), 1)}
+  120|             for s, a, p, q, u, g, pw, i in zip(holdout_states, actual, share_hat, persist, uniform, demo, p_win, H)]
+  121|     checks = [
+  122|         check('B1', 'Holdout two-party RMSE (points)', {'backbone': round(b1, 2), 'uniform_swing': round(rmse(uniform, actual), 2),
+  123|               'persistence': round(rmse(persist, actual), 2), 'demographic': round(rmse(demo, actual), 2)},
+  124|               'backbone ≤ uniform swing and ≤ persistence', b1 <= rmse(uniform, actual) and b1 <= rmse(persist, actual)),
+  125|         check('B2', 'Holdout turnout RMSE (points of adults 21+)', {'backbone': round(b2, 2), 'persistence': round(b2p, 2)},
+  126|               'backbone ≤ persistence', b2 <= b2p),
+  127|         check('B3', 'Holdout Spearman ρ, two-party share', round(spearman(share_hat, actual), 3), '≥ 0.8',
+  128|               spearman(share_hat, actual) >= 0.8),
+  129|         check('B4', 'Holdout Brier score, state winner', {'backbone': round(brier(p_win, won), 4), 'uniform_swing': round(brier(p_us, won), 4)},
+  130|               'backbone ≤ uniform swing', brier(p_win, won) <= brier(p_us, won)),
+  131|         check('B5', 'Holdout electoral-vote error (Harding)', abs(ev_pred - ev_act), f'≤ {ev_tol:g}',
+  132|               abs(ev_pred - ev_act) <= ev_tol, f'predicted {ev_pred:g}, actual {ev_act:g}; states decided by < 5 points: {close or "none"}'),
+  133|     ]
+  134|     return {'checks': checks, 'rows': rows}
+  135| 
+  136| 
+  137| def _norm_cdf(x):
+  138|     from scipy.stats import norm
+  139|     return norm.cdf(x)
+  140| 
+  141| 
+  142| def composition(fit, states) -> dict:
+  143|     c = fit.cells
+  144|     a = c.groupby('state').adults20.sum()
+  145|     blk = c[c.group == 'black'].groupby('state').adults20.sum().reindex(states, fill_value=0) / a.reindex(states)
+  146|     fb = c[c.group.str.startswith('foreign')].groupby('state').adults20.sum().reindex(states, fill_value=0) / a.reindex(states)
+  147|     nw = c[(c.sex == 'F') & (c.group != 'foreign_white_alien')].groupby('state').adults20.sum().reindex(states, fill_value=0) / a.reindex(states)
+  148|     old = fit.diagnostics['old_states']
+  149|     nw = nw.where(~nw.index.isin(old), 0.0)
+  150|     return {'black': blk.to_numpy(), 'foreign': fb.to_numpy(), 'new_women': nw.to_numpy()}
+```
 
 ## `simharness/evidence.py`
 
@@ -702,392 +857,457 @@ Files `simharness/evidence.py` to `simharness/paired.py`. Lines are numbered as 
    27| bulk model, with only the answers that fail a check re-asked on a stronger one.
    28| 
    29| Money: every stage is priced before it is sent and recorded after, with the
-   30| name of the access key that queued the text, if any (llm.SPEND_WHO). Nothing
-   31| caps the dollars: every queued text is modelled to the end.
-   32| """
-   33| from __future__ import annotations
-   34| 
-   35| import datetime as dt
-   36| import json
-   37| import os
-   38| import re
-   39| import shutil
-   40| import time
-   41| from pathlib import Path
-   42| 
-   43| from . import evidence, llm, scenario
-   44| from .config import ROOT, RunConfig
-   45| from .whatifs import REGISTRY
-   46| 
-   47| SESSIONS = ROOT / 'sessions'
-   48| QUEUE = SESSIONS / 'queue.jsonl'
-   49| DONE = SESSIONS / 'queue-done.jsonl'
-   50| FAILED = SESSIONS / 'queue-failed.jsonl'
-   51| LOCK = SESSIONS / 'intake.lock'
-   52| SERVE_BUNDLES = ROOT / 'serve/bundles'
-   53| STATUS = SESSIONS / 'intake-status.json'
-   54| 
-   55| 
-   56| class Progress:
-   57|     """What the worker is doing, for the router to show while the page waits
-   58|     (sessions/intake-status.json: {text, steps: [{text, state}], ts})."""
-   59| 
-   60|     def __init__(self, text: str | None):
-   61|         self.text, self.steps = (_norm(text) if text else None), []
-   62| 
-   63|     def step(self, label: str):
-   64|         if not self.text:
-   65|             return
-   66|         for s in self.steps:
-   67|             s['state'] = 'done'
-   68|         self.steps.append({'text': label, 'state': 'doing'})
-   69|         self._write()
-   70| 
-   71|     def finish(self):
-   72|         for s in self.steps:
-   73|             s['state'] = 'done'
-   74|         self._write()
-   75| 
-   76|     def _write(self):
-   77|         if not self.text:
-   78|             return
-   79|         SESSIONS.mkdir(exist_ok=True)
-   80|         tmp = STATUS.with_suffix(f'.{os.getpid()}.tmp')
-   81|         tmp.write_text(json.dumps({'text': self.text, 'steps': self.steps, 'ts': dt.datetime.now().isoformat(timespec='seconds')}))
-   82|         tmp.replace(STATUS)
-   83| 
-   84| 
-   85| class Budget:
-   86|     """What a typed what-if has spent, stage by stage."""
+   30| name of the access key that queued the text, if any (llm.SPEND_WHO). Queued
+   31| text is modelled only while the spend ledger is under both caps, counted across
+   32| every visitor together: DAILY_USD per UTC day (SIMULACRA_DAILY_USD, default 20)
+   33| and MONTHLY_USD per UTC month (SIMULACRA_MONTHLY_USD, default 200). The router
+   34| (serve/guard.ts) checks the same caps before it queues; the worker checks again
+   35| before each text, and a text's Budget stops at the first stage that crosses
+   36| what is left. A stage is priced when it finishes, so a cap can be passed by at
+   37| most the one stage that crosses it.
+   38| 
+   39| Failures: a text that fails is retried once. After MAX_ATTEMPTS failures it is
+   40| settled as given up (queue-done.jsonl, status `gave-up`) and copied to
+   41| queue-dead.jsonl, so one bad text can't be re-billed forever or hold up the
+   42| texts queued behind it.
+   43| """
+   44| from __future__ import annotations
+   45| 
+   46| import datetime as dt
+   47| import json
+   48| import os
+   49| import re
+   50| import shutil
+   51| import time
+   52| from pathlib import Path
+   53| 
+   54| from . import evidence, llm, scenario
+   55| from .config import ROOT, RunConfig
+   56| from .whatifs import REGISTRY
+   57| 
+   58| SESSIONS = ROOT / 'sessions'
+   59| QUEUE = SESSIONS / 'queue.jsonl'
+   60| DONE = SESSIONS / 'queue-done.jsonl'
+   61| FAILED = SESSIONS / 'queue-failed.jsonl'
+   62| DEAD = SESSIONS / 'queue-dead.jsonl'
+   63| LOCK = SESSIONS / 'intake.lock'
+   64| SERVE_BUNDLES = ROOT / 'serve/bundles'
+   65| STATUS = SESSIONS / 'intake-status.json'
+   66| DAILY_USD = float(os.environ.get('SIMULACRA_DAILY_USD') or 20)
+   67| MONTHLY_USD = float(os.environ.get('SIMULACRA_MONTHLY_USD') or 200)
+   68| OVER_CAP = 'The budget for new what-ifs is spent for now. Try again tomorrow.'
+   69| MAX_ATTEMPTS = 2
+   70| GAVE_UP = 'I couldn’t model that, after two tries.'
+   71| 
+   72| 
+   73| class Progress:
+   74|     """What the worker is doing, for the router to show while the page waits
+   75|     (sessions/intake-status.json: {text, steps: [{text, state}], ts})."""
+   76| 
+   77|     def __init__(self, text: str | None):
+   78|         self.text, self.steps = (_norm(text) if text else None), []
+   79| 
+   80|     def step(self, label: str):
+   81|         if not self.text:
+   82|             return
+   83|         for s in self.steps:
+   84|             s['state'] = 'done'
+   85|         self.steps.append({'text': label, 'state': 'doing'})
+   86|         self._write()
    87| 
-   88|     def __init__(self):
-   89|         self.spent, self.lines = 0.0, []
-   90| 
-   91|     def add(self, dollars: float, stage: str, typical: float | None = None, note: str = '', record: bool = True):
-   92|         self.spent += dollars
-   93|         self.lines.append({'stage': stage, 'dollars': round(dollars, 4), 'typical': typical})
-   94|         if record:
-   95|             llm.record_spend(stage, dollars, note=note)
-   96| 
-   97| 
-   98| # Typical output tokens by call (measured: a compile answer ran ~1,300 tokens on Sonnet 5.5).
-   99| TYPICAL_OUT = {'compile': 1600, 'compile-retry': 1600, 'extract': 3000, 'stage': 2500}
-  100| # Thinking at higher effort multiplies output [I].
-  101| EFFORT_OUT = {'low': 1.0, 'medium': 3.0, 'high': 6.0, 'xhigh': 7.0, 'max': 8.0}
-  102| 
-  103| 
-  104| def typical_out(stage: str, effort: str, max_tokens: int) -> int:
-  105|     return int(min(TYPICAL_OUT.get(stage, 600) * EFFORT_OUT.get(effort, 1.0), 0.75 * max_tokens))
-  106| 
+   88|     def finish(self):
+   89|         for s in self.steps:
+   90|             s['state'] = 'done'
+   91|         self._write()
+   92| 
+   93|     def _write(self):
+   94|         if not self.text:
+   95|             return
+   96|         SESSIONS.mkdir(exist_ok=True)
+   97|         tmp = STATUS.with_suffix(f'.{os.getpid()}.tmp')
+   98|         tmp.write_text(json.dumps({'text': self.text, 'steps': self.steps, 'ts': dt.datetime.now().isoformat(timespec='seconds')}))
+   99|         tmp.replace(STATUS)
+  100| 
+  101| 
+  102| class Budget:
+  103|     """What a typed what-if has spent, stage by stage, and the most it may (None: no ceiling)."""
+  104| 
+  105|     def __init__(self, ceiling: float | None = None):
+  106|         self.spent, self.lines, self.ceiling = 0.0, [], ceiling
   107| 
-  108| def _structured(req: dict, max_tokens: int, budget: Budget, stage: str, note: str = '') -> dict:
-  109|     from .config import RUNS
-  110|     cache = llm.AnswerCache(RUNS)
-  111|     hit = cache.get(req)
-  112|     if hit:
-  113|         print(f'{stage}: reused an identical earlier answer', flush=True)
-  114|         return hit['data']
-  115|     effort = req.get('effort') or 'low'
-  116|     est = llm.estimate([req], max_tokens, typical_out=typical_out(stage, effort, max_tokens))
-  117|     print(f'{stage}: ~${est["typical"]} typical, ${est["worst"]} worst ({req["model"]}, {effort} effort)', flush=True)
-  118|     ans = llm.AnthropicBackend(effort=effort, max_tokens=max_tokens)._one(req)
-  119|     cache.put(req, ans | {'backend': 'anthropic'})
-  120|     budget.add(llm.cost(req['model'], ans.get('usage') or {}), stage, est['typical'], note)
-  121|     if not ans.get('ok'):
-  122|         raise SystemExit(f'{stage} failed: {ans.get("error")}')
-  123|     return ans['data']
-  124| 
+  108|     def add(self, dollars: float, stage: str, typical: float | None = None, note: str = '', record: bool = True):
+  109|         self.spent += dollars
+  110|         self.lines.append({'stage': stage, 'dollars': round(dollars, 4), 'typical': typical})
+  111|         if record:
+  112|             llm.record_spend(stage, dollars, note=note)
+  113|         if self.ceiling is not None and self.spent >= self.ceiling:
+  114|             raise SystemExit(OVER_CAP)
+  115| 
+  116| 
+  117| # Typical output tokens by call (measured: a compile answer ran ~1,300 tokens on Sonnet 5.5).
+  118| TYPICAL_OUT = {'compile': 1600, 'compile-retry': 1600, 'extract': 3000, 'stage': 2500}
+  119| # Thinking at higher effort multiplies output [I].
+  120| EFFORT_OUT = {'low': 1.0, 'medium': 3.0, 'high': 6.0, 'xhigh': 7.0, 'max': 8.0}
+  121| 
+  122| 
+  123| def typical_out(stage: str, effort: str, max_tokens: int) -> int:
+  124|     return int(min(TYPICAL_OUT.get(stage, 600) * EFFORT_OUT.get(effort, 1.0), 0.75 * max_tokens))
   125| 
-  126| def _with_effort(req: dict, effort: str, fast: bool = False) -> dict:
-  127|     # 'low' keeps the request byte-identical to before D33, so its cached answers still match.
-  128|     # Fast mode changes only how quickly the answer comes (and its price), so it isn't part of the cache key.
-  129|     out = req | {'effort': effort} if effort and effort != 'low' else dict(req)
-  130|     return out | {'speed': 'fast'} if fast and llm.fast_ok(req['model']) else out
-  131| 
-  132| 
-  133| def compile_text(text: str, cfg: RunConfig, budget: Budget) -> dict:
-  134|     from . import profiles
-  135|     rc, prof = cfg.research, profiles.get(cfg.election)
-  136|     mt = max(3000, rc.pass_max_tokens)
-  137|     raw = _structured(_with_effort(scenario.compile_request(text, REGISTRY, cfg.context_cutoff, rc.compile_model, prof=prof),
-  138|                                    rc.compile_effort, rc.fast), mt, budget, 'compile', text)
-  139|     bad = scenario.naming_violations(raw, cfg.election) if raw.get('modelable') else []
-  140|     if bad:
-  141|         note = ('These sentences name a nominee, a party or the President, which the blinded briefs cannot show. '
-  142|                 'Rewrite them with the descriptions given: ' + json.dumps(bad))
-  143|         raw = _structured(_with_effort(scenario.compile_request(text, REGISTRY, cfg.context_cutoff, rc.compile_model, note, prof),
-  144|                                        rc.compile_effort, rc.fast), mt, budget, 'compile-retry', text)
-  145|     return raw
-  146| 
-  147| 
-  148| def stage(spec: dict, cfg: RunConfig, budget: Budget, ev: dict | None = None) -> dict | None:
-  149|     """D33: stage the what-if's world (world.py) and keep it on the spec. Agent-mode what-ifs only:
-  150|     a backbone-mode change's interviews are a cross-check and move no numbers."""
-  151|     from . import data, profiles, world
-  152|     rc = cfg.research
-  153|     if not rc.world_model or spec.get('mode') != 'agents':
-  154|         return None
-  155|     prof = profiles.get(cfg.election)
-  156|     rel = prof.get('corpus') or ('sources/corpus_1920.jsonl' if cfg.election == 1920 else None)
-  157|     corpus = data.corpus(cfg.context_cutoff, rel, profiles.names_re(cfg.election)) if rel else []
-  158|     req = _with_effort(world.stage_request(spec, prof, cfg.context_cutoff, corpus, rc.world_model, rc.world_effort, ev),
-  159|                        rc.world_effort, rc.fast)
-  160|     raw = _structured(req, max(4000, rc.pass_max_tokens), budget, 'stage', spec['key'])
-  161|     spec['world'] = world.finalize(raw, spec, prof, cfg.context_cutoff, corpus, rc.world_model, rc.world_effort)
-  162|     return spec['world']
-  163| 
-  164| 
-  165| def stage_config(config_path: str | Path, only: str | None = None, refresh: bool = False) -> dict:
-  166|     """Stage every compiled agent-mode what-if in a config that hasn't been (D33), and save its spec."""
-  167|     cfg = RunConfig.load(config_path)
-  168|     keys = [k for k in cfg.what_ifs if (not only or k == only) and REGISTRY.get(k, {}).get('generated')
-  169|             and REGISTRY[k].get('mode') == 'agents' and (refresh or not REGISTRY[k].get('world'))]
-  170|     budget = Budget()
-  171|     out = {}
-  172|     for k in keys:
-  173|         spec = {kk: v for kk, v in REGISTRY[k].items() if kk not in ('apply', 'facts')}
-  174|         w = stage(spec, cfg, budget, scenario.load_evidence(k))
-  175|         if w is None:
-  176|             continue
-  177|         scenario.save_spec(spec)
-  178|         REGISTRY[k] = scenario.bind(spec)
-  179|         out[k] = {'contradicted': len(w['contradicted']), 'items': len(w['items']), 'check': (w['check'] or {}).get('question'),
-  180|                   'focus': [f['why'] for f in w['focus']]}
-  181|     return {'staged': out, 'dollars': round(budget.spent, 4)}
+  126| 
+  127| def _structured(req: dict, max_tokens: int, budget: Budget, stage: str, note: str = '') -> dict:
+  128|     from .config import RUNS
+  129|     cache = llm.AnswerCache(RUNS)
+  130|     hit = cache.get(req)
+  131|     if hit:
+  132|         print(f'{stage}: reused an identical earlier answer', flush=True)
+  133|         return hit['data']
+  134|     effort = req.get('effort') or 'low'
+  135|     est = llm.estimate([req], max_tokens, typical_out=typical_out(stage, effort, max_tokens))
+  136|     print(f'{stage}: ~${est["typical"]} typical, ${est["worst"]} worst ({req["model"]}, {effort} effort)', flush=True)
+  137|     ans = llm.AnthropicBackend(effort=effort, max_tokens=max_tokens)._one(req)
+  138|     cache.put(req, ans | {'backend': 'anthropic'})
+  139|     budget.add(llm.cost(req['model'], ans.get('usage') or {}), stage, est['typical'], note)
+  140|     if not ans.get('ok'):
+  141|         raise SystemExit(f'{stage} failed: {ans.get("error")}')
+  142|     return ans['data']
+  143| 
+  144| 
+  145| def _with_effort(req: dict, effort: str, fast: bool = False) -> dict:
+  146|     # 'low' keeps the request byte-identical to before D33, so its cached answers still match.
+  147|     # Fast mode changes only how quickly the answer comes (and its price), so it isn't part of the cache key.
+  148|     out = req | {'effort': effort} if effort and effort != 'low' else dict(req)
+  149|     return out | {'speed': 'fast'} if fast and llm.fast_ok(req['model']) else out
+  150| 
+  151| 
+  152| def compile_text(text: str, cfg: RunConfig, budget: Budget) -> dict:
+  153|     from . import profiles
+  154|     rc, prof = cfg.research, profiles.get(cfg.election)
+  155|     mt = max(3000, rc.pass_max_tokens)
+  156|     raw = _structured(_with_effort(scenario.compile_request(text, REGISTRY, cfg.context_cutoff, rc.compile_model, prof=prof),
+  157|                                    rc.compile_effort, rc.fast), mt, budget, 'compile', text)
+  158|     bad = scenario.naming_violations(raw, cfg.election) if raw.get('modelable') else []
+  159|     if bad:
+  160|         note = ('These sentences name a nominee, a party or the President, which the blinded briefs cannot show. '
+  161|                 'Rewrite them with the descriptions given: ' + json.dumps(bad))
+  162|         raw = _structured(_with_effort(scenario.compile_request(text, REGISTRY, cfg.context_cutoff, rc.compile_model, note, prof),
+  163|                                        rc.compile_effort, rc.fast), mt, budget, 'compile-retry', text)
+  164|     return raw
+  165| 
+  166| 
+  167| def stage(spec: dict, cfg: RunConfig, budget: Budget, ev: dict | None = None) -> dict | None:
+  168|     """D33: stage the what-if's world (world.py) and keep it on the spec. Agent-mode what-ifs only:
+  169|     a backbone-mode change's interviews are a cross-check and move no numbers."""
+  170|     from . import data, profiles, world
+  171|     rc = cfg.research
+  172|     if not rc.world_model or spec.get('mode') != 'agents':
+  173|         return None
+  174|     prof = profiles.get(cfg.election)
+  175|     rel = prof.get('corpus') or ('sources/corpus_1920.jsonl' if cfg.election == 1920 else None)
+  176|     corpus = data.corpus(cfg.context_cutoff, rel, profiles.names_re(cfg.election)) if rel else []
+  177|     req = _with_effort(world.stage_request(spec, prof, cfg.context_cutoff, corpus, rc.world_model, rc.world_effort, ev),
+  178|                        rc.world_effort, rc.fast)
+  179|     raw = _structured(req, max(4000, rc.pass_max_tokens), budget, 'stage', spec['key'])
+  180|     spec['world'] = world.finalize(raw, spec, prof, cfg.context_cutoff, corpus, rc.world_model, rc.world_effort)
+  181|     return spec['world']
   182| 
   183| 
-  184| def reextract(spec: dict, cfg: RunConfig, budget: Budget, have: dict) -> dict:
-  185|     """Extraction again from the saved notes (no new search)."""
-  186|     notes = {'text': have['notes'], 'sources': have['sources']}
-  187|     rc = cfg.research
-  188|     extracted = _structured(_with_effort(evidence.extract_request(spec, notes, rc.extract_model), rc.extract_effort, rc.fast),
-  189|                             max(8000, rc.pass_max_tokens), budget, 'extract', spec['key'])
-  190|     ev = {**have, **evidence.ground(extracted, notes, spec.get('about')), 'models': {**have.get('models', {}), 'extract': rc.extract_model},
-  191|           'reextracted_at': dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds')}
-  192|     scenario.save_evidence(spec['key'], ev)
-  193|     return ev
-  194| 
-  195| 
-  196| def research(spec: dict, cfg: RunConfig, budget: Budget, refresh: bool = False, again: bool = False) -> dict:
-  197|     """Evidence for one what-if (cached in whatifs/evidence/<key>.json). again: re-extract the saved notes."""
-  198|     import anthropic
-  199|     key = spec['key']
-  200|     have = scenario.load_evidence(key)
-  201|     if have and again and have.get('notes'):
-  202|         return reextract(spec, cfg, budget, have)
-  203|     if have and not refresh:
-  204|         return have
-  205|     rc = cfg.research
-  206|     est = evidence.research_estimate(rc.research_model, rc.max_searches, rc.research_max_tokens)
-  207|     print(f'research {key}: ~${est["typical"]} typical, ${est["worst"]} worst ({rc.research_model}, '
-  208|           f'≤{rc.max_searches} searches)', flush=True)
-  209|     client = anthropic.Anthropic(api_key=llm.api_key())
-  210|     notes = evidence.research(client, spec, {'year': cfg.election, 'day': cfg.election_day}, rc.research_model,
-  211|                               rc.max_searches, rc.research_effort, rc.research_max_tokens)
-  212|     budget.add(notes['dollars'], 'research', None, key)
-  213|     print(f'  {len(notes["queries"])} searches, {len(notes["sources"])} sources '
-  214|           f'({sum(s["tier"] == "A" for s in notes["sources"])} scholarly or official), ${notes["dollars"]}', flush=True)
-  215|     extracted = _structured(_with_effort(evidence.extract_request(spec, notes, rc.extract_model), rc.extract_effort, rc.fast),
-  216|                             max(8000, rc.pass_max_tokens), budget, 'extract', key)
-  217|     ev = evidence.ground(extracted, notes, spec.get('about'))
-  218|     ev.update({'key': key, 'version': evidence.EVIDENCE_VERSION,
-  219|                'researched_at': dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds'),
-  220|                'models': {'research': rc.research_model, 'extract': rc.extract_model}, 'queries': notes['queries'],
-  221|                'sources': notes['sources'], 'notes': notes['text'], 'prompt': notes['prompt'], 'usage': notes['usage'],
-  222|                'dollars': round(sum(x['dollars'] for x in budget.lines if x['stage'] in ('research', 'extract')), 4)})
-  223|     scenario.save_evidence(key, ev)
-  224|     return ev
-  225| 
-  226| 
-  227| def documented_positions(spec: dict, ev: dict, cutoff: str):
-  228|     """A candidate's positions from the record, when the research found any on
-  229|     or before the cutoff (masked like any brief text); else they stay inferred."""
-  230|     keep = []
-  231|     for p in ev.get('actor_positions', []):
-  232|         d = p.get('date', '')
-  233|         try:
-  234|             ok = dt.date.fromisoformat(d[:10]).isoformat() <= cutoff
-  235|         except ValueError:
-  236|             m = re.search(r'\b(1[6-9]\d\d)\b', d)
-  237|             ok = bool(m) and int(m.group(1)) < int(cutoff[:4])
-  238|         if ok:
-  239|             keep.append(scenario.clean_position(p['text'], int(cutoff[:4])))
-  240|     if keep:
-  241|         spec['candidate']['positions'] = keep[:3]
-  242|         spec['candidate']['positions_source'] = 'documented'
-  243| 
+  184| def stage_config(config_path: str | Path, only: str | None = None, refresh: bool = False) -> dict:
+  185|     """Stage every compiled agent-mode what-if in a config that hasn't been (D33), and save its spec."""
+  186|     cfg = RunConfig.load(config_path)
+  187|     keys = [k for k in cfg.what_ifs if (not only or k == only) and REGISTRY.get(k, {}).get('generated')
+  188|             and REGISTRY[k].get('mode') == 'agents' and (refresh or not REGISTRY[k].get('world'))]
+  189|     budget = Budget()
+  190|     out = {}
+  191|     for k in keys:
+  192|         spec = {kk: v for kk, v in REGISTRY[k].items() if kk not in ('apply', 'facts')}
+  193|         w = stage(spec, cfg, budget, scenario.load_evidence(k))
+  194|         if w is None:
+  195|             continue
+  196|         scenario.save_spec(spec)
+  197|         REGISTRY[k] = scenario.bind(spec)
+  198|         out[k] = {'contradicted': len(w['contradicted']), 'items': len(w['items']), 'check': (w['check'] or {}).get('question'),
+  199|                   'focus': [f['why'] for f in w['focus']]}
+  200|     return {'staged': out, 'dollars': round(budget.spent, 4)}
+  201| 
+  202| 
+  203| def reextract(spec: dict, cfg: RunConfig, budget: Budget, have: dict) -> dict:
+  204|     """Extraction again from the saved notes (no new search)."""
+  205|     notes = {'text': have['notes'], 'sources': have['sources']}
+  206|     rc = cfg.research
+  207|     extracted = _structured(_with_effort(evidence.extract_request(spec, notes, rc.extract_model), rc.extract_effort, rc.fast),
+  208|                             max(8000, rc.pass_max_tokens), budget, 'extract', spec['key'])
+  209|     ev = {**have, **evidence.ground(extracted, notes, spec.get('about')), 'models': {**have.get('models', {}), 'extract': rc.extract_model},
+  210|           'reextracted_at': dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds')}
+  211|     scenario.save_evidence(spec['key'], ev)
+  212|     return ev
+  213| 
+  214| 
+  215| def research(spec: dict, cfg: RunConfig, budget: Budget, refresh: bool = False, again: bool = False) -> dict:
+  216|     """Evidence for one what-if (cached in whatifs/evidence/<key>.json). again: re-extract the saved notes."""
+  217|     import anthropic
+  218|     key = spec['key']
+  219|     have = scenario.load_evidence(key)
+  220|     if have and again and have.get('notes'):
+  221|         return reextract(spec, cfg, budget, have)
+  222|     if have and not refresh:
+  223|         return have
+  224|     rc = cfg.research
+  225|     est = evidence.research_estimate(rc.research_model, rc.max_searches, rc.research_max_tokens)
+  226|     print(f'research {key}: ~${est["typical"]} typical, ${est["worst"]} worst ({rc.research_model}, '
+  227|           f'≤{rc.max_searches} searches)', flush=True)
+  228|     client = anthropic.Anthropic(api_key=llm.api_key())
+  229|     notes = evidence.research(client, spec, {'year': cfg.election, 'day': cfg.election_day}, rc.research_model,
+  230|                               rc.max_searches, rc.research_effort, rc.research_max_tokens)
+  231|     budget.add(notes['dollars'], 'research', None, key)
+  232|     print(f'  {len(notes["queries"])} searches, {len(notes["sources"])} sources '
+  233|           f'({sum(s["tier"] == "A" for s in notes["sources"])} scholarly or official), ${notes["dollars"]}', flush=True)
+  234|     extracted = _structured(_with_effort(evidence.extract_request(spec, notes, rc.extract_model), rc.extract_effort, rc.fast),
+  235|                             max(8000, rc.pass_max_tokens), budget, 'extract', key)
+  236|     ev = evidence.ground(extracted, notes, spec.get('about'))
+  237|     ev.update({'key': key, 'version': evidence.EVIDENCE_VERSION,
+  238|                'researched_at': dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds'),
+  239|                'models': {'research': rc.research_model, 'extract': rc.extract_model}, 'queries': notes['queries'],
+  240|                'sources': notes['sources'], 'notes': notes['text'], 'prompt': notes['prompt'], 'usage': notes['usage'],
+  241|                'dollars': round(sum(x['dollars'] for x in budget.lines if x['stage'] in ('research', 'extract')), 4)})
+  242|     scenario.save_evidence(key, ev)
+  243|     return ev
   244| 
-  245| def _add_to_config(config_path: Path, key: str):
-  246|     raw = json.loads(config_path.read_text())
-  247|     if key not in raw['what_ifs']:
-  248|         raw['what_ifs'].append(key)
-  249|         config_path.write_text(json.dumps(raw, indent=2) + '\n')
-  250| 
-  251| 
-  252| def run_pipeline(config_path: Path, budget: Budget, publish_only: bool = False, progress: Progress | None = None) -> dict:
-  253|     from .run import Run
-  254|     progress = progress or Progress(None)
-  255|     run = Run(RunConfig.load(config_path))
-  256|     if not publish_only:
-  257|         if not (run.dir / 'fit.pkl').exists():
-  258|             run.backbone()
-  259|         run.plan()
-  260|         progress.step(f'Interviewing voters in your {run.cfg.election}, with the real one as a control.')
-  261|         asked = run.ask()
-  262|         budget.add(asked['dollars'], 'ask', None, record=False)  # ask records its own spend
-  263|         if run.cfg.research.audit_model or run.cfg.agents.escalate_model:
-  264|             progress.step('Checking that each voter took the change as true.')
-  265|             refined = run.refine()
-  266|             budget.add(refined['dollars'], 'refine', None, record=False)  # audit and ask record their own spend
-  267|         progress.step('Comparing the interviews with the historical record.')
-  268|         run.analyze()
-  269|     progress.step(f'Rerunning the {run.cfg.election} election 100 times.')
-  270|     run.publish()
-  271|     SERVE_BUNDLES.mkdir(parents=True, exist_ok=True)
-  272|     src = run.dir / 'published' / f'{run.cfg.election}.json'
-  273|     shutil.copyfile(src, SERVE_BUNDLES / f'{run.cfg.election}.json')
-  274|     (SERVE_BUNDLES / 'RUN_ID').write_text(run.id + '\n')
-  275|     return {'run': run.id, 'bundle': str(src)}
-  276| 
-  277| 
-  278| def report(year: int, key: str) -> dict:
-  279|     b = json.loads((SERVE_BUNDLES / f'{year}.json').read_text())
-  280|     r = b['runs'].get(key) or {}
-  281|     return {'key': key, 'label': REGISTRY[key]['label'], 'summary': r.get('summary'), 'ev': r.get('ev'),
-  282|             'confidence': r.get('confidenceTier'), 'flags': r.get('confidenceFlags'),
-  283|             'evidence': [{'strength': e['strength'], 'agreement': e['agreement'], 'detail': e.get('agreementDetail')}
-  284|                          for e in r.get('evidence', [])]}
-  285| 
-  286| 
-  287| def whatif(text: str, config_path: str | Path, refresh: bool = False) -> dict:
-  288|     config_path = Path(config_path)
-  289|     cfg = RunConfig.load(config_path)
-  290|     budget = Budget()
-  291|     progress = Progress(text)
-  292|     progress.step('Turning your words into a change I can model.')
-  293|     raw = compile_text(text, cfg, budget)
-  294|     if not raw['modelable']:
-  295|         progress.finish()
-  296|         return {'status': 'not-modelable', 'why': raw['why_not'], 'dollars': round(budget.spent, 4)}
-  297|     if raw['same_as'] in REGISTRY and cfg.election in (REGISTRY[raw['same_as']].get('years') or [REGISTRY[raw['same_as']].get('year', 1920)]):
-  298|         key = raw['same_as']
-  299|         scenario.add_words(key, raw['words'] + [text.lower().strip()[:80]])
-  300|         in_config = key in cfg.what_ifs
-  301|         _add_to_config(config_path, key)
-  302|         progress.step(f'That’s {REGISTRY[key]["label"]}, which I’ve modelled already.')
-  303|         out = run_pipeline(config_path, budget, publish_only=in_config, progress=progress)
-  304|         progress.finish()
-  305|         return {'status': 'keyword', 'key': key, **out, 'dollars': round(budget.spent, 4), 'costs': budget.lines,
-  306|                 'report': report(cfg.election, key)}
-  307|     spec = scenario.finalize(raw, text, REGISTRY, cfg.research.compile_model, cfg.election)
-  308|     if spec.get('reinterpretation'):
-  309|         progress.step(spec['reinterpretation'])
-  310|     progress.step(f'Setting the scene: autumn {cfg.election}…')
-  311|     ev = research(spec, cfg, budget, refresh)
-  312|     n = len(ev.get('findings', []))
-  313|     progress.step(f'Clarifying historical context: {n or "no"} finding{"" if n == 1 else "s"}.')
-  314|     if spec['kind'] == 'candidate' and spec['candidate']['positions_source'] != 'documented':
-  315|         documented_positions(spec, ev, cfg.context_cutoff)
-  316|     if cfg.research.world_model and spec['mode'] == 'agents':
-  317|         progress.step(f'Staging the autumn of {cfg.election} so nothing in it contradicts the change.')
-  318|         w = stage(spec, cfg, budget, ev)
-  319|         if w:
-  320|             gone, new = len(w['contradicted']), len(w['items'])
-  321|             progress.step(f'Took out {gone or "no"} newspaper item{"" if gone == 1 else "s"} the change makes false; '
-  322|                           f'wrote {new} from the changed world{" and a question to check each voter believes it" if w["check"] else ""}.')
-  323|     scenario.save_spec(spec)
-  324|     REGISTRY[spec['key']] = scenario.bind(spec)
-  325|     _add_to_config(config_path, spec['key'])
-  326|     out = run_pipeline(config_path, budget, progress=progress)
-  327|     progress.finish()
-  328|     return {'status': 'modelled', 'key': spec['key'], **out, 'dollars': round(budget.spent, 4), 'costs': budget.lines,
-  329|             'report': report(cfg.election, spec['key'])}
-  330| 
-  331| 
-  332| def research_config(config_path: str | Path, refresh: bool = False, only: str | None = None, again: bool = False) -> dict:
-  333|     """Evidence for every what-if in a config that lacks it (hand-written ones included: there it grades confidence only)."""
-  334|     cfg = RunConfig.load(config_path)
-  335|     keys = [k for k in cfg.what_ifs if not only or k == only]
-  336|     budget = Budget()
-  337|     out = {}
-  338|     for k in keys:
-  339|         ev = research({**REGISTRY[k], 'key': k}, cfg, budget, refresh, again)
-  340|         out[k] = {'strength': evidence.strength(ev)['level'], 'findings': len(ev['findings']), 'summary': ev['summary'][:200]}
-  341|     return {'what_ifs': out, 'dollars': round(budget.spent, 4)}
-  342| 
-  343| 
-  344| # ── The router's queue ──
-  345| 
-  346| def _norm(text: str) -> str:
-  347|     return ' '.join(text.lower().split())
-  348| 
-  349| 
-  350| def _pid_alive(pid: int) -> bool:
-  351|     try:
-  352|         os.kill(pid, 0)
-  353|         return True
-  354|     except OSError:
-  355|         return False
-  356| 
+  245| 
+  246| def documented_positions(spec: dict, ev: dict, cutoff: str):
+  247|     """A candidate's positions from the record, when the research found any on
+  248|     or before the cutoff (masked like any brief text); else they stay inferred."""
+  249|     keep = []
+  250|     for p in ev.get('actor_positions', []):
+  251|         d = p.get('date', '')
+  252|         try:
+  253|             ok = dt.date.fromisoformat(d[:10]).isoformat() <= cutoff
+  254|         except ValueError:
+  255|             m = re.search(r'\b(1[6-9]\d\d)\b', d)
+  256|             ok = bool(m) and int(m.group(1)) < int(cutoff[:4])
+  257|         if ok:
+  258|             keep.append(scenario.clean_position(p['text'], int(cutoff[:4])))
+  259|     if keep:
+  260|         spec['candidate']['positions'] = keep[:3]
+  261|         spec['candidate']['positions_source'] = 'documented'
+  262| 
+  263| 
+  264| def _add_to_config(config_path: Path, key: str):
+  265|     raw = json.loads(config_path.read_text())
+  266|     if key not in raw['what_ifs']:
+  267|         raw['what_ifs'].append(key)
+  268|         config_path.write_text(json.dumps(raw, indent=2) + '\n')
+  269| 
+  270| 
+  271| def run_pipeline(config_path: Path, budget: Budget, publish_only: bool = False, progress: Progress | None = None) -> dict:
+  272|     from .run import Run
+  273|     progress = progress or Progress(None)
+  274|     run = Run(RunConfig.load(config_path))
+  275|     if not publish_only:
+  276|         if not (run.dir / 'fit.pkl').exists():
+  277|             run.backbone()
+  278|         run.plan()
+  279|         progress.step(f'Interviewing voters in your {run.cfg.election}, with the real one as a control.')
+  280|         asked = run.ask()
+  281|         budget.add(asked['dollars'], 'ask', None, record=False)  # ask records its own spend
+  282|         if run.cfg.research.audit_model or run.cfg.agents.escalate_model:
+  283|             progress.step('Checking that each voter took the change as true.')
+  284|             refined = run.refine()
+  285|             budget.add(refined['dollars'], 'refine', None, record=False)  # audit and ask record their own spend
+  286|         progress.step('Comparing the interviews with the historical record.')
+  287|         run.analyze()
+  288|     progress.step(f'Rerunning the {run.cfg.election} election 100 times.')
+  289|     run.publish()
+  290|     SERVE_BUNDLES.mkdir(parents=True, exist_ok=True)
+  291|     src = run.dir / 'published' / f'{run.cfg.election}.json'
+  292|     shutil.copyfile(src, SERVE_BUNDLES / f'{run.cfg.election}.json')
+  293|     (SERVE_BUNDLES / 'RUN_ID').write_text(run.id + '\n')
+  294|     return {'run': run.id, 'bundle': str(src)}
+  295| 
+  296| 
+  297| def report(year: int, key: str) -> dict:
+  298|     b = json.loads((SERVE_BUNDLES / f'{year}.json').read_text())
+  299|     r = b['runs'].get(key) or {}
+  300|     return {'key': key, 'label': REGISTRY[key]['label'], 'summary': r.get('summary'), 'ev': r.get('ev'),
+  301|             'confidence': r.get('confidenceTier'), 'flags': r.get('confidenceFlags'),
+  302|             'evidence': [{'strength': e['strength'], 'agreement': e['agreement'], 'detail': e.get('agreementDetail')}
+  303|                          for e in r.get('evidence', [])]}
+  304| 
+  305| 
+  306| def left(ledger: Path | None = None, daily: float | None = None, monthly: float | None = None) -> float:
+  307|     """Dollars the intake may still spend: the smaller of what's left of today's
+  308|     cap and this month's, every visitor together (llm.spent)."""
+  309|     today, month = llm.spent(ledger=ledger or llm.LEDGER)
+  310|     rest = min((DAILY_USD if daily is None else daily) - today, (MONTHLY_USD if monthly is None else monthly) - month)
+  311|     return max(rest, 0.0)
+  312| 
+  313| 
+  314| def whatif(text: str, config_path: str | Path, refresh: bool = False, ceiling: float | None = None) -> dict:
+  315|     config_path = Path(config_path)
+  316|     cfg = RunConfig.load(config_path)
+  317|     budget = Budget(ceiling)
+  318|     progress = Progress(text)
+  319|     progress.step('Turning your words into a change I can model.')
+  320|     raw = compile_text(text, cfg, budget)
+  321|     if not raw['modelable']:
+  322|         progress.finish()
+  323|         return {'status': 'not-modelable', 'why': raw['why_not'], 'dollars': round(budget.spent, 4)}
+  324|     if raw['same_as'] in REGISTRY and cfg.election in (REGISTRY[raw['same_as']].get('years') or [REGISTRY[raw['same_as']].get('year', 1920)]):
+  325|         key = raw['same_as']
+  326|         scenario.add_words(key, raw['words'] + [text.lower().strip()[:80]])
+  327|         in_config = key in cfg.what_ifs
+  328|         _add_to_config(config_path, key)
+  329|         progress.step(f'That’s {REGISTRY[key]["label"]}, which I’ve modelled already.')
+  330|         out = run_pipeline(config_path, budget, publish_only=in_config, progress=progress)
+  331|         progress.finish()
+  332|         return {'status': 'keyword', 'key': key, **out, 'dollars': round(budget.spent, 4), 'costs': budget.lines,
+  333|                 'report': report(cfg.election, key)}
+  334|     spec = scenario.finalize(raw, text, REGISTRY, cfg.research.compile_model, cfg.election)
+  335|     if spec.get('reinterpretation'):
+  336|         progress.step(spec['reinterpretation'])
+  337|     progress.step(f'Setting the scene: autumn {cfg.election}…')
+  338|     ev = research(spec, cfg, budget, refresh)
+  339|     n = len(ev.get('findings', []))
+  340|     progress.step(f'Clarifying historical context: {n or "no"} finding{"" if n == 1 else "s"}.')
+  341|     if spec['kind'] == 'candidate' and spec['candidate']['positions_source'] != 'documented':
+  342|         documented_positions(spec, ev, cfg.context_cutoff)
+  343|     if cfg.research.world_model and spec['mode'] == 'agents':
+  344|         progress.step(f'Staging the autumn of {cfg.election} so nothing in it contradicts the change.')
+  345|         w = stage(spec, cfg, budget, ev)
+  346|         if w:
+  347|             gone, new = len(w['contradicted']), len(w['items'])
+  348|             progress.step(f'Took out {gone or "no"} newspaper item{"" if gone == 1 else "s"} the change makes false; '
+  349|                           f'wrote {new} from the changed world{" and a question to check each voter believes it" if w["check"] else ""}.')
+  350|     scenario.save_spec(spec)
+  351|     REGISTRY[spec['key']] = scenario.bind(spec)
+  352|     _add_to_config(config_path, spec['key'])
+  353|     out = run_pipeline(config_path, budget, progress=progress)
+  354|     progress.finish()
+  355|     return {'status': 'modelled', 'key': spec['key'], **out, 'dollars': round(budget.spent, 4), 'costs': budget.lines,
+  356|             'report': report(cfg.election, spec['key'])}
   357| 
-  358| def _config_for(year: int, fallback: Path | None = None) -> Path | None:
-  359|     """configs/live-<year>.json for any simulated year (one with a profile), or the
-  360|     worker's own config when it is that year's; None when the year isn't simulated."""
-  361|     from . import profiles
-  362|     if year not in profiles.years():
-  363|         return None
-  364|     p = ROOT / f'configs/live-{year}.json'
-  365|     if p.exists():
-  366|         return p
-  367|     return fallback if fallback and Path(fallback).exists() and RunConfig.load(fallback).election == year else None
-  368| 
+  358| 
+  359| def research_config(config_path: str | Path, refresh: bool = False, only: str | None = None, again: bool = False) -> dict:
+  360|     """Evidence for every what-if in a config that lacks it (hand-written ones included: there it grades confidence only)."""
+  361|     cfg = RunConfig.load(config_path)
+  362|     keys = [k for k in cfg.what_ifs if not only or k == only]
+  363|     budget = Budget()
+  364|     out = {}
+  365|     for k in keys:
+  366|         ev = research({**REGISTRY[k], 'key': k}, cfg, budget, refresh, again)
+  367|         out[k] = {'strength': evidence.strength(ev)['level'], 'findings': len(ev['findings']), 'summary': ev['summary'][:200]}
+  368|     return {'what_ifs': out, 'dollars': round(budget.spent, 4)}
   369| 
-  370| def process_queue(config_path: str | Path, limit: int = 3) -> list[dict]:
-  371|     """Model up to `limit` distinct queued (year, text) pairs, oldest first.
-  372|     Each is modelled in its own year's live config, its spend recorded against the key that queued it, if any."""
-  373|     SESSIONS.mkdir(exist_ok=True)
-  374|     if LOCK.exists() and _pid_alive(int(LOCK.read_text().strip() or 0)):
-  375|         return [{'status': 'busy', 'pid': LOCK.read_text().strip()}]
-  376|     LOCK.write_text(str(os.getpid()))
-  377|     try:
-  378|         done = set()
-  379|         for l in DONE.read_text().splitlines() if DONE.exists() else []:
-  380|             if l.strip():
-  381|                 x = json.loads(l)
-  382|                 done.add((x.get('year', 1920), x['text']))
-  383|         pending, who = [], {}
-  384|         for l in QUEUE.read_text().splitlines() if QUEUE.exists() else []:
-  385|             if l.strip():
-  386|                 q = json.loads(l)
-  387|                 key = (int(q.get('year') or 1920), _norm(q['text']))
-  388|                 if key not in done and key not in pending:
-  389|                     pending.append(key)
-  390|                     who[key] = q.get('who')
-  391|         results = []
-  392|         for year, t in pending[:limit]:
-  393|             cfg_path = _config_for(year, Path(config_path))
-  394|             llm.SPEND_WHO = who[(year, t)]
-  395|             try:
-  396|                 if cfg_path is None:
-  397|                     r = {'status': 'not-modelable', 'why': f'I haven’t simulated {year} yet.'}
-  398|                 else:
-  399|                     r = whatif(t, cfg_path)
-  400|             except (SystemExit, Exception) as e:
-  401|                 # A stop or a bug: the text stays queued (not in DONE),
-  402|                 # and the waiting page is told why (FAILED, read by the router).
-  403|                 r = {'text': t, 'year': year, 'status': 'stopped' if isinstance(e, SystemExit) else 'error', 'why': str(e) or repr(e)}
-  404|                 with open(FAILED, 'a') as f:
-  405|                     f.write(json.dumps(r | {'at': time.time()}) + '\n')
-  406|                 results.append(r)
-  407|                 break
-  408|             with open(DONE, 'a') as f:
-  409|                 f.write(json.dumps({'text': t, 'year': year, 'ts': dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds'),
-  410|                                     'status': r['status'], 'key': r.get('key'), 'why': r.get('why'), 'dollars': r.get('dollars')}) + '\n')
-  411|             results.append({'text': t, **r})
-  412|         return results
-  413|     finally:
-  414|         llm.SPEND_WHO = None
-  415|         LOCK.unlink(missing_ok=True)
+  370| 
+  371| # ── The router's queue ──
+  372| 
+  373| def _norm(text: str) -> str:
+  374|     return ' '.join(text.lower().split())
+  375| 
+  376| 
+  377| def _pid_alive(pid: int) -> bool:
+  378|     try:
+  379|         os.kill(pid, 0)
+  380|         return True
+  381|     except OSError:
+  382|         return False
+  383| 
+  384| 
+  385| def _config_for(year: int, fallback: Path | None = None) -> Path | None:
+  386|     """configs/live-<year>.json for any simulated year (one with a profile), or the
+  387|     worker's own config when it is that year's; None when the year isn't simulated."""
+  388|     from . import profiles
+  389|     if year not in profiles.years():
+  390|         return None
+  391|     p = ROOT / f'configs/live-{year}.json'
+  392|     if p.exists():
+  393|         return p
+  394|     return fallback if fallback and Path(fallback).exists() and RunConfig.load(fallback).election == year else None
+  395| 
+  396| 
+  397| def _settle(year: int, text: str, status: str, why: str | None = None, key: str | None = None,
+  398|             dollars: float | None = None):
+  399|     with open(DONE, 'a') as f:
+  400|         f.write(json.dumps({'text': text, 'year': year, 'ts': dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds'),
+  401|                             'status': status, 'key': key, 'why': why, 'dollars': dollars}) + '\n')
+  402| 
+  403| 
+  404| def process_queue(config_path: str | Path, limit: int = 3) -> list[dict]:
+  405|     """Model up to `limit` distinct queued (year, text) pairs, oldest first, within the caps.
+  406|     Each is modelled in its own year's live config, its spend recorded against the key that queued it, if any.
+  407|     A text that has failed MAX_ATTEMPTS times is given up (queue-dead.jsonl) instead of retried."""
+  408|     SESSIONS.mkdir(exist_ok=True)
+  409|     if LOCK.exists() and _pid_alive(int(LOCK.read_text().strip() or 0)):
+  410|         return [{'status': 'busy', 'pid': LOCK.read_text().strip()}]
+  411|     LOCK.write_text(str(os.getpid()))
+  412|     try:
+  413|         done = set()
+  414|         for l in DONE.read_text().splitlines() if DONE.exists() else []:
+  415|             if l.strip():
+  416|                 x = json.loads(l)
+  417|                 done.add((x.get('year', 1920), x['text']))
+  418|         attempts: dict[tuple[int, str], int] = {}
+  419|         for l in FAILED.read_text().splitlines() if FAILED.exists() else []:
+  420|             if l.strip():
+  421|                 x = json.loads(l)
+  422|                 k = (int(x.get('year') or 1920), x['text'])
+  423|                 attempts[k] = attempts.get(k, 0) + 1
+  424|         pending, who = [], {}
+  425|         for l in QUEUE.read_text().splitlines() if QUEUE.exists() else []:
+  426|             if l.strip():
+  427|                 q = json.loads(l)
+  428|                 key = (int(q.get('year') or 1920), _norm(q['text']))
+  429|                 if key not in done and key not in pending:
+  430|                     pending.append(key)
+  431|                     who[key] = q.get('who')
+  432|         results = []
+  433|         for year, t in pending[:limit]:
+  434|             if attempts.get((year, t), 0) >= MAX_ATTEMPTS:
+  435|                 # Failed before, every time: settled, not retried again.
+  436|                 with open(DEAD, 'a') as f:
+  437|                     f.write(json.dumps({'text': t, 'year': year, 'attempts': attempts[(year, t)], 'at': time.time()}) + '\n')
+  438|                 _settle(year, t, 'gave-up', GAVE_UP)
+  439|                 results.append({'text': t, 'year': year, 'status': 'gave-up', 'why': GAVE_UP})
+  440|                 continue
+  441|             cfg_path = _config_for(year, Path(config_path))
+  442|             llm.SPEND_WHO = who[(year, t)]
+  443|             budget_left = left()
+  444|             if budget_left <= 0:
+  445|                 # Settled, not retried: later budget isn't spent on text nobody is waiting for.
+  446|                 _settle(year, t, 'over-cap', OVER_CAP)
+  447|                 results.append({'text': t, 'year': year, 'status': 'over-cap', 'why': OVER_CAP})
+  448|                 continue
+  449|             try:
+  450|                 if cfg_path is None:
+  451|                     r = {'status': 'not-modelable', 'why': f'I haven’t simulated {year} yet.'}
+  452|                 else:
+  453|                     r = whatif(t, cfg_path, ceiling=budget_left)
+  454|             except (SystemExit, Exception) as e:
+  455|                 why = str(e) or repr(e)
+  456|                 if isinstance(e, SystemExit) and why == OVER_CAP:
+  457|                     # The cap was reached mid-text: settled. The texts after it find nothing left
+  458|                     # and are settled the same way, so no waiting page times out.
+  459|                     _settle(year, t, 'over-cap', OVER_CAP)
+  460|                     results.append({'text': t, 'year': year, 'status': 'over-cap', 'why': OVER_CAP})
+  461|                     continue
+  462|                 # A stop or a bug: recorded (FAILED, read by the router, which tells the waiting
+  463|                 # page why). The text stays queued for one more try, then is given up.
+  464|                 r = {'text': t, 'year': year, 'status': 'stopped' if isinstance(e, SystemExit) else 'error', 'why': why}
+  465|                 with open(FAILED, 'a') as f:
+  466|                     f.write(json.dumps(r | {'at': time.time()}) + '\n')
+  467|                 attempts[(year, t)] = attempts.get((year, t), 0) + 1
+  468|                 if attempts[(year, t)] >= MAX_ATTEMPTS:
+  469|                     with open(DEAD, 'a') as f:
+  470|                         f.write(json.dumps({'text': t, 'year': year, 'attempts': attempts[(year, t)], 'why': why,
+  471|                                             'at': time.time()}) + '\n')
+  472|                     _settle(year, t, 'gave-up', GAVE_UP)
+  473|                 results.append(r)
+  474|                 continue
+  475|             _settle(year, t, r['status'], r.get('why'), r.get('key'), r.get('dollars'))
+  476|             results.append({'text': t, **r})
+  477|         return results
+  478|     finally:
+  479|         llm.SPEND_WHO = None
+  480|         LOCK.unlink(missing_ok=True)
 ```
 
 ## `simharness/llm.py`
@@ -1433,40 +1653,42 @@ Files `simharness/evidence.py` to `simharness/paired.py`. Lines are numbered as 
   338| 
   339| LEDGER = ROOT / 'sessions/spend.jsonl'
   340| # Who the spend is for: the access key's name while the intake worker models
-  341| # that key's text (intake.process_queue), else None. The caps read it.
-  342| SPEND_WHO: str | None = None
-  343| 
+  341| # that key's text (intake.process_queue), else None. For the record only: the
+  342| # caps count every line, whoever's it was.
+  343| SPEND_WHO: str | None = None
   344| 
-  345| def record_spend(stage: str, dollars: float, run: str = '', note: str = ''):
-  346|     if dollars <= 0:
-  347|         return
-  348|     LEDGER.parent.mkdir(parents=True, exist_ok=True)
-  349|     now = time.gmtime()
-  350|     with open(LEDGER, 'a') as f:
-  351|         f.write(json.dumps({'ts': time.strftime('%Y-%m-%dT%H:%M:%SZ', now), 'day': time.strftime('%Y-%m-%d', now),
-  352|                             'stage': stage, 'dollars': round(dollars, 5), 'run': run, 'note': note, 'who': SPEND_WHO}) + '\n')
-  353| 
+  345| 
+  346| def record_spend(stage: str, dollars: float, run: str = '', note: str = ''):
+  347|     if dollars <= 0:
+  348|         return
+  349|     LEDGER.parent.mkdir(parents=True, exist_ok=True)
+  350|     now = time.gmtime()
+  351|     with open(LEDGER, 'a') as f:
+  352|         f.write(json.dumps({'ts': time.strftime('%Y-%m-%dT%H:%M:%SZ', now), 'day': time.strftime('%Y-%m-%d', now),
+  353|                             'stage': stage, 'dollars': round(dollars, 5), 'run': run, 'note': note, 'who': SPEND_WHO}) + '\n')
   354| 
-  355| def spent(day: str | None = None, ledger: Path = LEDGER) -> tuple[float, dict[str, float]]:
-  356|     """(every dollar recorded against an access key, ever: the intake's all-time total;
-  357|     the dollars each key's name recorded on `day`, UTC, default today).
-  358|     Lines without a key (before keys, or a run started by hand) count toward neither.
-  359|     serve/guard.ts reads the ledger the same way before it queues text."""
-  360|     day = day or time.strftime('%Y-%m-%d', time.gmtime())
-  361|     total, today = 0.0, {}
-  362|     for line in ledger.read_text().splitlines() if ledger.exists() else []:
-  363|         try:
-  364|             r = json.loads(line)
-  365|             d = float(r['dollars'])
-  366|         except (ValueError, KeyError, TypeError):
-  367|             continue
-  368|         if not r.get('who'):
-  369|             continue
-  370|         total += d
-  371|         if r.get('day') == day:
-  372|             today[r['who']] = today.get(r['who'], 0.0) + d
-  373|     return total, today
-  374| 
+  355| 
+  356| def spent(day: str | None = None, ledger: Path = LEDGER) -> tuple[float, float]:
+  357|     """(dollars recorded on `day`, UTC, default today; dollars recorded in that day's
+  358|     calendar month), counting every line whoever's text it was. These are what the
+  359|     intake's caps are measured against (intake.left). serve/guard.ts `spent` reads
+  360|     the ledger the same way before it queues text."""
+  361|     day = day or time.strftime('%Y-%m-%d', time.gmtime())
+  362|     month = day[:7]
+  363|     today, this_month = 0.0, 0.0
+  364|     for line in ledger.read_text().splitlines() if ledger.exists() else []:
+  365|         try:
+  366|             r = json.loads(line)
+  367|             d = float(r['dollars'])
+  368|             line_day = str(r['day'])
+  369|         except (ValueError, KeyError, TypeError):
+  370|             continue
+  371|         if line_day.startswith(month):
+  372|             this_month += d
+  373|         if line_day == day:
+  374|             today += d
+  375|     return today, this_month
+  376| 
 ```
 
 ## `simharness/paired.py`

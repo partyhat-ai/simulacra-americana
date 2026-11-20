@@ -1,7 +1,355 @@
-# synthetic-electorate-toy: source and docs, part 6 of 15
+# synthetic-electorate-toy: source and docs, part 6 of 16
 
-Generated from commit `be1682104fbe` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy. Regenerate whenever the code changes.
-Files `serve/guard.test.ts` to `simharness/aggregate.py`. Lines are numbered as in the repository.
+Generated from commit `c4694839a0a9` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Files `serve/contract.ts` to `simharness/agentlayer.py`. Lines are numbered as in the repository.
+
+## `serve/contract.ts`
+
+```ts
+    1| // The page's contract with the simulation server, one definition for both
+    2| // sides: serve/bundle.ts parses the published bundles and request bodies with
+    3| // these, and the page (src/lib/simulacra/schemas.ts) parses every answer with
+    4| // them. It lives under serve/ because the server's image is built from serve/
+    5| // alone (Dockerfile); it imports nothing but zod, so the page can import it too.
+    6| // The bundle mirrors simharness.serialize.Bundle; both sides test against
+    7| // tests/fixtures/bundle.example.json (serve/contract.test.ts, tests/test_contract.py).
+    8| //
+    9| // Objects that come from a bundle are loose: fields added on the Python side
+   10| // pass through the server to the page, which reads only what's named here.
+   11| // Candidate keys follow history.ts: A is the winner, B the runner-up, O
+   12| // everyone else.
+   13| //
+   14| // GET  /manifest → Manifest { years: { [year]: runId } }
+   15| // GET  /elections/:year → ElectionResponse { slices, whatIfs, simulated, runId }
+   16| // POST /runs RunRequest { year, whatIfs: [key], text, edits } → StartedRun { id }
+   17| // GET  /runs/:id → RunStatus (running | done with a RunResult | failed)
+   18| // POST /runs/:id/cancel → { ok }
+   19| // GET  /elections/:year/voters/:slice?run=:id → Voter
+   20| import { z } from 'zod';
+   21| 
+   22| /** A what-if's kind: who can vote, who lives where, what people care about, who is on the ballot. */
+   23| export const KindSchema = z.enum(['franchise', 'population', 'issue', 'candidate']);
+   24| export type Kind = z.infer<typeof KindSchema>;
+   25| 
+   26| /** What one person did: voted for A, B or someone else, stayed home, or couldn't vote. */
+   27| export const ChoiceSchema = z.enum(['A', 'B', 'O', 'home', 'barred']);
+   28| export type Choice = z.infer<typeof ChoiceSchema>;
+   29| 
+   30| /** Where a vote is counted: the winner, the runner-up, or everyone else. */
+   31| export const BucketSchema = z.enum(['A', 'B', 'O']);
+   32| export type Bucket = z.infer<typeof BucketSchema>;
+   33| 
+   34| /** The five shares every slice and table row splits its adults into. */
+   35| export const FIELDS = ['barred', 'home', 'A', 'B', 'O'] as const;
+   36| export type Field = (typeof FIELDS)[number];
+   37| 
+   38| /** One group of adults; the five fractions are of the group's adults. `adults` is in millions. */
+   39| export const SliceSchema = z.looseObject({
+   40|   key: z.string(),
+   41|   label: z.string(),
+   42|   adults: z.number(),
+   43|   barred: z.number(),
+   44|   home: z.number(),
+   45|   A: z.number(),
+   46|   B: z.number(),
+   47|   O: z.number(),
+   48|   source: z.string().optional()
+   49| });
+   50| export type Slice = z.infer<typeof SliceSchema>;
+   51| 
+   52| export const WhatIfSchema = z.looseObject({
+   53|   key: z.string(),
+   54|   label: z.string(),
+   55|   kind: KindSchema,
+   56|   detail: z.string(),
+   57|   /** The groups it reaches. */
+   58|   slices: z.array(z.string()).default([]),
+   59|   assumption: z.string().optional(),
+   60|   confidenceTier: z.string().optional(),
+   61|   evidence: z.string().optional(),
+   62|   exploratory: z.boolean().optional()
+   63| });
+   64| export type WhatIf = z.infer<typeof WhatIfSchema>;
+   65| 
+   66| /** A year's groups and what-ifs, as its bundle holds them. */
+   67| export const ElectionSchema = z.looseObject({
+   68|   slices: z.array(SliceSchema),
+   69|   whatIfs: z.array(WhatIfSchema)
+   70| });
+   71| 
+   72| /** GET /elections/:year. A year without a simulation answers empty lists and `simulated: false`. */
+   73| export const ElectionResponseSchema = ElectionSchema.extend({
+   74|   simulated: z.boolean().optional(),
+   75|   /** The run this year's bundle came from; absent when there's no bundle. */
+   76|   runId: z.string().optional()
+   77| });
+   78| export type ElectionResponse = z.infer<typeof ElectionResponseSchema>;
+   79| 
+   80| /** GET /manifest: every published year and its run. */
+   81| export const ManifestSchema = z.object({ years: z.record(z.string(), z.string()) });
+   82| 
+   83| const EvSchema = z.object({ A: z.number(), B: z.number(), O: z.number() });
+   84| const PairSchema = z.tuple([z.number(), z.number()]);
+   85| 
+   86| export const StateResultSchema = z.looseObject({
+   87|   code: z.string(),
+   88|   /** A candidate key ('A', 'B', 'C', …) or 'O'. */
+   89|   won: z.string(),
+   90|   // serialize writes a numpy bool through json's default=float, 0.0 / 1.0, in
+   91|   // published bundles; the sample and hand-edited runs write a boolean.
+   92|   flipped: z.union([z.boolean(), z.number()]).transform((v) => v !== false && v !== 0),
+   93|   margin: z.number(),
+   94|   marginRange: PairSchema.optional(),
+   95|   pFlip: z.number().optional()
+   96| });
+   97| export type StateResult = z.infer<typeof StateResultSchema>;
+   98| 
+   99| export const AppliedSchema = z.looseObject({ key: z.string(), label: z.string(), kind: KindSchema });
+  100| export type Applied = z.infer<typeof AppliedSchema>;
+  101| 
+  102| const SourceSchema = z.looseObject({ title: z.string(), url: z.string().optional(), tier: z.string().optional() });
+  103| 
+  104| const FindingSchema = z.looseObject({
+  105|   claim: z.string(),
+  106|   when: z.string().optional(),
+  107|   match: z.string().optional(),
+  108|   tier: z.string().optional(),
+  109|   sources: z.array(SourceSchema).default([])
+  110| });
+  111| 
+  112| export const EvidenceSchema = z.looseObject({
+  113|   whatIf: z.string(),
+  114|   strength: z.string().optional(),
+  115|   summary: z.string().optional(),
+  116|   agreement: z.string().optional(),
+  117|   agreementDetail: z.string().nullable().optional(),
+  118|   findings: z.array(FindingSchema).default([]),
+  119|   caveats: z.array(z.string()).optional(),
+  120|   researchedAt: z.string().optional()
+  121| });
+  122| export type Evidence = z.infer<typeof EvidenceSchema>;
+  123| 
+  124| export const CohortEffectSchema = z.looseObject({
+  125|   whatIf: z.string(),
+  126|   cohort: z.string(),
+  127|   n: z.number(),
+  128|   bias: z.number().optional(),
+  129|   weight: z.number().optional(),
+  130|   exposed: z.boolean().optional(),
+  131|   dr: z.number().optional(),
+  132|   dt: z.number().optional()
+  133| });
+  134| export type CohortEffect = z.infer<typeof CohortEffectSchema>;
+  135| 
+  136| /** The interviews before any change: the baseline, and the leakage probes when the run had them. */
+  137| export const PreSchema = z.looseObject({
+  138|   voters: z.number(),
+  139|   interviews: z.number(),
+  140|   items: z.array(z.number()).optional(),
+  141|   asOf: z.string().optional(),
+  142|   wordings: z.number().optional(),
+  143|   recall: z.object({ n: z.number(), winnerRate: z.number() }).optional(),
+  144|   swap: z.object({ platformRate: z.number() }).optional()
+  145| });
+  146| export type Pre = z.infer<typeof PreSchema>;
+  147| 
+  148| /** What a what-if's voters were told: settled facts, news on a nominee's line, planks added and dropped. */
+  149| export const ToldSchema = z.looseObject({
+  150|   facts: z.array(z.string()).optional(),
+  151|   news: z.array(z.string()).optional(),
+  152|   added: z.array(z.string()).optional(),
+  153|   dropped: z.array(z.string()).optional(),
+  154|   /** A staged what-if: news from the changed world, added to the voters' newspapers. */
+  155|   items: z.array(z.object({ date: z.string(), text: z.string() })).optional(),
+  156|   /** A staged what-if: how many real newspaper items the change makes false, taken out. */
+  157|   removed: z.number().int().nonnegative().optional()
+  158| });
+  159| export type Told = z.infer<typeof ToldSchema>;
+  160| 
+  161| /** A dated newspaper item in the voters' briefs. */
+  162| export const ReadingSchema = z.looseObject({
+  163|   date: z.string(),
+  164|   newspaper: z.string(),
+  165|   place: z.string(),
+  166|   summary: z.string().optional()
+  167| });
+  168| export type Reading = z.infer<typeof ReadingSchema>;
+  169| 
+  170| const AnswerSideSchema = z.looseObject({
+  171|   choice: z.string(),
+  172|   pVote: z.number().nullable().optional(),
+  173|   quote: z.string(),
+  174|   reason: z.string().optional()
+  175| });
+  176| 
+  177| export const InterviewAnswerSchema = z.looseObject({
+  178|   /** Index into the interview's questions. */
+  179|   question: z.number(),
+  180|   name: z.string(),
+  181|   cohort: z.string(),
+  182|   line: z.string(),
+  183|   misread: z.boolean().optional(),
+  184|   before: AnswerSideSchema,
+  185|   after: AnswerSideSchema
+  186| });
+  187| export type InterviewAnswer = z.infer<typeof InterviewAnswerSchema>;
+  188| 
+  189| /** The interviews behind a rerun: the questions once, each person's answers per applied what-if. */
+  190| export const InterviewSchema = z.object({
+  191|   questions: z.array(z.string()),
+  192|   byWhatIf: z.array(z.object({ whatIf: z.string(), answers: z.array(InterviewAnswerSchema) }))
+  193| });
+  194| export type Interview = z.infer<typeof InterviewSchema>;
+  195| 
+  196| /** One combination of what-ifs as a bundle holds it (serialize.Result). */
+  197| export const BundleResultSchema = z.looseObject({
+  198|   ev: EvSchema,
+  199|   /** null: no one has a majority. */
+  200|   winner: BucketSchema.nullable(),
+  201|   states: z.array(StateResultSchema),
+  202|   slices: z.array(SliceSchema),
+  203|   summary: z.string(),
+  204|   /** null: nothing was applied. */
+  205|   confidence: z.enum(['high', 'medium', 'low']).nullable(),
+  206|   applied: z.array(AppliedSchema),
+  207|   /** The part of the typed text the server couldn't use. */
+  208|   unknown: z.string().nullable(),
+  209|   confidenceTier: z.string().optional(),
+  210|   confidenceLabel: z.string().optional(),
+  211|   confidenceFlags: z.array(z.string()).optional(),
+  212|   confidenceReasons: z.array(z.string()).optional(),
+  213|   range: z.object({ A: PairSchema, B: PairSchema, O: PairSchema }).optional(),
+  214|   drawsWon: z.record(z.string(), z.number()).optional(),
+  215|   popular: EvSchema.optional(),
+  216|   assumptions: z.array(z.string()).optional(),
+  217|   howIGotThis: z.array(z.string()).optional(),
+  218|   sources: z.array(SourceSchema).optional(),
+  219|   evidence: z.array(EvidenceSchema).optional(),
+  220|   cohortEffects: z.array(CohortEffectSchema).optional(),
+  221|   mode: z.string().optional(),
+  222|   runId: z.string().optional()
+  223| });
+  224| export type BundleResult = z.infer<typeof BundleResultSchema>;
+  225| 
+  226| /** A rerun as the page receives it: the bundle's result plus what the server adds from the rest of the bundle. */
+  227| export const RunResultSchema = BundleResultSchema.extend({
+  228|   /** Why `unknown` wasn't modelled (a daily or monthly budget spent, or the worker's reason). */
+  229|   unknownWhy: z.string().optional(),
+  230|   pre: PreSchema.optional(),
+  231|   told: z.record(z.string(), ToldSchema).optional(),
+  232|   reading: z.array(ReadingSchema).optional(),
+  233|   interview: InterviewSchema.optional(),
+  234|   queued: z.object({ text: z.string(), worker: z.boolean() }).optional()
+  235| });
+  236| export type RunResult = z.infer<typeof RunResultSchema>;
+  237| 
+  238| export const StepSchema = z.object({ text: z.string(), state: z.enum(['done', 'doing']) });
+  239| export type Step = z.infer<typeof StepSchema>;
+  240| 
+  241| /** GET /runs/:id. */
+  242| export const RunStatusSchema = z.discriminatedUnion('status', [
+  243|   z.object({
+  244|     status: z.literal('running'),
+  245|     done: z.number(),
+  246|     total: z.number(),
+  247|     /** New words being modelled on the server: its working so far. */
+  248|     steps: z.array(StepSchema).optional()
+  249|   }),
+  250|   z.object({ status: z.literal('done'), done: z.number(), total: z.number(), result: RunResultSchema }),
+  251|   z.object({ status: z.literal('failed'), error: z.string().nullable() })
+  252| ]);
+  253| export type RunStatus = z.infer<typeof RunStatusSchema>;
+  254| 
+  255| /** POST /runs. */
+  256| export const StartedRunSchema = z.object({ id: z.string() });
+  257| export type StartedRun = z.infer<typeof StartedRunSchema>;
+  258| 
+  259| /** POST /runs/:id/cancel. */
+  260| export const CancelledSchema = z.object({ ok: z.boolean().optional() });
+  261| 
+  262| /** One simulated person from a group: what they did in history, and in the run. */
+  263| export const VoterSchema = z.looseObject({
+  264|   name: z.string(),
+  265|   line: z.string(),
+  266|   quote: z.string(),
+  267|   history: ChoiceSchema,
+  268|   now: ChoiceSchema,
+  269|   cohort: z.string().optional()
+  270| });
+  271| export type Voter = z.infer<typeof VoterSchema>;
+  272| 
+  273| // ── The published bundle (serve/bundles/<year>.json) ──
+  274| 
+  275| /** One state × group cell of a run: what hand edits are applied to (serve/simulacra.ts applyEdits). */
+  276| export const TableRowSchema = z.object({
+  277|   state: z.string(),
+  278|   slice: z.string(),
+  279|   adults: z.number(),
+  280|   barred: z.number(),
+  281|   home: z.number(),
+  282|   A: z.number(),
+  283|   B: z.number(),
+  284|   O: z.number()
+  285| });
+  286| export type TableRow = z.infer<typeof TableRowSchema>;
+  287| 
+  288| /** What the server holds for a year; it answers the page from it. */
+  289| export const BundleSchema = z.object({
+  290|   year: z.number().int(),
+  291|   runId: z.string(),
+  292|   election: ElectionSchema,
+  293|   /** Each precomputed combination of what-ifs ('' is history; 'a+b' sorted), by key. */
+  294|   runs: z.record(z.string(), BundleResultSchema),
+  295|   /** The same keys as runs. */
+  296|   tables: z.record(z.string(), z.array(TableRowSchema)),
+  297|   /** Run key → slice key → one person. */
+  298|   voters: z.record(z.string(), z.record(z.string(), VoterSchema)),
+  299|   /** {} when the run had no interviews. */
+  300|   interviews: z.object({
+  301|     questions: z.array(z.string()).optional(),
+  302|     byWhatIf: z.record(z.string(), z.array(InterviewAnswerSchema)).optional()
+  303|   }),
+  304|   /** Electoral votes and history's winner by state. */
+  305|   ev: z.record(z.string(), z.number()),
+  306|   historyWinner: z.record(z.string(), BucketSchema),
+  307|   /** Keywords that read typed text as a what-if. */
+  308|   words: z.array(z.object({ key: z.string(), words: z.array(z.string()) })),
+  309|   // Bundles published before the briefs record (1916, 1924) lack these three.
+  310|   pre: PreSchema.nullable().optional(),
+  311|   told: z.record(z.string(), ToldSchema).optional(),
+  312|   reading: z.array(ReadingSchema).optional()
+  313| });
+  314| export type Bundle = z.infer<typeof BundleSchema>;
+  315| 
+  316| // ── POST /runs ──
+  317| 
+  318| /** What one rerun may ask for. The page's field stops at `text` (WhatIfComposer). */
+  319| export const RUN_LIMITS = {
+  320|   firstYear: 1789,
+  321|   lastYear: 2100,
+  322|   /** Characters of typed words, trimmed. */
+  323|   text: 300,
+  324|   /** What-if keys, and characters in each. */
+  325|   whatIfs: 32,
+  326|   key: 80,
+  327|   /** Groups edited by hand. */
+  328|   edits: 64
+  329| } as const;
+  330| 
+  331| /** Hand edits: per slice, changes in fractions of its adults (summing to 0). */
+  332| export const EditsSchema = z
+  333|   .record(z.string().max(RUN_LIMITS.key), z.partialRecord(z.enum(FIELDS), z.number().min(-1).max(1)))
+  334|   .refine((e) => Object.keys(e).length <= RUN_LIMITS.edits, { message: `At most ${RUN_LIMITS.edits} groups.` });
+  335| export type Edits = z.infer<typeof EditsSchema>;
+  336| 
+  337| export const RunRequestSchema = z.object({
+  338|   year: z.coerce.number().int().min(RUN_LIMITS.firstYear).max(RUN_LIMITS.lastYear),
+  339|   whatIfs: z.array(z.string().max(RUN_LIMITS.key)).max(RUN_LIMITS.whatIfs).default([]),
+  340|   text: z.string().trim().max(RUN_LIMITS.text).default(''),
+  341|   edits: EditsSchema.default({})
+  342| });
+  343| export type RunRequest = z.infer<typeof RunRequestSchema>;
+```
 
 ## `serve/guard.test.ts`
 
@@ -10,7 +358,7 @@ Files `serve/guard.test.ts` to `simharness/aggregate.py`. Lines are numbered as 
     2| import { tmpdir } from 'node:os';
     3| import path from 'node:path';
     4| import { describe, expect, it } from 'vitest';
-    5| import { parseKeyRing, pruneJsonl, RateLimiter } from './guard';
+    5| import { capsFromEnv, checkCaps, parseKeyRing, pruneJsonl, RateLimiter, spent } from './guard';
     6| 
     7| const dir = mkdtempSync(path.join(tmpdir(), 'simulacra-guard-'));
     8| const DAY = 86_400_000;
@@ -65,196 +413,297 @@ Files `serve/guard.test.ts` to `simharness/aggregate.py`. Lines are numbered as 
    57|   });
    58| });
    59| 
-   60| describe('pruneJsonl', () => {
-   61|   it('keeps lines inside the retention, whatever their timestamp style', () => {
-   62|     const now = Date.parse('2026-10-01T12:00:00Z');
-   63|     const f = path.join(dir, 'log.jsonl');
-   64|     const rows = [
-   65|       { ts: '2026-09-20T00:00:00Z', text: 'old iso' },
-   66|       { ts: '2026-09-30T10:00:00', text: 'new, no zone' },
-   67|       { ts: '2026-09-30T10:00:00+00:00', text: 'new, offset' },
-   68|       { at: (now - 9 * DAY) / 1000, text: 'old epoch' },
-   69|       { at: (now - DAY) / 1000, text: 'new epoch' },
-   70|       { text: 'no stamp' }
-   71|     ];
-   72|     writeFileSync(f, `${rows.map((r) => JSON.stringify(r)).join('\n')}\n`);
-   73|     expect(pruneJsonl(f, 7 * DAY, now)).toBe(3);
-   74|     expect(readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l).text)).toEqual(['new, no zone', 'new, offset', 'new epoch']);
-   75|     expect(pruneJsonl(f, 7 * DAY, now)).toBe(0);
-   76|     expect(pruneJsonl(path.join(dir, 'missing.jsonl'), DAY, now)).toBe(0);
-   77|   });
-   78| 
-   79|   it('with scrub, keeps old lines without the named fields', () => {
-   80|     const now = Date.parse('2026-10-01T12:00:00Z');
-   81|     const f = path.join(dir, 'spend.jsonl');
-   82|     writeFileSync(
-   83|       f,
-   84|       `${[
-   85|         { ts: '2026-09-01T00:00:00Z', day: '2026-09-01', dollars: 1.5, note: 'a visitor typed this' },
-   86|         { ts: '2026-09-01T00:00:00Z', day: '2026-09-01', dollars: 0.5 },
-   87|         { ts: '2026-09-30T00:00:00Z', day: '2026-09-30', dollars: 2, note: 'recent' }
-   88|       ]
-   89|         .map((r) => JSON.stringify(r))
-   90|         .join('\n')}\n`
-   91|     );
-   92|     expect(pruneJsonl(f, 7 * DAY, now, ['note'])).toBe(1);
-   93|     expect(readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l))).toEqual([
-   94|       { ts: '2026-09-01T00:00:00Z', day: '2026-09-01', dollars: 1.5 },
-   95|       { ts: '2026-09-01T00:00:00Z', day: '2026-09-01', dollars: 0.5 },
-   96|       { ts: '2026-09-30T00:00:00Z', day: '2026-09-30', dollars: 2, note: 'recent' }
-   97|     ]);
-   98|   });
-   99| });
+   60| describe('dollar caps', () => {
+   61|   const now = Date.parse('2026-10-15T12:00:00Z');
+   62|   const ledger = path.join(dir, 'spend.jsonl');
+   63|   writeFileSync(
+   64|     ledger,
+   65|     `${[
+   66|       { day: '2026-10-15', dollars: 3, who: 'ana' },
+   67|       { day: '2026-10-15', dollars: 2, who: null },
+   68|       { day: '2026-10-15', dollars: 1 },
+   69|       { day: '2026-10-02', dollars: 40, who: 'ben' },
+   70|       { day: '2026-09-30', dollars: 500, who: 'ana' },
+   71|       { day: '2026-10-15', dollars: 'x', who: 'ana' }
+   72|     ]
+   73|       .map((r) => JSON.stringify(r))
+   74|       .join('\n')}\nnot json\n`
+   75|   );
+   76| 
+   77|   it("counts every visitor's spend, today and this month (UTC); other months and bad lines count for nothing", () => {
+   78|     expect(spent(ledger, now)).toEqual({ today: 6, month: 46 });
+   79|     expect(spent(path.join(dir, 'missing.jsonl'), now)).toEqual({ today: 0, month: 0 });
+   80|   });
+   81| 
+   82|   it("is over when today's or this month's total reaches its cap, the month first", () => {
+   83|     expect(checkCaps(ledger, { daily: 10, monthly: 100 }, now)).toEqual({ kind: 'ok' });
+   84|     expect(checkCaps(ledger, { daily: 6, monthly: 100 }, now)).toEqual({ kind: 'over', which: 'daily' });
+   85|     expect(checkCaps(ledger, { daily: 6, monthly: 46 }, now)).toEqual({ kind: 'over', which: 'monthly' });
+   86|   });
+   87| 
+   88|   it('defaults to $20 a day and $200 a month, and refuses a bad value', () => {
+   89|     expect(capsFromEnv({})).toEqual({ daily: 20, monthly: 200 });
+   90|     expect(capsFromEnv({ SIMULACRA_DAILY_USD: '5', SIMULACRA_MONTHLY_USD: '50' })).toEqual({ daily: 5, monthly: 50 });
+   91|     expect(() => capsFromEnv({ SIMULACRA_DAILY_USD: 'lots' })).toThrow();
+   92|   });
+   93| });
+   94| 
+   95| describe('pruneJsonl', () => {
+   96|   it('keeps lines inside the retention, whatever their timestamp style', () => {
+   97|     const now = Date.parse('2026-10-01T12:00:00Z');
+   98|     const f = path.join(dir, 'log.jsonl');
+   99|     const rows = [
+  100|       { ts: '2026-09-20T00:00:00Z', text: 'old iso' },
+  101|       { ts: '2026-09-30T10:00:00', text: 'new, no zone' },
+  102|       { ts: '2026-09-30T10:00:00+00:00', text: 'new, offset' },
+  103|       { at: (now - 9 * DAY) / 1000, text: 'old epoch' },
+  104|       { at: (now - DAY) / 1000, text: 'new epoch' },
+  105|       { text: 'no stamp' }
+  106|     ];
+  107|     writeFileSync(f, `${rows.map((r) => JSON.stringify(r)).join('\n')}\n`);
+  108|     expect(pruneJsonl(f, 7 * DAY, now)).toBe(3);
+  109|     expect(readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l).text)).toEqual(['new, no zone', 'new, offset', 'new epoch']);
+  110|     expect(pruneJsonl(f, 7 * DAY, now)).toBe(0);
+  111|     expect(pruneJsonl(path.join(dir, 'missing.jsonl'), DAY, now)).toBe(0);
+  112|   });
+  113| 
+  114|   it('with scrub, keeps old lines without the named fields', () => {
+  115|     const now = Date.parse('2026-10-01T12:00:00Z');
+  116|     const f = path.join(dir, 'spend.jsonl');
+  117|     writeFileSync(
+  118|       f,
+  119|       `${[
+  120|         { ts: '2026-09-01T00:00:00Z', day: '2026-09-01', dollars: 1.5, note: 'a visitor typed this' },
+  121|         { ts: '2026-09-01T00:00:00Z', day: '2026-09-01', dollars: 0.5 },
+  122|         { ts: '2026-09-30T00:00:00Z', day: '2026-09-30', dollars: 2, note: 'recent' }
+  123|       ]
+  124|         .map((r) => JSON.stringify(r))
+  125|         .join('\n')}\n`
+  126|     );
+  127|     expect(pruneJsonl(f, 7 * DAY, now, ['note'])).toBe(1);
+  128|     expect(readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l))).toEqual([
+  129|       { ts: '2026-09-01T00:00:00Z', day: '2026-09-01', dollars: 1.5 },
+  130|       { ts: '2026-09-01T00:00:00Z', day: '2026-09-01', dollars: 0.5 },
+  131|       { ts: '2026-09-30T00:00:00Z', day: '2026-09-30', dollars: 2, note: 'recent' }
+  132|     ]);
+  133|   });
+  134| });
 ```
 
 ## `serve/guard.ts`
 
 ```ts
-    1| // What stands between a visitor and the API: per-IP rate limits, access keys
-    2| // (whose names the spend ledger records), and how long session logs keep
-    3| // visitors' words.
+    1| // What stands between a visitor and the API: the intake's dollar caps, per-IP
+    2| // rate limits, access keys (whose names the spend ledger records), and how long
+    3| // session logs keep visitors' words.
     4| //
     5| // Only typed text the page doesn't already know costs anything (the intake
-    6| // worker's compile, research and interviews). Nothing caps those dollars: any
-    7| // visitor may queue text, a few texts per IP an hour.
-    8| import { createHash, timingSafeEqual } from 'node:crypto';
-    9| import { readFileSync, renameSync, statSync, truncateSync, writeFileSync } from 'node:fs';
-   10| import { z } from 'zod';
-   11| 
-   12| // ── Access keys ──
-   13| 
-   14| /** SIMULACRA_ACCESS_KEYS: a JSON object of key name → key. Names are what the spend ledger records. */
-   15| const AccessKeys = z.record(z.string().regex(/^[a-z0-9][a-z0-9_-]{0,39}$/), z.string().regex(/^[A-Za-z0-9_-]{24,128}$/));
+    6| // worker's compile, research and interviews). Any visitor may queue text, a few
+    7| // texts per IP an hour, while the spend ledger (sessions/spend.jsonl) is under
+    8| // both caps, counted across every visitor together: SIMULACRA_DAILY_USD per UTC
+    9| // day (default 20) and SIMULACRA_MONTHLY_USD per UTC month (default 200). The
+   10| // worker (simharness/intake.py) checks the same ledger again before each text
+   11| // and stops a text at the stage that crosses what is left. The caps don't
+   12| // depend on IPs or keys, so a forged X-Forwarded-For can't raise them.
+   13| import { createHash, timingSafeEqual } from 'node:crypto';
+   14| import { readFileSync, renameSync, statSync, truncateSync, writeFileSync } from 'node:fs';
+   15| import { z } from 'zod';
    16| 
-   17| const digest = (s: string): Buffer => createHash('sha256').update(s).digest();
+   17| // ── Access keys ──
    18| 
-   19| export interface KeyRing {
-   20|   /** The name of the key a request's Authorization header carries, or null. */
-   21|   identify(authorization: string | undefined): string | null;
-   22|   readonly size: number;
-   23| }
-   24| 
-   25| /** Parses SIMULACRA_ACCESS_KEYS; unset is an empty ring (nobody may queue), malformed throws at startup. */
-   26| export function parseKeyRing(raw: string | undefined): KeyRing {
-   27|   const keys = raw?.trim() ? Object.entries(AccessKeys.parse(JSON.parse(raw))) : [];
-   28|   const hashed = keys.map(([name, key]) => ({ name, hash: digest(key) }));
-   29|   return {
-   30|     size: hashed.length,
-   31|     identify(authorization) {
-   32|       const m = /^Bearer ([A-Za-z0-9_-]{1,256})$/.exec(authorization ?? '');
-   33|       if (!m?.[1]) return null;
-   34|       const h = digest(m[1]);
-   35|       // Every key is compared, in constant time, whichever matches.
-   36|       let found: string | null = null;
-   37|       for (const k of hashed) if (timingSafeEqual(h, k.hash)) found = k.name;
-   38|       return found;
-   39|     }
-   40|   };
-   41| }
-   42| 
-   43| // ── Rate limits ──
-   44| 
-   45| export interface Limit {
-   46|   /** Requests allowed per window. */
-   47|   readonly max: number;
-   48|   readonly windowMs: number;
-   49| }
-   50| 
-   51| export type Admit = { readonly ok: true } | { readonly ok: false; readonly retryAfterS: number };
-   52| 
-   53| /** A fixed window per key (an IP). Memory is bounded: expired windows are dropped as new keys arrive. */
-   54| export class RateLimiter {
-   55|   private readonly windows = new Map<string, { start: number; count: number }>();
-   56| 
-   57|   constructor(
-   58|     private readonly limit: Limit,
-   59|     private readonly now: () => number = Date.now,
-   60|     private readonly maxKeys = 50_000
-   61|   ) {}
-   62| 
-   63|   admit(key: string): Admit {
-   64|     const t = this.now();
-   65|     const w = this.windows.get(key);
-   66|     if (w && t - w.start < this.limit.windowMs) {
-   67|       if (w.count >= this.limit.max) return { ok: false, retryAfterS: Math.ceil((w.start + this.limit.windowMs - t) / 1000) };
-   68|       w.count += 1;
-   69|       return { ok: true };
-   70|     }
-   71|     // A new window goes to the back, so the oldest windows are at the front.
-   72|     this.windows.delete(key);
-   73|     this.windows.set(key, { start: t, count: 1 });
-   74|     for (const [k, old] of this.windows) {
-   75|       if (t - old.start < this.limit.windowMs && this.windows.size <= this.maxKeys) break;
-   76|       this.windows.delete(k);
-   77|     }
-   78|     return { ok: true };
-   79|   }
-   80| }
-   81| 
-   82| // ── Session log retention ──
-   83| 
-   84| const Stamped = z.looseObject({ ts: z.string().optional(), at: z.number().optional() });
-   85| 
-   86| function stampOf(line: string): number | null {
-   87|   let row: unknown;
-   88|   try {
-   89|     row = JSON.parse(line);
-   90|   } catch {
-   91|     return null;
-   92|   }
-   93|   const r = Stamped.safeParse(row);
-   94|   if (!r.success) return null;
-   95|   if (r.data.at !== undefined) return r.data.at * 1000;
-   96|   if (r.data.ts === undefined) return null;
-   97|   // Timestamps without a zone were written in the container's zone, UTC.
-   98|   const t = Date.parse(/[zZ]|[+-]\d\d:\d\d$/.test(r.data.ts) ? r.data.ts : `${r.data.ts}Z`);
-   99|   return Number.isNaN(t) ? null : t;
-  100| }
-  101| 
-  102| /**
-  103|  * Drops lines older than `maxAgeMs` (and unreadable ones) from a JSONL log, by
-  104|  * writing a copy and renaming it over the original; with `scrub`, an old line
-  105|  * is kept without the named fields instead. Only call it while no worker is
-  106|  * running: the worker appends to these files. Returns lines dropped or scrubbed.
-  107|  */
-  108| export function pruneJsonl(file: string, maxAgeMs: number, now: number = Date.now(), scrub?: readonly string[]): number {
-  109|   let text: string;
-  110|   try {
-  111|     text = readFileSync(file, 'utf8');
-  112|   } catch {
-  113|     return 0;
-  114|   }
-  115|   const lines = text.split('\n').filter(Boolean);
-  116|   let changed = 0;
-  117|   const keep = lines.flatMap((l) => {
-  118|     const t = stampOf(l);
-  119|     if (t !== null && now - t <= maxAgeMs) return [l];
-  120|     if (t === null || !scrub) {
-  121|       changed += 1;
-  122|       return [];
-  123|     }
-  124|     const row = Stamped.parse(JSON.parse(l));
-  125|     if (!scrub.some((k) => k in row)) return [l];
-  126|     changed += 1;
-  127|     return [JSON.stringify(Object.fromEntries(Object.entries(row).filter(([k]) => !scrub.includes(k))))];
-  128|   });
-  129|   if (!changed) return 0;
-  130|   const tmp = `${file}.${process.pid}.tmp`;
-  131|   writeFileSync(tmp, keep.length ? `${keep.join('\n')}\n` : '');
-  132|   renameSync(tmp, file);
-  133|   return changed;
-  134| }
-  135| 
-  136| /** Empties a plain-text log past `maxBytes` (the worker's log; CloudWatch keeps its own copy). */
-  137| export function capLog(file: string, maxBytes: number): boolean {
-  138|   try {
-  139|     if (statSync(file).size <= maxBytes) return false;
-  140|     truncateSync(file, 0);
-  141|     return true;
-  142|   } catch {
-  143|     return false;
-  144|   }
-  145| }
+   19| /** SIMULACRA_ACCESS_KEYS: a JSON object of key name → key. Names are what the spend ledger records. */
+   20| const AccessKeys = z.record(z.string().regex(/^[a-z0-9][a-z0-9_-]{0,39}$/), z.string().regex(/^[A-Za-z0-9_-]{24,128}$/));
+   21| 
+   22| const digest = (s: string): Buffer => createHash('sha256').update(s).digest();
+   23| 
+   24| export interface KeyRing {
+   25|   /** The name of the key a request's Authorization header carries, or null. */
+   26|   identify(authorization: string | undefined): string | null;
+   27|   readonly size: number;
+   28| }
+   29| 
+   30| /** Parses SIMULACRA_ACCESS_KEYS; unset is an empty ring (no names recorded), malformed throws at startup. */
+   31| export function parseKeyRing(raw: string | undefined): KeyRing {
+   32|   const keys = raw?.trim() ? Object.entries(AccessKeys.parse(JSON.parse(raw))) : [];
+   33|   const hashed = keys.map(([name, key]) => ({ name, hash: digest(key) }));
+   34|   return {
+   35|     size: hashed.length,
+   36|     identify(authorization) {
+   37|       const m = /^Bearer ([A-Za-z0-9_-]{1,256})$/.exec(authorization ?? '');
+   38|       if (!m?.[1]) return null;
+   39|       const h = digest(m[1]);
+   40|       // Every key is compared, in constant time, whichever matches.
+   41|       let found: string | null = null;
+   42|       for (const k of hashed) if (timingSafeEqual(h, k.hash)) found = k.name;
+   43|       return found;
+   44|     }
+   45|   };
+   46| }
+   47| 
+   48| // ── Rate limits ──
+   49| 
+   50| export interface Limit {
+   51|   /** Requests allowed per window. */
+   52|   readonly max: number;
+   53|   readonly windowMs: number;
+   54| }
+   55| 
+   56| export type Admit = { readonly ok: true } | { readonly ok: false; readonly retryAfterS: number };
+   57| 
+   58| /** A fixed window per key (an IP). Memory is bounded: expired windows are dropped as new keys arrive. */
+   59| export class RateLimiter {
+   60|   private readonly windows = new Map<string, { start: number; count: number }>();
+   61| 
+   62|   constructor(
+   63|     private readonly limit: Limit,
+   64|     private readonly now: () => number = Date.now,
+   65|     private readonly maxKeys = 50_000
+   66|   ) {}
+   67| 
+   68|   admit(key: string): Admit {
+   69|     const t = this.now();
+   70|     const w = this.windows.get(key);
+   71|     if (w && t - w.start < this.limit.windowMs) {
+   72|       if (w.count >= this.limit.max) return { ok: false, retryAfterS: Math.ceil((w.start + this.limit.windowMs - t) / 1000) };
+   73|       w.count += 1;
+   74|       return { ok: true };
+   75|     }
+   76|     // A new window goes to the back, so the oldest windows are at the front.
+   77|     this.windows.delete(key);
+   78|     this.windows.set(key, { start: t, count: 1 });
+   79|     for (const [k, old] of this.windows) {
+   80|       if (t - old.start < this.limit.windowMs && this.windows.size <= this.maxKeys) break;
+   81|       this.windows.delete(k);
+   82|     }
+   83|     return { ok: true };
+   84|   }
+   85| }
+   86| 
+   87| // ── Dollar caps ──
+   88| 
+   89| export interface Caps {
+   90|   /** Dollars per UTC day, every visitor together. */
+   91|   readonly daily: number;
+   92|   /** Dollars per UTC calendar month, every visitor together. */
+   93|   readonly monthly: number;
+   94| }
+   95| 
+   96| export function capsFromEnv(env: NodeJS.ProcessEnv = process.env): Caps {
+   97|   const usd = z.coerce.number().finite().nonnegative();
+   98|   return {
+   99|     daily: env.SIMULACRA_DAILY_USD ? usd.parse(env.SIMULACRA_DAILY_USD) : 20,
+  100|     monthly: env.SIMULACRA_MONTHLY_USD ? usd.parse(env.SIMULACRA_MONTHLY_USD) : 200
+  101|   };
+  102| }
+  103| 
+  104| const SpendLine = z.looseObject({ day: z.string(), dollars: z.number() });
+  105| 
+  106| export const utcDay = (t: number): string => new Date(t).toISOString().slice(0, 10);
+  107| 
+  108| /**
+  109|  * Every dollar the ledger records today and this month (UTC), whoever's text it
+  110|  * was. simharness/llm.py `spent` counts the same way, for the worker.
+  111|  */
+  112| export function spent(ledger: string, now: number = Date.now()): { today: number; month: number } {
+  113|   const day = utcDay(now);
+  114|   const month = day.slice(0, 7);
+  115|   let text = '';
+  116|   try {
+  117|     text = readFileSync(ledger, 'utf8');
+  118|   } catch {
+  119|     return { today: 0, month: 0 };
+  120|   }
+  121|   let today = 0;
+  122|   let thisMonth = 0;
+  123|   for (const line of text.split('\n')) {
+  124|     if (!line) continue;
+  125|     let row: unknown;
+  126|     try {
+  127|       row = JSON.parse(line);
+  128|     } catch {
+  129|       continue;
+  130|     }
+  131|     const r = SpendLine.safeParse(row);
+  132|     if (!r.success) continue;
+  133|     if (r.data.day.startsWith(month)) thisMonth += r.data.dollars;
+  134|     if (r.data.day === day) today += r.data.dollars;
+  135|   }
+  136|   return { today, month: thisMonth };
+  137| }
+  138| 
+  139| export type CapCheck = { readonly kind: 'ok' } | { readonly kind: 'over'; readonly which: 'daily' | 'monthly' };
+  140| 
+  141| export function checkCaps(ledger: string, caps: Caps, now: number = Date.now()): CapCheck {
+  142|   const s = spent(ledger, now);
+  143|   if (s.month >= caps.monthly) return { kind: 'over', which: 'monthly' };
+  144|   if (s.today >= caps.daily) return { kind: 'over', which: 'daily' };
+  145|   return { kind: 'ok' };
+  146| }
+  147| 
+  148| // ── Session log retention ──
+  149| 
+  150| const Stamped = z.looseObject({ ts: z.string().optional(), at: z.number().optional() });
+  151| 
+  152| function stampOf(line: string): number | null {
+  153|   let row: unknown;
+  154|   try {
+  155|     row = JSON.parse(line);
+  156|   } catch {
+  157|     return null;
+  158|   }
+  159|   const r = Stamped.safeParse(row);
+  160|   if (!r.success) return null;
+  161|   if (r.data.at !== undefined) return r.data.at * 1000;
+  162|   if (r.data.ts === undefined) return null;
+  163|   // Timestamps without a zone were written in the container's zone, UTC.
+  164|   const t = Date.parse(/[zZ]|[+-]\d\d:\d\d$/.test(r.data.ts) ? r.data.ts : `${r.data.ts}Z`);
+  165|   return Number.isNaN(t) ? null : t;
+  166| }
+  167| 
+  168| /**
+  169|  * Drops lines older than `maxAgeMs` (and unreadable ones) from a JSONL log, by
+  170|  * writing a copy and renaming it over the original; with `scrub`, an old line
+  171|  * is kept without the named fields instead. Only call it while no worker is
+  172|  * running: the worker appends to these files. Returns lines dropped or scrubbed.
+  173|  */
+  174| export function pruneJsonl(file: string, maxAgeMs: number, now: number = Date.now(), scrub?: readonly string[]): number {
+  175|   let text: string;
+  176|   try {
+  177|     text = readFileSync(file, 'utf8');
+  178|   } catch {
+  179|     return 0;
+  180|   }
+  181|   const lines = text.split('\n').filter(Boolean);
+  182|   let changed = 0;
+  183|   const keep = lines.flatMap((l) => {
+  184|     const t = stampOf(l);
+  185|     if (t !== null && now - t <= maxAgeMs) return [l];
+  186|     if (t === null || !scrub) {
+  187|       changed += 1;
+  188|       return [];
+  189|     }
+  190|     const row = Stamped.parse(JSON.parse(l));
+  191|     if (!scrub.some((k) => k in row)) return [l];
+  192|     changed += 1;
+  193|     return [JSON.stringify(Object.fromEntries(Object.entries(row).filter(([k]) => !scrub.includes(k))))];
+  194|   });
+  195|   if (!changed) return 0;
+  196|   const tmp = `${file}.${process.pid}.tmp`;
+  197|   writeFileSync(tmp, keep.length ? `${keep.join('\n')}\n` : '');
+  198|   renameSync(tmp, file);
+  199|   return changed;
+  200| }
+  201| 
+  202| /** Empties a plain-text log past `maxBytes` (the worker's log; CloudWatch keeps its own copy). */
+  203| export function capLog(file: string, maxBytes: number): boolean {
+  204|   try {
+  205|     if (statSync(file).size <= maxBytes) return false;
+  206|     truncateSync(file, 0);
+  207|     return true;
+  208|   } catch {
+  209|     return false;
+  210|   }
+  211| }
 ```
 
 ## `serve/index.ts`
@@ -280,7 +729,7 @@ Files `serve/guard.test.ts` to `simharness/aggregate.py`. Lines are numbered as 
     6| //   - trust proxy TRUST_PROXY_HOPS (default 2: the request comes through
     7| //     Vercel's proxy, then the ALB), so req.ip is the visitor's address for
     8| //     the per-IP rate limits. A request sent to the ALB directly can forge
-    9| //     X-Forwarded-For; the dollar caps hang on access keys, not IPs;
+    9| //     X-Forwarded-For; the dollar caps count every visitor together, not per IP;
    10| //   - SIGTERM: stop accepting, let in-flight requests finish, exit. A running
    11| //     worker is killed with the container; its queue item stays un-done and is
    12| //     retried by the next worker.
@@ -325,7 +774,7 @@ Files `serve/guard.test.ts` to `simharness/aggregate.py`. Lines are numbered as 
     9| import { createApp } from './app';
    10| import { Bundle } from './bundle';
    11| import { parseKeyRing } from './guard';
-   12| import { DEFAULT_LIMITS, IMMUTABLE, SHORT_CACHE, type SimulacraOptions } from './simulacra';
+   12| import { DEFAULT_LIMITS, IMMUTABLE, OVER_DAILY_CAP, OVER_MONTHLY_CAP, SHORT_CACHE, type SimulacraOptions } from './simulacra';
    13| 
    14| const ROOT = path.resolve(import.meta.dirname, '..');
    15| const scratch = mkdtempSync(path.join(tmpdir(), 'simulacra-test-'));
@@ -337,213 +786,280 @@ Files `serve/guard.test.ts` to `simharness/aggregate.py`. Lines are numbered as 
    21|   python: 'python3',
    22|   root: ROOT,
    23|   keys: parseKeyRing(undefined),
-   24|   retainDays: 7,
-   25|   limits: DEFAULT_LIMITS
-   26| };
-   27| 
-   28| let server: Server;
-   29| let base = '';
-   30| 
-   31| beforeAll(async () => {
-   32|   const build = path.join(scratch, 'build');
-   33|   mkdirSync(build, { recursive: true });
-   34|   writeFileSync(path.join(build, 'index.html'), '<!doctype html><title>page</title>');
-   35|   server = createApp({ simulacra: options, build }).listen(0);
-   36|   await new Promise<void>((resolve) => server.once('listening', resolve));
-   37|   // SAFETY: listen(0) on a TCP port always reports an AddressInfo, never a pipe name.
-   38|   const { port } = server.address() as AddressInfo;
-   39|   base = `http://127.0.0.1:${port}`;
-   40| });
-   41| 
-   42| afterAll(async () => {
-   43|   await new Promise<void>((resolve) => server.close(() => resolve()));
-   44|   rmSync(scratch, { recursive: true, force: true });
-   45| });
-   46| 
-   47| const Election = z.object({ simulated: z.boolean(), slices: z.array(z.object({ key: z.string() })), whatIfs: z.array(z.object({ key: z.string() })) });
-   48| const RunId = z.object({ id: z.string() });
-   49| const Done = z.object({
-   50|   status: z.literal('done'),
-   51|   result: z.looseObject({
-   52|     applied: z.array(z.object({ key: z.string() })),
-   53|     unknown: z.string().nullable(),
-   54|     range: z.unknown().optional(),
-   55|     howIGotThis: z.array(z.string())
-   56|   })
-   57| });
-   58| 
-   59| async function run(body: unknown) {
-   60|   const posted = await fetch(`${base}/api/simulacra/runs`, {
-   61|     method: 'POST',
-   62|     headers: { 'content-type': 'application/json' },
-   63|     body: JSON.stringify(body)
-   64|   });
-   65|   expect(posted.status).toBe(200);
-   66|   const { id } = RunId.parse(await posted.json());
-   67|   const got = await fetch(`${base}/api/simulacra/runs/${id}`);
-   68|   return Done.parse(await got.json()).result;
-   69| }
-   70| 
-   71| describe('/api/simulacra', () => {
-   72|   it('a simulated year answers simulated: true with its slices and what-ifs', async () => {
-   73|     const res = await fetch(`${base}/api/simulacra/elections/1920`);
-   74|     expect(res.status).toBe(200);
-   75|     const e = Election.parse(await res.json());
-   76|     expect(e.simulated).toBe(true);
-   77|     expect(e.slices.map((s) => s.key)).toContain('women');
-   78|     expect(e.whatIfs.map((w) => w.key)).toContain('league');
-   79|   });
-   80| 
-   81|   it('a year with no bundle answers 200 with simulated: false', async () => {
-   82|     const res = await fetch(`${base}/api/simulacra/elections/1999`);
-   83|     expect(res.status).toBe(200);
-   84|     expect(await res.json()).toEqual({ slices: [], whatIfs: [], simulated: false });
-   85|   });
-   86| 
-   87|   it('the manifest names each published year and its run', async () => {
-   88|     const res = await fetch(`${base}/api/simulacra/manifest`);
-   89|     expect(res.headers.get('cache-control')).toBe(SHORT_CACHE);
-   90|     const { years } = z.object({ years: z.record(z.string(), z.string()) }).parse(await res.json());
-   91|     const runId = readFileSync(path.join(ROOT, 'serve', 'bundles', '1920.json'), 'utf8').match(/"runId": ?"([^"]+)"/)?.[1];
-   92|     expect(years['1920']).toBe(runId);
-   93|     expect(years['1999']).toBeUndefined();
-   94|   });
-   95| 
-   96|   it("a year's answer carries its run and is immutable only at its versioned URL", async () => {
-   97|     const plain = await fetch(`${base}/api/simulacra/elections/1920`);
-   98|     expect(plain.headers.get('cache-control')).toBe(SHORT_CACHE);
-   99|     const { runId } = z.object({ runId: z.string() }).parse(await plain.json());
-  100|     const pinned = await fetch(`${base}/api/simulacra/elections/1920?v=${encodeURIComponent(runId)}`);
-  101|     expect(pinned.headers.get('cache-control')).toBe(IMMUTABLE);
-  102|     const stale = await fetch(`${base}/api/simulacra/elections/1920?v=not-this-run`);
-  103|     expect(stale.headers.get('cache-control')).toBe(SHORT_CACHE);
-  104|     const missing = await fetch(`${base}/api/simulacra/elections/1999?v=${encodeURIComponent(runId)}`);
-  105|     expect(missing.headers.get('cache-control')).toBe(SHORT_CACHE);
-  106|   });
-  107| 
-  108|   it('matches keywords as whole words: "flu" is not in "influence"', async () => {
-  109|     const miss = await run({ year: 1920, text: 'the influence of the press' });
-  110|     expect(miss.applied).toEqual([]);
-  111|     expect(miss.unknown).toBe('the influence of the press');
-  112|     const hit = await run({ year: 1920, text: 'the flu comes back' });
-  113|     expect(hit.applied.map((a) => a.key)).toEqual(['influenza-returns-in-october-1920']);
-  114|     expect(hit.unknown).toBeNull();
-  115|   });
-  116| 
-  117|   it('hand edits re-tally one run with no range', async () => {
-  118|     const r = await run({ year: '1920', whatIfs: ['league', 'not-a-what-if'], edits: { women: { home: -0.1, B: 0.1 } } });
-  119|     expect(r.applied.map((a) => a.key)).toEqual(['league']);
-  120|     expect(r.range).toBeUndefined();
-  121|     expect(r.howIGotThis.at(-1)).toMatch(/by hand/);
-  122|   });
-  123| 
-  124|   it('rejects a malformed body at the boundary', async () => {
-  125|     const res = await fetch(`${base}/api/simulacra/runs`, {
-  126|       method: 'POST',
-  127|       headers: { 'content-type': 'application/json' },
-  128|       body: JSON.stringify({ year: 'soon' })
-  129|     });
-  130|     expect(res.status).toBe(400);
-  131|   });
-  132| 
-  133|   it('serves the static build with an SPA fallback', async () => {
-  134|     const res = await fetch(`${base}/some/page`);
-  135|     expect(res.status).toBe(200);
-  136|     expect(await res.text()).toContain('<title>page</title>');
-  137|   });
-  138| 
-  139|   it('parses the shared bundle example', () => {
-  140|     const raw: unknown = JSON.parse(readFileSync(path.join(ROOT, 'tests/fixtures/bundle.example.json'), 'utf8'));
-  141|     const b = Bundle.parse(raw);
-  142|     expect(Object.keys(b.runs)).toContain('');
-  143|     expect(Object.keys(b.tables).sort()).toEqual(Object.keys(b.runs).sort());
-  144|   });
-  145| });
-  146| 
-  147| // The intake path: SIMULACRA_LOG on, open to every visitor, a key's name recorded, per-IP limits.
-  148| describe('/api/simulacra intake guard', () => {
-  149|   const KEY = 'k'.repeat(32);
-  150|   const sessions = path.join(scratch, 'intake-sessions');
-  151|   let guarded: Server;
-  152|   let url = '';
-  153| 
-  154|   beforeAll(async () => {
-  155|     mkdirSync(sessions, { recursive: true });
-  156|     const old = new Date(Date.now() - 30 * 86_400_000).toISOString();
-  157|     writeFileSync(path.join(sessions, 'requests.jsonl'), `${JSON.stringify({ ts: old, text: 'a month ago' })}\n${JSON.stringify({ ts: new Date().toISOString(), text: 'today' })}\n`);
-  158|     const opts: SimulacraOptions = {
-  159|       ...options,
-  160|       sessions,
-  161|       devLog: true,
-  162|       keys: parseKeyRing(JSON.stringify({ ana: KEY })),
-  163|       limits: { ...DEFAULT_LIMITS, intake: { max: 3, windowMs: 60_000 } }
-  164|     };
-  165|     guarded = createApp({ simulacra: opts, build: path.join(scratch, 'none') }).listen(0);
-  166|     await new Promise<void>((resolve) => guarded.once('listening', resolve));
-  167|     // SAFETY: listen(0) on a TCP port always reports an AddressInfo, never a pipe name.
-  168|     url = `http://127.0.0.1:${(guarded.address() as AddressInfo).port}/api/simulacra`;
-  169|   });
-  170| 
-  171|   afterAll(async () => {
-  172|     await new Promise<void>((resolve) => guarded.close(() => resolve()));
-  173|   });
-  174| 
-  175|   const Unknown = z.looseObject({ unknown: z.string().nullable(), unknownWhy: z.string().optional(), queued: z.unknown().optional() });
-  176| 
-  177|   async function ask(text: string, key?: string): Promise<{ status: number; result: z.infer<typeof Unknown> | null }> {
-  178|     const posted = await fetch(`${url}/runs`, {
-  179|       method: 'POST',
-  180|       headers: { 'content-type': 'application/json', ...(key ? { authorization: `Bearer ${key}` } : {}) },
-  181|       body: JSON.stringify({ year: 1920, text })
-  182|     });
-  183|     if (posted.status !== 200) return { status: posted.status, result: null };
-  184|     const { id } = RunId.parse(await posted.json());
-  185|     const got = z.object({ result: Unknown }).parse(await (await fetch(`${url}/runs/${id}`)).json());
-  186|     return { status: 200, result: got.result };
-  187|   }
-  188| 
-  189|   const queue = (): string[] => {
-  190|     try {
-  191|       return readFileSync(path.join(sessions, 'queue.jsonl'), 'utf8').split('\n').filter(Boolean);
-  192|     } catch {
-  193|       return [];
-  194|     }
-  195|   };
-  196| 
-  197|   it('drops session lines older than the retention at startup', () => {
-  198|     const lines = readFileSync(path.join(sessions, 'requests.jsonl'), 'utf8');
-  199|     expect(lines).not.toContain('a month ago');
-  200|     expect(lines).toContain('today');
-  201|   });
-  202| 
-  203|   it('queues text without a key, or with one it does not know, under no name', async () => {
-  204|     for (const [text, key] of [['the moon votes', undefined], ['mars votes', 'x'.repeat(32)]] as const) {
-  205|       const r = await ask(text, key);
-  206|       expect(r.result?.queued).toBeDefined();
-  207|       expect(r.result?.unknownWhy).toBeUndefined();
-  208|     }
-  209|     expect(queue().map((l) => JSON.parse(l))).toEqual([
-  210|       expect.objectContaining({ text: 'the moon votes', who: null }),
-  211|       expect.objectContaining({ text: 'mars votes', who: null })
-  212|     ]);
-  213|   });
-  214| 
-  215|   it("records a valid key's name with its text", async () => {
-  216|     const r = await ask('venus votes', KEY);
-  217|     expect(r.result?.queued).toBeDefined();
-  218|     expect(JSON.parse(queue().at(-1) ?? '{}')).toEqual(expect.objectContaining({ text: 'venus votes', who: 'ana' }));
-  219|   });
-  220| 
-  221|   it('limits how often one IP may queue', async () => {
-  222|     expect((await ask('jupiter votes')).status).toBe(429);
-  223|     expect(queue()).toHaveLength(3);
-  224|   });
-  225| 
-  226|   it('answers a year outside any election without caching it', async () => {
-  227|     const res = await fetch(`${url}/elections/123456`);
-  228|     expect(await res.json()).toEqual({ slices: [], whatIfs: [], simulated: false });
-  229|   });
-  230| });
+   24|   caps: { daily: 20, monthly: 200 },
+   25|   retainDays: 7,
+   26|   limits: DEFAULT_LIMITS
+   27| };
+   28| 
+   29| let server: Server;
+   30| let base = '';
+   31| 
+   32| beforeAll(async () => {
+   33|   const build = path.join(scratch, 'build');
+   34|   mkdirSync(build, { recursive: true });
+   35|   writeFileSync(path.join(build, 'index.html'), '<!doctype html><title>page</title>');
+   36|   server = createApp({ simulacra: options, build }).listen(0);
+   37|   await new Promise<void>((resolve) => server.once('listening', resolve));
+   38|   // SAFETY: listen(0) on a TCP port always reports an AddressInfo, never a pipe name.
+   39|   const { port } = server.address() as AddressInfo;
+   40|   base = `http://127.0.0.1:${port}`;
+   41| });
+   42| 
+   43| afterAll(async () => {
+   44|   await new Promise<void>((resolve) => server.close(() => resolve()));
+   45|   rmSync(scratch, { recursive: true, force: true });
+   46| });
+   47| 
+   48| const Election = z.object({ simulated: z.boolean(), slices: z.array(z.object({ key: z.string() })), whatIfs: z.array(z.object({ key: z.string() })) });
+   49| const RunId = z.object({ id: z.string() });
+   50| const Done = z.object({
+   51|   status: z.literal('done'),
+   52|   result: z.looseObject({
+   53|     applied: z.array(z.object({ key: z.string() })),
+   54|     unknown: z.string().nullable(),
+   55|     range: z.unknown().optional(),
+   56|     howIGotThis: z.array(z.string())
+   57|   })
+   58| });
+   59| 
+   60| async function run(body: unknown) {
+   61|   const posted = await fetch(`${base}/api/simulacra/runs`, {
+   62|     method: 'POST',
+   63|     headers: { 'content-type': 'application/json' },
+   64|     body: JSON.stringify(body)
+   65|   });
+   66|   expect(posted.status).toBe(200);
+   67|   const { id } = RunId.parse(await posted.json());
+   68|   const got = await fetch(`${base}/api/simulacra/runs/${id}`);
+   69|   return Done.parse(await got.json()).result;
+   70| }
+   71| 
+   72| describe('/api/simulacra', () => {
+   73|   it('a simulated year answers simulated: true with its slices and what-ifs', async () => {
+   74|     const res = await fetch(`${base}/api/simulacra/elections/1920`);
+   75|     expect(res.status).toBe(200);
+   76|     const e = Election.parse(await res.json());
+   77|     expect(e.simulated).toBe(true);
+   78|     expect(e.slices.map((s) => s.key)).toContain('women');
+   79|     expect(e.whatIfs.map((w) => w.key)).toContain('league');
+   80|   });
+   81| 
+   82|   it('a year with no bundle answers 200 with simulated: false', async () => {
+   83|     const res = await fetch(`${base}/api/simulacra/elections/1999`);
+   84|     expect(res.status).toBe(200);
+   85|     expect(await res.json()).toEqual({ slices: [], whatIfs: [], simulated: false });
+   86|   });
+   87| 
+   88|   it('the manifest names each published year and its run', async () => {
+   89|     const res = await fetch(`${base}/api/simulacra/manifest`);
+   90|     expect(res.headers.get('cache-control')).toBe(SHORT_CACHE);
+   91|     const { years } = z.object({ years: z.record(z.string(), z.string()) }).parse(await res.json());
+   92|     const runId = readFileSync(path.join(ROOT, 'serve', 'bundles', '1920.json'), 'utf8').match(/"runId": ?"([^"]+)"/)?.[1];
+   93|     expect(years['1920']).toBe(runId);
+   94|     expect(years['1999']).toBeUndefined();
+   95|   });
+   96| 
+   97|   it("a year's answer carries its run and is immutable only at its versioned URL", async () => {
+   98|     const plain = await fetch(`${base}/api/simulacra/elections/1920`);
+   99|     expect(plain.headers.get('cache-control')).toBe(SHORT_CACHE);
+  100|     const { runId } = z.object({ runId: z.string() }).parse(await plain.json());
+  101|     const pinned = await fetch(`${base}/api/simulacra/elections/1920?v=${encodeURIComponent(runId)}`);
+  102|     expect(pinned.headers.get('cache-control')).toBe(IMMUTABLE);
+  103|     const stale = await fetch(`${base}/api/simulacra/elections/1920?v=not-this-run`);
+  104|     expect(stale.headers.get('cache-control')).toBe(SHORT_CACHE);
+  105|     const missing = await fetch(`${base}/api/simulacra/elections/1999?v=${encodeURIComponent(runId)}`);
+  106|     expect(missing.headers.get('cache-control')).toBe(SHORT_CACHE);
+  107|   });
+  108| 
+  109|   it('matches keywords as whole words: "flu" is not in "influence"', async () => {
+  110|     const miss = await run({ year: 1920, text: 'the influence of the press' });
+  111|     expect(miss.applied).toEqual([]);
+  112|     expect(miss.unknown).toBe('the influence of the press');
+  113|     const hit = await run({ year: 1920, text: 'the flu comes back' });
+  114|     expect(hit.applied.map((a) => a.key)).toEqual(['influenza-returns-in-october-1920']);
+  115|     expect(hit.unknown).toBeNull();
+  116|   });
+  117| 
+  118|   it('hand edits re-tally one run with no range', async () => {
+  119|     const r = await run({ year: '1920', whatIfs: ['league', 'not-a-what-if'], edits: { women: { home: -0.1, B: 0.1 } } });
+  120|     expect(r.applied.map((a) => a.key)).toEqual(['league']);
+  121|     expect(r.range).toBeUndefined();
+  122|     expect(r.howIGotThis.at(-1)).toMatch(/by hand/);
+  123|   });
+  124| 
+  125|   it('rejects a malformed body at the boundary', async () => {
+  126|     const res = await fetch(`${base}/api/simulacra/runs`, {
+  127|       method: 'POST',
+  128|       headers: { 'content-type': 'application/json' },
+  129|       body: JSON.stringify({ year: 'soon' })
+  130|     });
+  131|     expect(res.status).toBe(400);
+  132|   });
+  133| 
+  134|   it('serves the static build with an SPA fallback', async () => {
+  135|     const res = await fetch(`${base}/some/page`);
+  136|     expect(res.status).toBe(200);
+  137|     expect(await res.text()).toContain('<title>page</title>');
+  138|   });
+  139| 
+  140|   it('parses the shared bundle example', () => {
+  141|     const raw: unknown = JSON.parse(readFileSync(path.join(ROOT, 'tests/fixtures/bundle.example.json'), 'utf8'));
+  142|     const b = Bundle.parse(raw);
+  143|     expect(Object.keys(b.runs)).toContain('');
+  144|     expect(Object.keys(b.tables).sort()).toEqual(Object.keys(b.runs).sort());
+  145|   });
+  146| });
+  147| 
+  148| // The intake path: SIMULACRA_LOG on, open to every visitor, a key's name recorded, per-IP limits.
+  149| describe('/api/simulacra intake guard', () => {
+  150|   const KEY = 'k'.repeat(32);
+  151|   const sessions = path.join(scratch, 'intake-sessions');
+  152|   let guarded: Server;
+  153|   let url = '';
+  154| 
+  155|   beforeAll(async () => {
+  156|     mkdirSync(sessions, { recursive: true });
+  157|     const old = new Date(Date.now() - 30 * 86_400_000).toISOString();
+  158|     writeFileSync(path.join(sessions, 'requests.jsonl'), `${JSON.stringify({ ts: old, text: 'a month ago' })}\n${JSON.stringify({ ts: new Date().toISOString(), text: 'today' })}\n`);
+  159|     const opts: SimulacraOptions = {
+  160|       ...options,
+  161|       sessions,
+  162|       devLog: true,
+  163|       keys: parseKeyRing(JSON.stringify({ ana: KEY })),
+  164|       limits: { ...DEFAULT_LIMITS, intake: { max: 3, windowMs: 60_000 } }
+  165|     };
+  166|     guarded = createApp({ simulacra: opts, build: path.join(scratch, 'none') }).listen(0);
+  167|     await new Promise<void>((resolve) => guarded.once('listening', resolve));
+  168|     // SAFETY: listen(0) on a TCP port always reports an AddressInfo, never a pipe name.
+  169|     url = `http://127.0.0.1:${(guarded.address() as AddressInfo).port}/api/simulacra`;
+  170|   });
+  171| 
+  172|   afterAll(async () => {
+  173|     await new Promise<void>((resolve) => guarded.close(() => resolve()));
+  174|   });
+  175| 
+  176|   const Unknown = z.looseObject({ unknown: z.string().nullable(), unknownWhy: z.string().optional(), queued: z.unknown().optional() });
+  177| 
+  178|   async function ask(text: string, key?: string): Promise<{ status: number; result: z.infer<typeof Unknown> | null }> {
+  179|     const posted = await fetch(`${url}/runs`, {
+  180|       method: 'POST',
+  181|       headers: { 'content-type': 'application/json', ...(key ? { authorization: `Bearer ${key}` } : {}) },
+  182|       body: JSON.stringify({ year: 1920, text })
+  183|     });
+  184|     if (posted.status !== 200) return { status: posted.status, result: null };
+  185|     const { id } = RunId.parse(await posted.json());
+  186|     const got = z.object({ result: Unknown }).parse(await (await fetch(`${url}/runs/${id}`)).json());
+  187|     return { status: 200, result: got.result };
+  188|   }
+  189| 
+  190|   const queue = (): string[] => {
+  191|     try {
+  192|       return readFileSync(path.join(sessions, 'queue.jsonl'), 'utf8').split('\n').filter(Boolean);
+  193|     } catch {
+  194|       return [];
+  195|     }
+  196|   };
+  197| 
+  198|   it('drops session lines older than the retention at startup', () => {
+  199|     const lines = readFileSync(path.join(sessions, 'requests.jsonl'), 'utf8');
+  200|     expect(lines).not.toContain('a month ago');
+  201|     expect(lines).toContain('today');
+  202|   });
+  203| 
+  204|   it('queues text without a key, or with one it does not know, under no name', async () => {
+  205|     for (const [text, key] of [['the moon votes', undefined], ['mars votes', 'x'.repeat(32)]] as const) {
+  206|       const r = await ask(text, key);
+  207|       expect(r.result?.queued).toBeDefined();
+  208|       expect(r.result?.unknownWhy).toBeUndefined();
+  209|     }
+  210|     expect(queue().map((l) => JSON.parse(l))).toEqual([
+  211|       expect.objectContaining({ text: 'the moon votes', who: null }),
+  212|       expect.objectContaining({ text: 'mars votes', who: null })
+  213|     ]);
+  214|   });
+  215| 
+  216|   it("records a valid key's name with its text", async () => {
+  217|     const r = await ask('venus votes', KEY);
+  218|     expect(r.result?.queued).toBeDefined();
+  219|     expect(JSON.parse(queue().at(-1) ?? '{}')).toEqual(expect.objectContaining({ text: 'venus votes', who: 'ana' }));
+  220|   });
+  221| 
+  222|   it('limits how often one IP may queue', async () => {
+  223|     expect((await ask('jupiter votes')).status).toBe(429);
+  224|     expect(queue()).toHaveLength(3);
+  225|   });
+  226| 
+  227|   it('answers a year outside any election without caching it', async () => {
+  228|     const res = await fetch(`${url}/elections/123456`);
+  229|     expect(await res.json()).toEqual({ slices: [], whatIfs: [], simulated: false });
+  230|   });
+  231| });
+  232| 
+  233| // The dollar caps: every visitor's spend together, read from the ledger before anything is queued.
+  234| describe('/api/simulacra intake dollar caps', () => {
+  235|   const sessions = path.join(scratch, 'capped-sessions');
+  236|   const ledger = path.join(sessions, 'spend.jsonl');
+  237|   const today = new Date().toISOString().slice(0, 10);
+  238|   let capped: Server;
+  239|   let url = '';
+  240| 
+  241|   beforeAll(async () => {
+  242|     mkdirSync(sessions, { recursive: true });
+  243|     const opts: SimulacraOptions = { ...options, sessions, devLog: true, caps: { daily: 5, monthly: 50 } };
+  244|     capped = createApp({ simulacra: opts, build: path.join(scratch, 'none') }).listen(0);
+  245|     await new Promise<void>((resolve) => capped.once('listening', resolve));
+  246|     // SAFETY: listen(0) on a TCP port always reports an AddressInfo, never a pipe name.
+  247|     url = `http://127.0.0.1:${(capped.address() as AddressInfo).port}/api/simulacra`;
+  248|   });
+  249| 
+  250|   afterAll(async () => {
+  251|     await new Promise<void>((resolve) => capped.close(() => resolve()));
+  252|   });
+  253| 
+  254|   const Result = z.looseObject({ unknownWhy: z.string().optional(), queued: z.unknown().optional() });
+  255| 
+  256|   async function ask(text: string): Promise<z.infer<typeof Result>> {
+  257|     const posted = await fetch(`${url}/runs`, {
+  258|       method: 'POST',
+  259|       headers: { 'content-type': 'application/json' },
+  260|       body: JSON.stringify({ year: 1920, text })
+  261|     });
+  262|     expect(posted.status).toBe(200);
+  263|     const { id } = RunId.parse(await posted.json());
+  264|     return z.object({ result: Result }).parse(await (await fetch(`${url}/runs/${id}`)).json()).result;
+  265|   }
+  266| 
+  267|   const queued = (): number => {
+  268|     try {
+  269|       return readFileSync(path.join(sessions, 'queue.jsonl'), 'utf8').split('\n').filter(Boolean).length;
+  270|     } catch {
+  271|       return 0;
+  272|     }
+  273|   };
+  274| 
+  275|   it("queues nothing once today's spend, from anyone, reaches the daily cap, and says why", async () => {
+  276|     // Two visitors' lines, one with a key's name and one without: both count.
+  277|     writeFileSync(ledger, `${JSON.stringify({ day: today, dollars: 3, who: 'ana' })}\n${JSON.stringify({ day: today, dollars: 2, who: null })}\n`);
+  278|     const r = await ask('the moon votes');
+  279|     expect(r.unknownWhy).toBe(OVER_DAILY_CAP);
+  280|     expect(r.queued).toBeUndefined();
+  281|     expect(queued()).toBe(0);
+  282|   });
+  283| 
+  284|   it("queues nothing once this month's spend reaches the monthly cap", async () => {
+  285|     writeFileSync(ledger, `${JSON.stringify({ day: `${today.slice(0, 8)}01`, dollars: 50, who: null })}\n`);
+  286|     const r = await ask('mars votes');
+  287|     expect(r.unknownWhy).toBe(OVER_MONTHLY_CAP);
+  288|     expect(queued()).toBe(0);
+  289|   });
+  290| 
+  291|   it('queues again under both caps', async () => {
+  292|     writeFileSync(ledger, `${JSON.stringify({ day: '2000-01-01', dollars: 500, who: null })}\n`);
+  293|     const r = await ask('venus votes');
+  294|     expect(r.queued).toBeDefined();
+  295|     expect(queued()).toBe(1);
+  296|   });
+  297| });
 ```
 
 ## `serve/simulacra.ts`
@@ -568,546 +1084,560 @@ Files `serve/guard.test.ts` to `simharness/aggregate.py`. Lines are numbered as 
    17| //     (ts, year, text, whatIfs, matched, unknown, combo, exists; no IPs, no ids);
    18| //   - unmatched text is queued in sessions/queue.jsonl for
    19| //     `python -m simharness.run whatif --queue`, with the name of the access key
-   20| //     the request carried (SIMULACRA_ACCESS_KEYS), if any, for the spend ledger.
-   21| //     Nothing caps the dollars; each IP may queue a few texts an hour (guard.ts);
-   22| //   - a queued text holds its run `running` (with the worker's `steps`) when
-   23| //     SIMULACRA_AUTORUN=<config path> starts that worker in the background from
-   24| //     the repo root (one at a time); otherwise the result says `queued`;
-   25| //   - session logs drop lines older than SIMULACRA_RETAIN_DAYS (default 7), and
-   26| //     the spend ledger keeps old lines without their `note`, so visitors'
-   27| //     words aren't kept for good;
-   28| //   - a bundle file that changed on disk is reloaded, so a publish needs no restart.
-   29| import { type ChildProcess, spawn } from 'node:child_process';
-   30| import { randomUUID } from 'node:crypto';
-   31| import { appendFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
-   32| import { homedir } from 'node:os';
-   33| import path from 'node:path';
-   34| import express, { type ErrorRequestHandler, type RequestHandler, type Router } from 'express';
-   35| import type { z } from 'zod';
-   36| import {
-   37|   Bundle,
-   38|   type Edits,
-   39|   FIELDS,
-   40|   type Field,
-   41|   IntakeStatus,
-   42|   type PageKey,
-   43|   QueueDone,
-   44|   QueueFailed,
-   45|   type Result,
-   46|   RunRequest,
-   47|   type Slice,
-   48|   type Step,
-   49|   type TableRow,
-   50|   type Told
-   51| } from './bundle';
-   52| import { capLog, type KeyRing, type Limit, parseKeyRing, pruneJsonl, RateLimiter } from './guard';
-   53| 
-   54| const ROOT = path.resolve(import.meta.dirname, '..');
+   20| //     the request carried (SIMULACRA_ACCESS_KEYS), if any, for the spend ledger,
+   21| //     while spend is under the daily and monthly dollar caps (guard.ts, every
+   22| //     visitor together); over a cap, the run answers at once with `unknownWhy`
+   23| //     saying so. Each IP may queue a few texts an hour (guard.ts);
+   24| //   - a queued text holds its run `running` (with the worker's `steps`) when
+   25| //     SIMULACRA_AUTORUN=<config path> starts that worker in the background from
+   26| //     the repo root (one at a time); otherwise the result says `queued`;
+   27| //   - session logs drop lines older than SIMULACRA_RETAIN_DAYS (default 7), and
+   28| //     the spend ledger keeps old lines without their `note`, so visitors'
+   29| //     words aren't kept for good;
+   30| //   - a bundle file that changed on disk is reloaded, so a publish needs no restart.
+   31| import { type ChildProcess, spawn } from 'node:child_process';
+   32| import { randomUUID } from 'node:crypto';
+   33| import { appendFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
+   34| import { homedir } from 'node:os';
+   35| import path from 'node:path';
+   36| import express, { type ErrorRequestHandler, type RequestHandler, type Router } from 'express';
+   37| import type { z } from 'zod';
+   38| import {
+   39|   Bundle,
+   40|   type Edits,
+   41|   FIELDS,
+   42|   type Field,
+   43|   IntakeStatus,
+   44|   type PageKey,
+   45|   QueueDone,
+   46|   QueueFailed,
+   47|   type Result,
+   48|   RunRequest,
+   49|   type Slice,
+   50|   type Step,
+   51|   type TableRow,
+   52|   type Told
+   53| } from './bundle';
+   54| import { type Caps, capLog, capsFromEnv, checkCaps, type KeyRing, type Limit, parseKeyRing, pruneJsonl, RateLimiter } from './guard';
    55| 
-   56| export interface SimulacraOptions {
-   57|   /** Folder of `<year>.json` bundles. */
-   58|   bundles: string;
-   59|   /** Where dev logs, the queue and the worker's status live. */
-   60|   sessions: string;
-   61|   /** Dev logging and queueing (SIMULACRA_LOG). */
-   62|   devLog: boolean;
-   63|   /** Config path for the background intake worker (SIMULACRA_AUTORUN), relative to `root`. */
-   64|   autorun: string | null;
-   65|   /** Python with the harness installed (SIMULACRA_PYTHON). */
-   66|   python: string;
-   67|   /** The repo root: the worker runs `python -m simharness.run` from here. */
-   68|   root: string;
-   69|   /** Access keys whose names the spend ledger records (SIMULACRA_ACCESS_KEYS). */
-   70|   keys: KeyRing;
-   71|   /** Days session logs keep a line (SIMULACRA_RETAIN_DAYS). */
-   72|   retainDays: number;
-   73|   /** Per-IP rate limits. */
-   74|   limits: Limits;
-   75| }
-   76| 
-   77| export interface Limits {
-   78|   /** Every request to the router. */
-   79|   readonly any: Limit;
-   80|   /** POST /runs. */
-   81|   readonly runs: Limit;
-   82|   /** POST /runs whose text would be queued. */
-   83|   readonly intake: Limit;
-   84| }
-   85| 
-   86| const MINUTE = 60_000;
-   87| // The page polls a run every 300 ms (1 s while a new what-if is modelled).
-   88| export const DEFAULT_LIMITS: Limits = {
-   89|   any: { max: 1200, windowMs: 10 * MINUTE },
-   90|   runs: { max: 120, windowMs: 10 * MINUTE },
-   91|   intake: { max: 10, windowMs: 60 * MINUTE }
-   92| };
-   93| 
-   94| export function optionsFromEnv(env: NodeJS.ProcessEnv = process.env): SimulacraOptions {
-   95|   return {
-   96|     bundles: env.SIMULACRA_BUNDLES || path.join(ROOT, 'serve', 'bundles'),
-   97|     sessions: path.join(ROOT, 'sessions'),
-   98|     devLog: Boolean(env.SIMULACRA_LOG),
-   99|     autorun: env.SIMULACRA_AUTORUN || null,
-  100|     python: env.SIMULACRA_PYTHON || path.join(homedir(), '.venvs/simharness/bin/python'),
-  101|     root: ROOT,
-  102|     keys: parseKeyRing(env.SIMULACRA_ACCESS_KEYS),
-  103|     retainDays: env.SIMULACRA_RETAIN_DAYS ? Number(env.SIMULACRA_RETAIN_DAYS) : 7,
-  104|     limits: DEFAULT_LIMITS
-  105|   };
-  106| }
-  107| 
-  108| /** The result the page receives: a bundle result plus the brief and interviews behind it. */
-  109| export type RunResult = Result & {
-  110|   told?: Record<string, Told>;
-  111|   reading?: Record<string, unknown>[];
-  112|   pre?: Record<string, unknown>;
-  113|   interview?: { questions: string[] | undefined; byWhatIf: { whatIf: string; answers: unknown[] }[] };
-  114|   queued?: { text: string; worker: boolean };
-  115|   unknownWhy?: string;
-  116| };
-  117| 
-  118| interface Pending {
-  119|   text: string;
-  120|   keys: string[];
-  121|   edits: Edits;
-  122|   /** The name of the access key that queued the text, if any. */
-  123|   who: string | null;
-  124| }
-  125| 
-  126| type RunEntry =
-  127|   | { state: 'done'; year: number; created: number; key: string; result: RunResult }
-  128|   | { state: 'pending'; year: number; created: number; pending: Pending };
-  129| 
-  130| type Settled =
-  131|   | { status: 'running'; steps: Step[] }
-  132|   | { status: 'failed'; error: string }
-  133|   | { status: 'done'; key: string; result: RunResult };
+   56| const ROOT = path.resolve(import.meta.dirname, '..');
+   57| 
+   58| export interface SimulacraOptions {
+   59|   /** Folder of `<year>.json` bundles. */
+   60|   bundles: string;
+   61|   /** Where dev logs, the queue and the worker's status live. */
+   62|   sessions: string;
+   63|   /** Dev logging and queueing (SIMULACRA_LOG). */
+   64|   devLog: boolean;
+   65|   /** Config path for the background intake worker (SIMULACRA_AUTORUN), relative to `root`. */
+   66|   autorun: string | null;
+   67|   /** Python with the harness installed (SIMULACRA_PYTHON). */
+   68|   python: string;
+   69|   /** The repo root: the worker runs `python -m simharness.run` from here. */
+   70|   root: string;
+   71|   /** Access keys whose names the spend ledger records (SIMULACRA_ACCESS_KEYS). */
+   72|   keys: KeyRing;
+   73|   /** Dollar caps on the intake, every visitor together (SIMULACRA_DAILY_USD, SIMULACRA_MONTHLY_USD). */
+   74|   caps: Caps;
+   75|   /** Days session logs keep a line (SIMULACRA_RETAIN_DAYS). */
+   76|   retainDays: number;
+   77|   /** Per-IP rate limits. */
+   78|   limits: Limits;
+   79| }
+   80| 
+   81| export interface Limits {
+   82|   /** Every request to the router. */
+   83|   readonly any: Limit;
+   84|   /** POST /runs. */
+   85|   readonly runs: Limit;
+   86|   /** POST /runs whose text would be queued. */
+   87|   readonly intake: Limit;
+   88| }
+   89| 
+   90| const MINUTE = 60_000;
+   91| // The page polls a run every 300 ms (1 s while a new what-if is modelled).
+   92| export const DEFAULT_LIMITS: Limits = {
+   93|   any: { max: 1200, windowMs: 10 * MINUTE },
+   94|   runs: { max: 120, windowMs: 10 * MINUTE },
+   95|   intake: { max: 10, windowMs: 60 * MINUTE }
+   96| };
+   97| 
+   98| export function optionsFromEnv(env: NodeJS.ProcessEnv = process.env): SimulacraOptions {
+   99|   return {
+  100|     bundles: env.SIMULACRA_BUNDLES || path.join(ROOT, 'serve', 'bundles'),
+  101|     sessions: path.join(ROOT, 'sessions'),
+  102|     devLog: Boolean(env.SIMULACRA_LOG),
+  103|     autorun: env.SIMULACRA_AUTORUN || null,
+  104|     python: env.SIMULACRA_PYTHON || path.join(homedir(), '.venvs/simharness/bin/python'),
+  105|     root: ROOT,
+  106|     keys: parseKeyRing(env.SIMULACRA_ACCESS_KEYS),
+  107|     caps: capsFromEnv(env),
+  108|     retainDays: env.SIMULACRA_RETAIN_DAYS ? Number(env.SIMULACRA_RETAIN_DAYS) : 7,
+  109|     limits: DEFAULT_LIMITS
+  110|   };
+  111| }
+  112| 
+  113| /** The result the page receives: a bundle result plus the brief and interviews behind it. */
+  114| export type RunResult = Result & {
+  115|   told?: Record<string, Told>;
+  116|   reading?: Record<string, unknown>[];
+  117|   pre?: Record<string, unknown>;
+  118|   interview?: { questions: string[] | undefined; byWhatIf: { whatIf: string; answers: unknown[] }[] };
+  119|   queued?: { text: string; worker: boolean };
+  120|   unknownWhy?: string;
+  121| };
+  122| 
+  123| interface Pending {
+  124|   text: string;
+  125|   keys: string[];
+  126|   edits: Edits;
+  127|   /** The name of the access key that queued the text, if any. */
+  128|   who: string | null;
+  129| }
+  130| 
+  131| type RunEntry =
+  132|   | { state: 'done'; year: number; created: number; key: string; result: RunResult }
+  133|   | { state: 'pending'; year: number; created: number; pending: Pending };
   134| 
-  135| type Totals = Record<PageKey, number>;
-  136| 
-  137| const RUN_TTL_MS = 60 * 60 * 1000;
-  138| const PENDING_MS = 10 * 60 * 1000;
-  139| /** Runs held at once; past it the oldest go first. */
-  140| const MAX_RUNS = 10_000;
-  141| /** The worker's plain-text log is emptied past this (CloudWatch keeps a copy). */
-  142| const MAX_WORKER_LOG_BYTES = 20 * 1024 * 1024;
-  143| const SESSION_LOGS = ['requests.jsonl', 'queue.jsonl', 'queue-done.jsonl', 'queue-failed.jsonl'];
-  144| /** The spend ledger outlives the retention, without the visitor's words in `note`. */
-  145| const LEDGER_SCRUB = ['note'];
-  146| /** Years a bundle can exist for; any other year is answered without touching the cache. */
-  147| const FIRST_YEAR = 1789;
-  148| const LAST_YEAR = 2100;
-  149| 
-  150| const KEYS: readonly PageKey[] = ['A', 'B', 'O'];
-  151| 
-  152| export const comboKey = (keys: readonly string[]): string => [...new Set(keys)].sort().join('+');
-  153| 
-  154| const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  155| 
-  156| /** Whole words only: compiled what-ifs bring short keywords ("flu" must not match "influence"). */
-  157| export function readText(b: Bundle, text: string): { keys: string[]; unknown: string | null } {
-  158|   if (!text.trim()) return { keys: [], unknown: null };
-  159|   const lower = text.toLowerCase();
-  160|   const has = (w: string): boolean => new RegExp(`(^|[^a-z0-9])${escapeRegExp(w)}($|[^a-z0-9])`).test(lower);
-  161|   const keys = b.words.filter(({ words }) => words.some(has)).map(({ key }) => key);
-  162|   return keys.length ? { keys, unknown: null } : { keys: [], unknown: text };
-  163| }
-  164| 
-  165| function edited(row: Record<Field, number>, e: Edits[string] | undefined): Record<Field, number> {
-  166|   const f = Object.fromEntries(FIELDS.map((k) => [k, Math.max(0, row[k] + (e?.[k] ?? 0))]));
-  167|   // SAFETY: built from FIELDS, so every Field key is present.
-  168|   return f as Record<Field, number>;
-  169| }
-  170| 
-  171| const total = (f: Record<Field, number>): number => FIELDS.reduce((s, k) => s + f[k], 0) || 1;
-  172| 
-  173| /** Apply hand edits to the point run's state × group table, then re-tally states and EV. */
-  174| export function applyEdits(b: Bundle, result: Result, table: readonly TableRow[], edits: Edits): RunResult {
-  175|   const byState = new Map<string, Totals>();
-  176|   for (const row of table) {
-  177|     const f = edited(row, edits[row.slice]);
-  178|     const sum = total(f);
-  179|     const st = byState.get(row.state) ?? { A: 0, B: 0, O: 0 };
-  180|     for (const k of KEYS) st[k] += (row.adults * f[k]) / sum;
-  181|     byState.set(row.state, st);
-  182|   }
-  183|   const ev: Totals = { A: 0, B: 0, O: 0 };
-  184|   const states = result.states.map((s) => {
-  185|     const v = byState.get(s.code) ?? { A: 0, B: 0, O: 0 };
-  186|     const [first = 'A', second = 'B'] = [...KEYS].sort((x, y) => v[y] - v[x]);
-  187|     const votes = v.A + v.B + v.O || 1;
-  188|     ev[first] += b.ev[s.code] ?? 0;
-  189|     return {
-  190|       code: s.code,
-  191|       won: first,
-  192|       flipped: first !== b.historyWinner[s.code],
-  193|       margin: Math.round(((v[first] - v[second]) / votes) * 1000) / 10
-  194|     };
-  195|   });
-  196|   const need = Object.values(b.ev).reduce((s, x) => s + x, 0) / 2;
-  197|   const winner = KEYS.find((k) => ev[k] > need) ?? null;
-  198|   const slices = result.slices.map((s): Slice => {
-  199|     const e = edits[s.key];
-  200|     if (!e) return s;
-  201|     const f = edited(s, e);
-  202|     const sum = total(f);
-  203|     return { ...s, ...Object.fromEntries(FIELDS.map((k) => [k, f[k] / sum])) };
-  204|   });
-  205|   const { range: _range, drawsWon: _drawsWon, ...rest } = result;
-  206|   return {
-  207|     ...rest,
-  208|     ev,
-  209|     winner,
-  210|     states,
-  211|     slices,
-  212|     howIGotThis: [...(result.howIGotThis ?? []), 'You moved some groups by hand, so this is one run with no range.']
-  213|   };
-  214| }
-  215| 
-  216| /** One computed result for a year's what-if keys, or null when the combination wasn't precomputed. */
-  217| export function compute(
-  218|   b: Bundle,
-  219|   keys: readonly string[],
-  220|   edits: Edits,
-  221|   unknown: string | null
-  222| ): { key: string; result: RunResult } | null {
-  223|   const key = comboKey(keys);
-  224|   const base = b.runs[key];
-  225|   if (!base) return null;
-  226|   const result = Object.keys(edits).length ? applyEdits(b, base, b.tables[key] ?? [], edits) : base;
-  227|   // Additive: the interviews behind each applied what-if, when the bundle has them.
-  228|   const byWhatIf = b.interviews.byWhatIf ?? {};
-  229|   const interviews = keys.flatMap((k) => {
-  230|     const answers = byWhatIf[k];
-  231|     return answers ? [{ whatIf: k, answers }] : [];
-  232|   });
-  233|   // What the voters were told for each applied what-if, and the dated newspaper items in their briefs.
-  234|   const told = Object.fromEntries(keys.flatMap((k) => (b.told?.[k] ? [[k, b.told[k]]] : [])));
-  235|   return {
-  236|     key,
-  237|     result: {
-  238|       ...result,
-  239|       unknown,
-  240|       ...(Object.keys(told).length ? { told } : {}),
-  241|       ...(b.reading?.length ? { reading: b.reading } : {}),
-  242|       ...(b.pre ? { pre: b.pre } : {}),
-  243|       ...(interviews.length ? { interview: { questions: b.interviews.questions, byWhatIf: interviews } } : {})
-  244|     }
-  245|   };
-  246| }
-  247| 
-  248| const norm = (t: string): string => t.toLowerCase().split(/\s+/).filter(Boolean).join(' ');
-  249| 
-  250| function readJsonl<T>(file: string, schema: z.ZodType<T>): T[] {
-  251|   let text: string;
-  252|   try {
-  253|     text = readFileSync(file, 'utf8');
-  254|   } catch {
-  255|     return [];
-  256|   }
-  257|   return text
-  258|     .split('\n')
-  259|     .filter(Boolean)
-  260|     .flatMap((line) => {
-  261|       try {
-  262|         const parsed = schema.safeParse(JSON.parse(line));
-  263|         return parsed.success ? [parsed.data] : [];
-  264|       } catch {
-  265|         return [];
-  266|       }
-  267|     });
-  268| }
-  269| 
-  270| /** A year's answer at a URL that names its run never changes. */
-  271| export const IMMUTABLE = 'public, max-age=31536000, s-maxage=31536000, immutable';
-  272| /** Unversioned answers and the manifest: a minute fresh, then revalidated. */
-  273| export const SHORT_CACHE = 'public, max-age=60, s-maxage=60, stale-while-revalidate=300';
-  274| 
-  275| export function createSimulacraRouter(opts: SimulacraOptions = optionsFromEnv()): Router {
-  276|   const bundles = new Map<number, { bundle: Bundle | null; mtime: number }>();
-  277|   const runs = new Map<string, RunEntry>();
-  278|   let worker: ChildProcess | null = null;
-  279|   let queuedWhileBusy = false;
-  280| 
-  281|   const mtimeOf = (file: string): number => (existsSync(file) ? statSync(file).mtimeMs : 0);
-  282| 
-  283|   function loadBundle(year: number): Bundle | null {
-  284|     if (!Number.isInteger(year) || year < FIRST_YEAR || year > LAST_YEAR) return null;
-  285|     const file = path.join(opts.bundles, `${year}.json`);
-  286|     const cached = bundles.get(year);
-  287|     if (cached && (!opts.devLog || cached.mtime === mtimeOf(file))) return cached.bundle;
-  288|     let bundle: Bundle | null = null;
-  289|     if (existsSync(file)) {
-  290|       const parsed = Bundle.safeParse(JSON.parse(readFileSync(file, 'utf8')));
-  291|       if (parsed.success) bundle = parsed.data;
-  292|       else console.warn(`simulacra: ${file} doesn't fit the bundle contract`, parsed.error.issues.slice(0, 3));
-  293|     }
-  294|     bundles.set(year, { bundle, mtime: mtimeOf(file) });
-  295|     return bundle;
-  296|   }
-  297| 
-  298|   function appendLine(name: string, row: unknown): void {
-  299|     try {
-  300|       mkdirSync(opts.sessions, { recursive: true });
-  301|       appendFileSync(path.join(opts.sessions, name), `${JSON.stringify(row)}\n`);
-  302|     } catch (e) {
-  303|       console.warn('simulacra: session log failed', e instanceof Error ? e.message : e);
-  304|     }
-  305|   }
-  306| 
-  307|   function startWorker(): void {
-  308|     if (!opts.autorun) return;
-  309|     if (worker) {
-  310|       queuedWhileBusy = true;
-  311|       return;
-  312|     }
-  313|     queuedWhileBusy = false;
-  314|     mkdirSync(opts.sessions, { recursive: true });
-  315|     const child = spawn(opts.python, ['-m', 'simharness.run', 'whatif', '--queue', '--limit', '5', '--config', opts.autorun], {
-  316|       cwd: opts.root,
-  317|       stdio: ['ignore', 'pipe', 'pipe']
-  318|     });
-  319|     const out = createWriteStream(path.join(opts.sessions, 'intake.log'), { flags: 'a' });
-  320|     child.stdout?.pipe(out);
-  321|     child.stderr?.pipe(out);
-  322|     child.on('error', (e) => out.write(`simulacra: worker failed to start: ${e.message}\n`));
-  323|     // Text typed while a worker ran is picked up by a fresh one (a worker that
-  324|     // stopped on a cap leaves its text queued and isn't restarted by itself).
-  325|     child.on('exit', () => {
-  326|       worker = null;
-  327|       if (queuedWhileBusy) startWorker();
-  328|     });
-  329|     worker = child;
-  330|   }
-  331| 
-  332|   // Runs are added in creation order (an entry replaced in place keeps its
-  333|   // slot), so the oldest are at the front: pruning stops at the first live one.
-  334|   function newRun(entry: RunEntry): string {
-  335|     const id = randomUUID();
-  336|     runs.set(id, entry);
-  337|     for (const [k, r] of runs) {
-  338|       if (Date.now() - r.created <= RUN_TTL_MS && runs.size <= MAX_RUNS) break;
-  339|       runs.delete(k);
-  340|     }
-  341|     return id;
-  342|   }
-  343| 
-  344|   // Session logs keep SIMULACRA_RETAIN_DAYS of lines. The worker appends to
-  345|   // them, so they're rewritten only while no worker runs.
-  346|   function prune(): void {
-  347|     if (!opts.devLog || worker) return;
-  348|     const maxAge = opts.retainDays * 24 * 60 * MINUTE;
-  349|     for (const name of [...SESSION_LOGS, 'spend.jsonl']) {
-  350|       try {
-  351|         const scrub = name === 'spend.jsonl' ? LEDGER_SCRUB : undefined;
-  352|         const n = pruneJsonl(path.join(opts.sessions, name), maxAge, Date.now(), scrub);
-  353|         if (n) console.log(`simulacra: ${scrub ? 'scrubbed' : 'dropped'} ${n} lines older than ${opts.retainDays} days in ${name}`);
-  354|       } catch (e) {
-  355|         console.warn(`simulacra: pruning ${name} failed`, e instanceof Error ? e.message : e);
-  356|       }
-  357|     }
-  358|     capLog(path.join(opts.sessions, 'intake.log'), MAX_WORKER_LOG_BYTES);
-  359|   }
-  360|   prune();
-  361|   setInterval(prune, 60 * MINUTE).unref();
-  362| 
-  363|   const limiters = {
-  364|     any: new RateLimiter(opts.limits.any),
-  365|     runs: new RateLimiter(opts.limits.runs),
-  366|     intake: new RateLimiter(opts.limits.intake)
-  367|   };
-  368|   const limited = (res: express.Response, retryAfterS: number): void => {
-  369|     res.set('Retry-After', String(retryAfterS)).status(429).json({ error: 'Too many requests just now. Try again in a few minutes.' });
-  370|   };
-  371|   const rateLimit =
-  372|     (which: keyof typeof limiters): RequestHandler =>
-  373|     (req, res, next) => {
-  374|       const a = limiters[which].admit(req.ip ?? 'unknown');
-  375|       if (a.ok) next();
-  376|       else limited(res, a.retryAfterS);
-  377|     };
-  378| 
-  379|   // Where the worker is with a pending run's text.
-  380|   function settle(r: Extract<RunEntry, { state: 'pending' }>): Settled {
-  381|     const t = norm(r.pending.text);
-  382|     const sameYear = (x: { year?: number | null }): boolean => (x.year ?? 1920) === r.year;
-  383|     const outcome = readJsonl(path.join(opts.sessions, 'queue-done.jsonl'), QueueDone)
-  384|       .filter((x) => x.text === t && sameYear(x))
-  385|       .pop();
-  386|     const failed = readJsonl(path.join(opts.sessions, 'queue-failed.jsonl'), QueueFailed)
-  387|       .filter((x) => x.text === t && sameYear(x) && x.at * 1000 >= r.created)
-  388|       .pop();
-  389|     const b = loadBundle(r.year);
-  390|     if (outcome && (outcome.status === 'modelled' || outcome.status === 'keyword') && outcome.key && b) {
-  391|       const done =
-  392|         compute(b, [...new Set([...r.pending.keys, outcome.key])], r.pending.edits, null) ??
-  393|         compute(b, [outcome.key], r.pending.edits, null);
-  394|       if (done) return { status: 'done', key: done.key, result: done.result };
-  395|       return { status: 'failed', error: 'The new what-if was modelled, but not in this combination. Try it on its own.' };
-  396|     }
-  397|     const stopped = outcome ?? failed;
-  398|     if (stopped) {
-  399|       // Not modellable, or the worker stopped: the run finishes unchanged, saying why.
-  400|       const done = b ? compute(b, r.pending.keys, r.pending.edits, r.pending.text) : null;
-  401|       const why = stopped.why ?? '';
-  402|       if (!done) return { status: 'failed', error: why || 'Couldn’t model that.' };
-  403|       return { status: 'done', key: done.key, result: { ...done.result, unknownWhy: why } };
-  404|     }
-  405|     if (Date.now() - r.created > PENDING_MS) return { status: 'failed', error: 'Modelling that took too long. Try again in a minute.' };
-  406|     if (!worker) startWorker();
-  407|     let steps: Step[] = [{ text: 'Waiting for the what-ifs typed before this one.', state: 'doing' }];
-  408|     try {
-  409|       const st = IntakeStatus.safeParse(JSON.parse(readFileSync(path.join(opts.sessions, 'intake-status.json'), 'utf8')));
-  410|       if (st.success && st.data.text === t) steps = st.data.steps;
-  411|     } catch {
-  412|       // not started
-  413|     }
-  414|     return { status: 'running', steps: [{ text: `Reading “${r.pending.text}”: it’s new to me.`, state: 'done' }, ...steps] };
-  415|   }
-  416| 
-  417|   const router = express.Router();
-  418|   router.use(rateLimit('any'));
-  419|   router.use(express.json({ limit: '64kb' }));
-  420| 
-  421|   // Every published year and the run its bundle came from. The page reads it
-  422|   // first and asks for each year at /elections/<year>?v=<runId>, so a year's
-  423|   // answer can be cached for good: a new run means a new URL.
-  424|   router.get('/manifest', (_req, res) => {
-  425|     const years: Record<string, string> = {};
-  426|     const files = existsSync(opts.bundles) ? readdirSync(opts.bundles) : [];
-  427|     for (const f of files.filter((name) => /^\d{4}\.json$/.test(name)).sort()) {
-  428|       const b = loadBundle(Number(f.slice(0, 4)));
-  429|       if (b) years[f.slice(0, 4)] = b.runId;
-  430|     }
-  431|     res.set('Cache-Control', SHORT_CACHE).json({ years });
-  432|   });
-  433| 
-  434|   // A year without a bundle answers 200 with `simulated: false`, not 404: the
-  435|   // page reads a 404 before any answer as "there is no simulation service".
-  436|   router.get('/elections/:year', (req, res) => {
-  437|     const b = loadBundle(Number(req.params.year));
-  438|     if (!b) {
-  439|       res.set('Cache-Control', SHORT_CACHE).json({ slices: [], whatIfs: [], simulated: false });
-  440|       return;
-  441|     }
-  442|     // Immutable only when the URL names the run being served.
-  443|     res.set('Cache-Control', req.query.v === b.runId ? IMMUTABLE : SHORT_CACHE);
-  444|     res.json({ ...b.election, simulated: true, runId: b.runId });
-  445|   });
-  446| 
-  447|   router.post('/runs', rateLimit('runs'), (req, res) => {
-  448|     const body = RunRequest.safeParse(req.body ?? {});
-  449|     if (!body.success) {
-  450|       res.status(400).json({ error: 'bad request', issues: body.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`) });
-  451|       return;
-  452|     }
-  453|     const { year, whatIfs, text, edits } = body.data;
-  454|     const b = loadBundle(year);
-  455|     if (!b) {
-  456|       res.status(404).json({ error: 'no simulation for this year' });
-  457|       return;
-  458|     }
-  459|     const known = new Set(b.election.whatIfs.map((w) => w.key));
-  460|     const chosen = whatIfs.filter((k) => known.has(k));
-  461|     const read = readText(b, text);
-  462|     const keys = [...chosen, ...read.keys];
-  463|     const done = compute(b, keys, edits, read.unknown);
-  464|     let queued = false;
-  465|     // The access key's name, if the request carried one: the spend ledger records it.
-  466|     let who: string | null = null;
-  467|     if (opts.devLog) {
-  468|       const ts = new Date().toISOString();
-  469|       appendLine('requests.jsonl', { ts, year, text, whatIfs, matched: read.keys, unknown: read.unknown, combo: comboKey(keys), exists: Boolean(done) });
-  470|       if (read.unknown) {
-  471|         const a = limiters.intake.admit(req.ip ?? 'unknown');
-  472|         if (!a.ok) {
-  473|           limited(res, a.retryAfterS);
-  474|           return;
-  475|         }
-  476|         who = opts.keys.identify(req.get('authorization'));
-  477|         appendLine('queue.jsonl', { ts, year, text: read.unknown, who });
-  478|         queued = true;
-  479|         startWorker();
-  480|       }
-  481|     }
-  482|     // With the worker on, new words hold the run open (GET reports the
-  483|     // worker's steps) until they are compiled, researched, interviewed and
-  484|     // published; then the run finishes with the new what-if applied.
-  485|     if (queued && read.unknown && opts.autorun) {
-  486|       const pending = { text: read.unknown, keys: chosen, edits, who };
-  487|       res.json({ id: newRun({ state: 'pending', year, created: Date.now(), pending }) });
-  488|       return;
-  489|     }
-  490|     if (!done) {
-  491|       res.status(422).json({ error: 'That combination has not been computed.' });
-  492|       return;
-  493|     }
-  494|     let result: RunResult = done.result;
-  495|     if (queued && read.unknown) result = { ...result, queued: { text: read.unknown, worker: Boolean(worker) } };
-  496|     res.json({ id: newRun({ state: 'done', year, created: Date.now(), key: done.key, result }) });
-  497|   });
-  498| 
-  499|   router.get('/runs/:id', (req, res) => {
-  500|     const r = runs.get(req.params.id);
-  501|     if (!r) {
-  502|       res.status(404).json({ error: 'no such run' });
-  503|       return;
-  504|     }
-  505|     let result: RunResult;
-  506|     if (r.state === 'pending') {
-  507|       const s = settle(r);
-  508|       if (s.status === 'running') {
-  509|         res.json({ status: 'running', done: 0, total: 0, error: null, steps: s.steps });
-  510|         return;
-  511|       }
-  512|       if (s.status === 'failed') {
-  513|         runs.delete(req.params.id);
-  514|         res.json({ status: 'failed', error: s.error });
-  515|         return;
-  516|       }
-  517|       runs.set(req.params.id, { state: 'done', year: r.year, created: r.created, key: s.key, result: s.result });
-  518|       result = s.result;
-  519|     } else {
-  520|       result = r.result;
-  521|     }
-  522|     const count = result.states.length;
-  523|     res.json({ status: 'done', done: count, total: count, error: null, result });
-  524|   });
-  525| 
-  526|   router.post('/runs/:id/cancel', (req, res) => {
-  527|     runs.delete(req.params.id);
-  528|     res.json({ ok: true });
-  529|   });
-  530| 
-  531|   router.get('/elections/:year/voters/:slice', (req, res) => {
-  532|     const b = loadBundle(Number(req.params.year));
-  533|     if (!b) {
-  534|       res.status(404).json({ error: 'no simulation for this year' });
-  535|       return;
-  536|     }
-  537|     const run = typeof req.query.run === 'string' ? runs.get(req.query.run) : undefined;
-  538|     const key = run?.state === 'done' ? run.key : '';
-  539|     const voter = b.voters[key]?.[req.params.slice] ?? b.voters['']?.[req.params.slice];
-  540|     if (!voter) {
-  541|       res.status(404).json({ error: 'no voter for this group' });
-  542|       return;
-  543|     }
-  544|     res.json(voter);
-  545|   });
-  546| 
-  547|   // A body that isn't JSON answers in JSON too.
-  548|   const onError: ErrorRequestHandler = (err: unknown, _req, res, next) => {
-  549|     if (res.headersSent) {
-  550|       next(err);
-  551|       return;
-  552|     }
-  553|     const status = err instanceof SyntaxError ? 400 : 500;
-  554|     res.status(status).json({ error: status === 400 ? 'bad request' : 'server error' });
-  555|   };
-  556|   router.use(onError);
-  557| 
-  558|   return router;
-  559| }
+  135| type Settled =
+  136|   | { status: 'running'; steps: Step[] }
+  137|   | { status: 'failed'; error: string }
+  138|   | { status: 'done'; key: string; result: RunResult };
+  139| 
+  140| type Totals = Record<PageKey, number>;
+  141| 
+  142| const RUN_TTL_MS = 60 * 60 * 1000;
+  143| const PENDING_MS = 10 * 60 * 1000;
+  144| /** Runs held at once; past it the oldest go first. */
+  145| const MAX_RUNS = 10_000;
+  146| /** The worker's plain-text log is emptied past this (CloudWatch keeps a copy). */
+  147| const MAX_WORKER_LOG_BYTES = 20 * 1024 * 1024;
+  148| const SESSION_LOGS = ['requests.jsonl', 'queue.jsonl', 'queue-done.jsonl', 'queue-failed.jsonl', 'queue-dead.jsonl'];
+  149| /** The spend ledger outlives the retention, without the visitor's words in `note`. */
+  150| const LEDGER_SCRUB = ['note'];
+  151| /** Years a bundle can exist for; any other year is answered without touching the cache. */
+  152| const FIRST_YEAR = 1789;
+  153| const LAST_YEAR = 2100;
+  154| 
+  155| export const OVER_DAILY_CAP = 'Today’s budget for new what-ifs is spent. Try again tomorrow.';
+  156| export const OVER_MONTHLY_CAP = 'This month’s budget for new what-ifs is spent.';
+  157| const KEYS: readonly PageKey[] = ['A', 'B', 'O'];
+  158| 
+  159| export const comboKey = (keys: readonly string[]): string => [...new Set(keys)].sort().join('+');
+  160| 
+  161| const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  162| 
+  163| /** Whole words only: compiled what-ifs bring short keywords ("flu" must not match "influence"). */
+  164| export function readText(b: Bundle, text: string): { keys: string[]; unknown: string | null } {
+  165|   if (!text.trim()) return { keys: [], unknown: null };
+  166|   const lower = text.toLowerCase();
+  167|   const has = (w: string): boolean => new RegExp(`(^|[^a-z0-9])${escapeRegExp(w)}($|[^a-z0-9])`).test(lower);
+  168|   const keys = b.words.filter(({ words }) => words.some(has)).map(({ key }) => key);
+  169|   return keys.length ? { keys, unknown: null } : { keys: [], unknown: text };
+  170| }
+  171| 
+  172| function edited(row: Record<Field, number>, e: Edits[string] | undefined): Record<Field, number> {
+  173|   const f = Object.fromEntries(FIELDS.map((k) => [k, Math.max(0, row[k] + (e?.[k] ?? 0))]));
+  174|   // SAFETY: built from FIELDS, so every Field key is present.
+  175|   return f as Record<Field, number>;
+  176| }
+  177| 
+  178| const total = (f: Record<Field, number>): number => FIELDS.reduce((s, k) => s + f[k], 0) || 1;
+  179| 
+  180| /** Apply hand edits to the point run's state × group table, then re-tally states and EV. */
+  181| export function applyEdits(b: Bundle, result: Result, table: readonly TableRow[], edits: Edits): RunResult {
+  182|   const byState = new Map<string, Totals>();
+  183|   for (const row of table) {
+  184|     const f = edited(row, edits[row.slice]);
+  185|     const sum = total(f);
+  186|     const st = byState.get(row.state) ?? { A: 0, B: 0, O: 0 };
+  187|     for (const k of KEYS) st[k] += (row.adults * f[k]) / sum;
+  188|     byState.set(row.state, st);
+  189|   }
+  190|   const ev: Totals = { A: 0, B: 0, O: 0 };
+  191|   const states = result.states.map((s) => {
+  192|     const v = byState.get(s.code) ?? { A: 0, B: 0, O: 0 };
+  193|     const [first = 'A', second = 'B'] = [...KEYS].sort((x, y) => v[y] - v[x]);
+  194|     const votes = v.A + v.B + v.O || 1;
+  195|     ev[first] += b.ev[s.code] ?? 0;
+  196|     return {
+  197|       code: s.code,
+  198|       won: first,
+  199|       flipped: first !== b.historyWinner[s.code],
+  200|       margin: Math.round(((v[first] - v[second]) / votes) * 1000) / 10
+  201|     };
+  202|   });
+  203|   const need = Object.values(b.ev).reduce((s, x) => s + x, 0) / 2;
+  204|   const winner = KEYS.find((k) => ev[k] > need) ?? null;
+  205|   const slices = result.slices.map((s): Slice => {
+  206|     const e = edits[s.key];
+  207|     if (!e) return s;
+  208|     const f = edited(s, e);
+  209|     const sum = total(f);
+  210|     return { ...s, ...Object.fromEntries(FIELDS.map((k) => [k, f[k] / sum])) };
+  211|   });
+  212|   const { range: _range, drawsWon: _drawsWon, ...rest } = result;
+  213|   return {
+  214|     ...rest,
+  215|     ev,
+  216|     winner,
+  217|     states,
+  218|     slices,
+  219|     howIGotThis: [...(result.howIGotThis ?? []), 'You moved some groups by hand, so this is one run with no range.']
+  220|   };
+  221| }
+  222| 
+  223| /** One computed result for a year's what-if keys, or null when the combination wasn't precomputed. */
+  224| export function compute(
+  225|   b: Bundle,
+  226|   keys: readonly string[],
+  227|   edits: Edits,
+  228|   unknown: string | null
+  229| ): { key: string; result: RunResult } | null {
+  230|   const key = comboKey(keys);
+  231|   const base = b.runs[key];
+  232|   if (!base) return null;
+  233|   const result = Object.keys(edits).length ? applyEdits(b, base, b.tables[key] ?? [], edits) : base;
+  234|   // Additive: the interviews behind each applied what-if, when the bundle has them.
+  235|   const byWhatIf = b.interviews.byWhatIf ?? {};
+  236|   const interviews = keys.flatMap((k) => {
+  237|     const answers = byWhatIf[k];
+  238|     return answers ? [{ whatIf: k, answers }] : [];
+  239|   });
+  240|   // What the voters were told for each applied what-if, and the dated newspaper items in their briefs.
+  241|   const told = Object.fromEntries(keys.flatMap((k) => (b.told?.[k] ? [[k, b.told[k]]] : [])));
+  242|   return {
+  243|     key,
+  244|     result: {
+  245|       ...result,
+  246|       unknown,
+  247|       ...(Object.keys(told).length ? { told } : {}),
+  248|       ...(b.reading?.length ? { reading: b.reading } : {}),
+  249|       ...(b.pre ? { pre: b.pre } : {}),
+  250|       ...(interviews.length ? { interview: { questions: b.interviews.questions, byWhatIf: interviews } } : {})
+  251|     }
+  252|   };
+  253| }
+  254| 
+  255| const norm = (t: string): string => t.toLowerCase().split(/\s+/).filter(Boolean).join(' ');
+  256| 
+  257| function readJsonl<T>(file: string, schema: z.ZodType<T>): T[] {
+  258|   let text: string;
+  259|   try {
+  260|     text = readFileSync(file, 'utf8');
+  261|   } catch {
+  262|     return [];
+  263|   }
+  264|   return text
+  265|     .split('\n')
+  266|     .filter(Boolean)
+  267|     .flatMap((line) => {
+  268|       try {
+  269|         const parsed = schema.safeParse(JSON.parse(line));
+  270|         return parsed.success ? [parsed.data] : [];
+  271|       } catch {
+  272|         return [];
+  273|       }
+  274|     });
+  275| }
+  276| 
+  277| /** A year's answer at a URL that names its run never changes. */
+  278| export const IMMUTABLE = 'public, max-age=31536000, s-maxage=31536000, immutable';
+  279| /** Unversioned answers and the manifest: a minute fresh, then revalidated. */
+  280| export const SHORT_CACHE = 'public, max-age=60, s-maxage=60, stale-while-revalidate=300';
+  281| 
+  282| export function createSimulacraRouter(opts: SimulacraOptions = optionsFromEnv()): Router {
+  283|   const bundles = new Map<number, { bundle: Bundle | null; mtime: number }>();
+  284|   const runs = new Map<string, RunEntry>();
+  285|   let worker: ChildProcess | null = null;
+  286|   let queuedWhileBusy = false;
+  287| 
+  288|   const mtimeOf = (file: string): number => (existsSync(file) ? statSync(file).mtimeMs : 0);
+  289| 
+  290|   function loadBundle(year: number): Bundle | null {
+  291|     if (!Number.isInteger(year) || year < FIRST_YEAR || year > LAST_YEAR) return null;
+  292|     const file = path.join(opts.bundles, `${year}.json`);
+  293|     const cached = bundles.get(year);
+  294|     if (cached && (!opts.devLog || cached.mtime === mtimeOf(file))) return cached.bundle;
+  295|     let bundle: Bundle | null = null;
+  296|     if (existsSync(file)) {
+  297|       const parsed = Bundle.safeParse(JSON.parse(readFileSync(file, 'utf8')));
+  298|       if (parsed.success) bundle = parsed.data;
+  299|       else console.warn(`simulacra: ${file} doesn't fit the bundle contract`, parsed.error.issues.slice(0, 3));
+  300|     }
+  301|     bundles.set(year, { bundle, mtime: mtimeOf(file) });
+  302|     return bundle;
+  303|   }
+  304| 
+  305|   function appendLine(name: string, row: unknown): void {
+  306|     try {
+  307|       mkdirSync(opts.sessions, { recursive: true });
+  308|       appendFileSync(path.join(opts.sessions, name), `${JSON.stringify(row)}\n`);
+  309|     } catch (e) {
+  310|       console.warn('simulacra: session log failed', e instanceof Error ? e.message : e);
+  311|     }
+  312|   }
+  313| 
+  314|   function startWorker(): void {
+  315|     if (!opts.autorun) return;
+  316|     if (worker) {
+  317|       queuedWhileBusy = true;
+  318|       return;
+  319|     }
+  320|     queuedWhileBusy = false;
+  321|     mkdirSync(opts.sessions, { recursive: true });
+  322|     const child = spawn(opts.python, ['-m', 'simharness.run', 'whatif', '--queue', '--limit', '5', '--config', opts.autorun], {
+  323|       cwd: opts.root,
+  324|       stdio: ['ignore', 'pipe', 'pipe']
+  325|     });
+  326|     const out = createWriteStream(path.join(opts.sessions, 'intake.log'), { flags: 'a' });
+  327|     child.stdout?.pipe(out);
+  328|     child.stderr?.pipe(out);
+  329|     child.on('error', (e) => out.write(`simulacra: worker failed to start: ${e.message}\n`));
+  330|     // Text typed while a worker ran is picked up by a fresh one (a worker that
+  331|     // stopped on a cap leaves its text queued and isn't restarted by itself).
+  332|     child.on('exit', () => {
+  333|       worker = null;
+  334|       if (queuedWhileBusy) startWorker();
+  335|     });
+  336|     worker = child;
+  337|   }
+  338| 
+  339|   // Runs are added in creation order (an entry replaced in place keeps its
+  340|   // slot), so the oldest are at the front: pruning stops at the first live one.
+  341|   function newRun(entry: RunEntry): string {
+  342|     const id = randomUUID();
+  343|     runs.set(id, entry);
+  344|     for (const [k, r] of runs) {
+  345|       if (Date.now() - r.created <= RUN_TTL_MS && runs.size <= MAX_RUNS) break;
+  346|       runs.delete(k);
+  347|     }
+  348|     return id;
+  349|   }
+  350| 
+  351|   // Session logs keep SIMULACRA_RETAIN_DAYS of lines. The worker appends to
+  352|   // them, so they're rewritten only while no worker runs.
+  353|   function prune(): void {
+  354|     if (!opts.devLog || worker) return;
+  355|     const maxAge = opts.retainDays * 24 * 60 * MINUTE;
+  356|     for (const name of [...SESSION_LOGS, 'spend.jsonl']) {
+  357|       try {
+  358|         const scrub = name === 'spend.jsonl' ? LEDGER_SCRUB : undefined;
+  359|         const n = pruneJsonl(path.join(opts.sessions, name), maxAge, Date.now(), scrub);
+  360|         if (n) console.log(`simulacra: ${scrub ? 'scrubbed' : 'dropped'} ${n} lines older than ${opts.retainDays} days in ${name}`);
+  361|       } catch (e) {
+  362|         console.warn(`simulacra: pruning ${name} failed`, e instanceof Error ? e.message : e);
+  363|       }
+  364|     }
+  365|     capLog(path.join(opts.sessions, 'intake.log'), MAX_WORKER_LOG_BYTES);
+  366|   }
+  367|   prune();
+  368|   setInterval(prune, 60 * MINUTE).unref();
+  369| 
+  370|   const limiters = {
+  371|     any: new RateLimiter(opts.limits.any),
+  372|     runs: new RateLimiter(opts.limits.runs),
+  373|     intake: new RateLimiter(opts.limits.intake)
+  374|   };
+  375|   const limited = (res: express.Response, retryAfterS: number): void => {
+  376|     res.set('Retry-After', String(retryAfterS)).status(429).json({ error: 'Too many requests just now. Try again in a few minutes.' });
+  377|   };
+  378|   const rateLimit =
+  379|     (which: keyof typeof limiters): RequestHandler =>
+  380|     (req, res, next) => {
+  381|       const a = limiters[which].admit(req.ip ?? 'unknown');
+  382|       if (a.ok) next();
+  383|       else limited(res, a.retryAfterS);
+  384|     };
+  385| 
+  386|   // Where the worker is with a pending run's text.
+  387|   function settle(r: Extract<RunEntry, { state: 'pending' }>): Settled {
+  388|     const t = norm(r.pending.text);
+  389|     const sameYear = (x: { year?: number | null }): boolean => (x.year ?? 1920) === r.year;
+  390|     const outcome = readJsonl(path.join(opts.sessions, 'queue-done.jsonl'), QueueDone)
+  391|       .filter((x) => x.text === t && sameYear(x))
+  392|       .pop();
+  393|     const failed = readJsonl(path.join(opts.sessions, 'queue-failed.jsonl'), QueueFailed)
+  394|       .filter((x) => x.text === t && sameYear(x) && x.at * 1000 >= r.created)
+  395|       .pop();
+  396|     const b = loadBundle(r.year);
+  397|     if (outcome && (outcome.status === 'modelled' || outcome.status === 'keyword') && outcome.key && b) {
+  398|       const done =
+  399|         compute(b, [...new Set([...r.pending.keys, outcome.key])], r.pending.edits, null) ??
+  400|         compute(b, [outcome.key], r.pending.edits, null);
+  401|       if (done) return { status: 'done', key: done.key, result: done.result };
+  402|       return { status: 'failed', error: 'The new what-if was modelled, but not in this combination. Try it on its own.' };
+  403|     }
+  404|     const stopped = outcome ?? failed;
+  405|     if (stopped) {
+  406|       // Not modellable, or the worker stopped: the run finishes unchanged, saying why.
+  407|       const done = b ? compute(b, r.pending.keys, r.pending.edits, r.pending.text) : null;
+  408|       const why = stopped.why ?? '';
+  409|       if (!done) return { status: 'failed', error: why || 'Couldn’t model that.' };
+  410|       return { status: 'done', key: done.key, result: { ...done.result, unknownWhy: why } };
+  411|     }
+  412|     if (Date.now() - r.created > PENDING_MS) return { status: 'failed', error: 'Modelling that took too long. Try again in a minute.' };
+  413|     if (!worker) startWorker();
+  414|     let steps: Step[] = [{ text: 'Waiting for the what-ifs typed before this one.', state: 'doing' }];
+  415|     try {
+  416|       const st = IntakeStatus.safeParse(JSON.parse(readFileSync(path.join(opts.sessions, 'intake-status.json'), 'utf8')));
+  417|       if (st.success && st.data.text === t) steps = st.data.steps;
+  418|     } catch {
+  419|       // not started
+  420|     }
+  421|     return { status: 'running', steps: [{ text: `Reading “${r.pending.text}”: it’s new to me.`, state: 'done' }, ...steps] };
+  422|   }
+  423| 
+  424|   const router = express.Router();
+  425|   router.use(rateLimit('any'));
+  426|   router.use(express.json({ limit: '64kb' }));
+  427| 
+  428|   // Every published year and the run its bundle came from. The page reads it
+  429|   // first and asks for each year at /elections/<year>?v=<runId>, so a year's
+  430|   // answer can be cached for good: a new run means a new URL.
+  431|   router.get('/manifest', (_req, res) => {
+  432|     const years: Record<string, string> = {};
+  433|     const files = existsSync(opts.bundles) ? readdirSync(opts.bundles) : [];
+  434|     for (const f of files.filter((name) => /^\d{4}\.json$/.test(name)).sort()) {
+  435|       const b = loadBundle(Number(f.slice(0, 4)));
+  436|       if (b) years[f.slice(0, 4)] = b.runId;
+  437|     }
+  438|     res.set('Cache-Control', SHORT_CACHE).json({ years });
+  439|   });
+  440| 
+  441|   // A year without a bundle answers 200 with `simulated: false`, not 404: the
+  442|   // page reads a 404 before any answer as "there is no simulation service".
+  443|   router.get('/elections/:year', (req, res) => {
+  444|     const b = loadBundle(Number(req.params.year));
+  445|     if (!b) {
+  446|       res.set('Cache-Control', SHORT_CACHE).json({ slices: [], whatIfs: [], simulated: false });
+  447|       return;
+  448|     }
+  449|     // Immutable only when the URL names the run being served.
+  450|     res.set('Cache-Control', req.query.v === b.runId ? IMMUTABLE : SHORT_CACHE);
+  451|     res.json({ ...b.election, simulated: true, runId: b.runId });
+  452|   });
+  453| 
+  454|   router.post('/runs', rateLimit('runs'), (req, res) => {
+  455|     const body = RunRequest.safeParse(req.body ?? {});
+  456|     if (!body.success) {
+  457|       res.status(400).json({ error: 'bad request', issues: body.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`) });
+  458|       return;
+  459|     }
+  460|     const { year, whatIfs, text, edits } = body.data;
+  461|     const b = loadBundle(year);
+  462|     if (!b) {
+  463|       res.status(404).json({ error: 'no simulation for this year' });
+  464|       return;
+  465|     }
+  466|     const known = new Set(b.election.whatIfs.map((w) => w.key));
+  467|     const chosen = whatIfs.filter((k) => known.has(k));
+  468|     const read = readText(b, text);
+  469|     const keys = [...chosen, ...read.keys];
+  470|     const done = compute(b, keys, edits, read.unknown);
+  471|     let queued = false;
+  472|     // The access key's name, if the request carried one: the spend ledger records it.
+  473|     let who: string | null = null;
+  474|     // Why unknown words weren't queued, when they weren't.
+  475|     let unknownWhy: string | null = null;
+  476|     if (opts.devLog) {
+  477|       const ts = new Date().toISOString();
+  478|       appendLine('requests.jsonl', { ts, year, text, whatIfs, matched: read.keys, unknown: read.unknown, combo: comboKey(keys), exists: Boolean(done) });
+  479|       if (read.unknown) {
+  480|         const cap = checkCaps(path.join(opts.sessions, 'spend.jsonl'), opts.caps);
+  481|         if (cap.kind === 'over') unknownWhy = cap.which === 'monthly' ? OVER_MONTHLY_CAP : OVER_DAILY_CAP;
+  482|         else {
+  483|           const a = limiters.intake.admit(req.ip ?? 'unknown');
+  484|           if (!a.ok) {
+  485|             limited(res, a.retryAfterS);
+  486|             return;
+  487|           }
+  488|           who = opts.keys.identify(req.get('authorization'));
+  489|           appendLine('queue.jsonl', { ts, year, text: read.unknown, who });
+  490|           queued = true;
+  491|           startWorker();
+  492|         }
+  493|       }
+  494|     }
+  495|     // With the worker on, new words hold the run open (GET reports the
+  496|     // worker's steps) until they are compiled, researched, interviewed and
+  497|     // published; then the run finishes with the new what-if applied.
+  498|     if (queued && read.unknown && opts.autorun) {
+  499|       const pending = { text: read.unknown, keys: chosen, edits, who };
+  500|       res.json({ id: newRun({ state: 'pending', year, created: Date.now(), pending }) });
+  501|       return;
+  502|     }
+  503|     if (!done) {
+  504|       res.status(422).json({ error: 'That combination has not been computed.' });
+  505|       return;
+  506|     }
+  507|     let result: RunResult = done.result;
+  508|     if (queued && read.unknown) result = { ...result, queued: { text: read.unknown, worker: Boolean(worker) } };
+  509|     else if (unknownWhy) result = { ...result, unknownWhy };
+  510|     res.json({ id: newRun({ state: 'done', year, created: Date.now(), key: done.key, result }) });
+  511|   });
+  512| 
+  513|   router.get('/runs/:id', (req, res) => {
+  514|     const r = runs.get(req.params.id);
+  515|     if (!r) {
+  516|       res.status(404).json({ error: 'no such run' });
+  517|       return;
+  518|     }
+  519|     let result: RunResult;
+  520|     if (r.state === 'pending') {
+  521|       const s = settle(r);
+  522|       if (s.status === 'running') {
+  523|         res.json({ status: 'running', done: 0, total: 0, error: null, steps: s.steps });
+  524|         return;
+  525|       }
+  526|       if (s.status === 'failed') {
+  527|         runs.delete(req.params.id);
+  528|         res.json({ status: 'failed', error: s.error });
+  529|         return;
+  530|       }
+  531|       runs.set(req.params.id, { state: 'done', year: r.year, created: r.created, key: s.key, result: s.result });
+  532|       result = s.result;
+  533|     } else {
+  534|       result = r.result;
+  535|     }
+  536|     const count = result.states.length;
+  537|     res.json({ status: 'done', done: count, total: count, error: null, result });
+  538|   });
+  539| 
+  540|   router.post('/runs/:id/cancel', (req, res) => {
+  541|     runs.delete(req.params.id);
+  542|     res.json({ ok: true });
+  543|   });
+  544| 
+  545|   router.get('/elections/:year/voters/:slice', (req, res) => {
+  546|     const b = loadBundle(Number(req.params.year));
+  547|     if (!b) {
+  548|       res.status(404).json({ error: 'no simulation for this year' });
+  549|       return;
+  550|     }
+  551|     const run = typeof req.query.run === 'string' ? runs.get(req.query.run) : undefined;
+  552|     const key = run?.state === 'done' ? run.key : '';
+  553|     const voter = b.voters[key]?.[req.params.slice] ?? b.voters['']?.[req.params.slice];
+  554|     if (!voter) {
+  555|       res.status(404).json({ error: 'no voter for this group' });
+  556|       return;
+  557|     }
+  558|     res.json(voter);
+  559|   });
+  560| 
+  561|   // A body that isn't JSON answers in JSON too.
+  562|   const onError: ErrorRequestHandler = (err: unknown, _req, res, next) => {
+  563|     if (res.headersSent) {
+  564|       next(err);
+  565|       return;
+  566|     }
+  567|     const status = err instanceof SyntaxError ? 400 : 500;
+  568|     res.status(status).json({ error: status === 400 ? 'bad request' : 'server error' });
+  569|   };
+  570|   router.use(onError);
+  571| 
+  572|   return router;
+  573| }
 ```
 
 ## `simharness/__init__.py`
@@ -1610,329 +2140,4 @@ Files `serve/guard.test.ts` to `simharness/aggregate.py`. Lines are numbered as 
   484|     if what_if == 'fifteenth':
   485|         return a['state'] in SOUTH and a['group'] in ('black', 'native_white')
   486|     return True
-```
-
-## `simharness/agents.py`
-
-```python
-    1| """Agents: invented people drawn from a cohort's documented makeup.
-    2| 
-    3| A cohort is a stratum (region × sex × race/nativity/citizenship). Each agent
-    4| gets:
-    5| - a state, drawn in proportion to the cohort's adults there;
-    6| - urban or rural, from that state's published urban share;
-    7| - an age, from the cohort's published age distribution when there is one;
-    8| - a household economy, imputed [I] and used only for persona diversity (it is
-    9|   never a cohort dimension, and nothing is counted by it);
-   10| - two to four dated items from the period corpus, preferring its own state.
-   11| 
-   12| The person is invented; the circumstances come from the census row and the
-   13| dated items. Names come from small, plain lists and carry no information.
-   14| """
-   15| from __future__ import annotations
-   16| 
-   17| import random
-   18| 
-   19| from .geo import REGION_OF, STATE_NAME
-   20| 
-   21| GROUP_WORDS = {
-   22|     'native_white': 'a white {noun} born in the United States',
-   23|     'foreign_white_naturalized': 'a white {noun} born abroad and naturalized as a United States citizen',
-   24|     'foreign_white_alien': 'a white {noun} born abroad who is not a United States citizen',
-   25|     'black': 'a Black {noun}',
-   26|     'other': 'an American Indian or Asian American {noun}',
-   27| }
-   28| 
-   29| FIRST = {
-   30|     'M': ['John', 'William', 'James', 'George', 'Charles', 'Frank', 'Joseph', 'Henry', 'Robert', 'Thomas',
-   31|           'Edward', 'Harry', 'Walter', 'Arthur', 'Fred', 'Albert', 'Samuel', 'Clarence', 'Louis', 'Ernest'],
-   32|     'F': ['Mary', 'Anna', 'Margaret', 'Helen', 'Elizabeth', 'Ruth', 'Florence', 'Ethel', 'Emma', 'Clara',
-   33|           'Bertha', 'Minnie', 'Alice', 'Grace', 'Edna', 'Ida', 'Mabel', 'Lillian', 'Rose', 'Sarah'],
-   34| }
-   35| # Surnames: common American surnames for native-born and Black agents; for
-   36| # foreign-born agents, surnames of the largest 1920 immigrant origins. p1 drew
-   37| # every agent from one mixed list, which gave a Black North Carolina farmer a
-   38| # Swedish surname; p2 separates them. Names still carry no modelled meaning.
-   39| LAST_COMMON = ['Adams', 'Baker', 'Carter', 'Dawson', 'Ellis', 'Foster', 'Graham', 'Hayes', 'Irwin', 'Jordan',
-   40|                'Lawson', 'Mercer', 'Owens', 'Porter', 'Reed', 'Sutton', 'Tate', 'Walker', 'Young', 'Johnson',
-   41|                'Williams', 'Brown', 'Jones', 'Davis', 'Harris', 'Jackson', 'Thomas', 'Robinson', 'Green', 'Hill']
-   42| LAST_IMMIGRANT = ['Brandt', 'Weber', 'Schmidt', 'Rossi', 'Esposito', 'Russo', 'Kowalski', 'Nowak', 'Novak',
-   43|                   'Lindqvist', 'Johansson', 'Olsen', 'Murphy', 'Kelly', 'Sullivan', 'Cohen', 'Levy', 'Kaplan',
-   44|                   'Horvath', 'Kovac', 'Dubois', 'Papadopoulos', 'Garcia', 'Lopez', 'Svoboda', 'Petrov']
-   45| LAST = LAST_COMMON + LAST_IMMIGRANT  # p1's list, kept for reproducing p1 runs
-   46| 
-   47| ECONOMY = {
-   48|     'farm': 'The household lives by farming.',
-   49|     'wage': 'The household lives on wages from a mill, shop, mine or railroad.',
-   50|     'trade': 'The household lives by a trade, a store or office work.',
-   51|     'proprietor': 'The household lives by a business or a profession.',
-   52| }
-   53| 
-   54| 
-   55| # Other eras' wording (1920's ECONOMY is unchanged so its briefs stay byte-identical).
-   56| ECONOMY_EARLY = {**ECONOMY, 'wage': 'The household lives on wages from a mill, workshop, the docks or hired farm work.'}
-   57| ECONOMY_MODERN = {
-   58|     'farm': 'The household lives by farming.',
-   59|     'wage': 'The household lives on wages from a factory, warehouse, store or hospital.',
-   60|     'trade': 'The household lives by a trade, a small business or office work.',
-   61|     'proprietor': 'The household lives by a business or a profession.',
-   62| }
-   63| 
-   64| 
-   65| def economy_for(year: int = 1920) -> dict:
-   66|     return ECONOMY_EARLY if year < 1868 else ECONOMY_MODERN if year >= 1972 else ECONOMY
-   67| 
-   68| 
-   69| def economy_weights(urban: bool, year: int = 1920) -> dict:
-   70|     # [I] imputed for persona diversity only. Replace with OCC1950 × FARM from
-   71|     # the IPUMS 1920 full count (extracts/ipums-1920-fullcount.json).
-   72|     if year >= 1972:  # [I] farm households are a small share of rural America by the 1970s
-   73|         return {'farm': 0.01, 'wage': 0.5, 'trade': 0.34, 'proprietor': 0.15} if urban else \
-   74|                {'farm': 0.15, 'wage': 0.45, 'trade': 0.3, 'proprietor': 0.1}
-   75|     if year < 1868:
-   76|         return {'farm': 0.1, 'wage': 0.5, 'trade': 0.25, 'proprietor': 0.15} if urban else \
-   77|                {'farm': 0.85, 'wage': 0.08, 'trade': 0.05, 'proprietor': 0.02}
-   78|     return {'farm': 0.05, 'wage': 0.5, 'trade': 0.3, 'proprietor': 0.15} if urban else \
-   79|            {'farm': 0.7, 'wage': 0.15, 'trade': 0.1, 'proprietor': 0.05}
-   80| 
-   81| 
-   82| def pick(rng: random.Random, weights: dict):
-   83|     keys = list(weights)
-   84|     return rng.choices(keys, weights=[weights[k] for k in keys])[0]
-   85| 
-   86| 
-   87| def sample_agents(cohort: dict, n: int, corpus: list[dict], seed: int, urban_share: dict,
-   88|                   age_bands: dict | None = None, year: int = 1920, min_age: int = 21) -> list[dict]:
-   89|     """cohort: {key, region, sex, group, adults_by_state: {state: n}, adults}."""
-   90|     rng = random.Random(f'{seed}:{cohort["key"]}')
-   91|     out = []
-   92|     for i in range(n):
-   93|         state = pick(rng, cohort['adults_by_state'])
-   94|         urban = rng.random() < urban_share.get(state, 0.5)
-   95|         if age_bands:
-   96|             band = pick(rng, age_bands)
-   97|             lo, hi = band
-   98|             age = rng.randint(lo, hi)
-   99|         else:
-  100|             age = rng.choice(range(min_age, 76 if year < 1972 else 81))  # [I] uniform when no age table
-  101|         econ = pick(rng, economy_weights(urban, year))
-  102|         sex = cohort['sex']
-  103|         surnames = LAST_IMMIGRANT if cohort['group'].startswith('foreign') else LAST_COMMON
-  104|         name = f'{rng.choice(FIRST[sex])} {rng.choice(surnames)}'
-  105|         items = choose_items(rng, corpus, state, cohort)
-  106|         out.append({
-  107|             'id': f'{cohort["key"]}-{i}',
-  108|             'cohort': cohort['key'],
-  109|             'state': state,
-  110|             'region': REGION_OF.get(state, 'west'),
-  111|             'sex': sex,
-  112|             'group': cohort['group'],
-  113|             'age': age,
-  114|             'urban': urban,
-  115|             'economy': econ,
-  116|             'name': name,
-  117|             'items': items,
-  118|             'weight': cohort['adults'] / n,
-  119|         })
-  120|     return out
-  121| 
-  122| 
-  123| TOPIC_PRIORITY = {
-  124|     # Which dated topics a cohort's people are likeliest to have met, by group.
-  125|     'F': ['T1', 'T7', 'T8', 'T3', 'T2', 'T4'],
-  126|     'black': ['T5', 'T3', 'T2'],
-  127|     'foreign_white_naturalized': ['T6', 'T3', 'T2'],
-  128|     'foreign_white_alien': ['T6', 'T3'],
-  129|     'default': ['T3', 'T2', 'T4', 'T6'],
-  130| }
-  131| 
-  132| 
-  133| TOPIC_CODES = {t for ts in TOPIC_PRIORITY.values() for t in ts}
-  134| 
-  135| 
-  136| def choose_items(rng: random.Random, corpus: list[dict], state: str, cohort: dict, k: int = 3) -> list[dict]:
-  137|     order = TOPIC_PRIORITY.get(cohort['group']) or (TOPIC_PRIORITY['F'] if cohort['sex'] == 'F' else TOPIC_PRIORITY['default'])
-  138|     if cohort['sex'] == 'F' and cohort['group'] == 'black':
-  139|         order = ['T5', 'T1', 'T3']
-  140|     region = REGION_OF.get(state, 'west')
-  141|     chosen, used = [], set()
-  142|     if corpus and not any(c['topic'] in TOPIC_CODES for c in corpus):
-  143|         # Another year's corpus with its own topics: nearest items first, any topic.
-  144|         own = [c for c in corpus if c.get('state') == state]
-  145|         near = [c for c in corpus if REGION_OF.get(c.get('state')) == region and c not in own]
-  146|         rest = [c for c in corpus if c not in own and c not in near]
-  147|         for src in (own, near, rest):
-  148|             src = src[:]
-  149|             rng.shuffle(src)
-  150|             chosen += src[:k - len(chosen)]
-  151|         return chosen
-  152|     for topic in order:
-  153|         if len(chosen) >= k:
-  154|             break
-  155|         pool = [c for c in corpus if c['topic'] == topic and c['id'] not in used]
-  156|         if topic == 'T8':  # women already voting in the West: only relevant where it is local
-  157|             pool = [c for c in pool if REGION_OF.get(c.get('state')) == region]
-  158|         own = [c for c in pool if c.get('state') == state]
-  159|         near = [c for c in pool if REGION_OF.get(c.get('state')) == region]
-  160|         src = own or near or pool
-  161|         if src:
-  162|             it = rng.choice(src)
-  163|             chosen.append(it)
-  164|             used.add(it['id'])
-  165|     return chosen
-  166| 
-  167| 
-  168| STATUS_WORDS = {'enslaved': 'an enslaved Black {noun}', 'free': 'a free Black {noun}'}
-  169| 
-  170| 
-  171| def persona_lines(agent: dict, eligibility_line: str, year: int = 1920) -> list[str]:
-  172|     noun = 'man' if agent['sex'] == 'M' else 'woman'
-  173|     if 1868 <= year < 1972:
-  174|         who = GROUP_WORDS[agent['group']].format(noun=noun)
-  175|     else:
-  176|         from .agentlayer import groups_for
-  177|         words = groups_for(year)['words']
-  178|         tmpl = STATUS_WORDS.get(agent.get('status'), words[agent['group']]) if agent['group'] == 'black' else words[agent['group']]
-  179|         who = tmpl.format(noun=noun, origin=agent.get('origin', 'Hispanic'))
-  180|         if who.startswith('a A'):
-  181|             who = 'an ' + who[2:]
-  182|     place = f'{"a city or town" if agent["urban"] else "the countryside"} in {STATE_NAME.get(agent["state"], agent["state"])}'
-  183|     return [
-  184|         f'{agent["name"]}, {agent["age"]}, {who}, living in {place}.',
-  185|         economy_for(year)[agent['economy']],
-  186|         eligibility_line,
-  187|     ]
-```
-
-## `simharness/aggregate.py`
-
-```python
-    1| """From cell draws to states, electoral votes, ranges and the draw count.
-    2| 
-    3| A World is a set of draw-major arrays over cells (state × sex × group):
-    4|     adults [D, C]   adults 21+
-    5|     can    [D, C]   the fraction who can vote (legally and in practice)
-    6|     t      [D, C]   turnout among those who can
-    7|     share  [D, C, 3] R, D, O shares among voters
-    8| """
-    9| from __future__ import annotations
-   10| 
-   11| from dataclasses import dataclass, replace
-   12| 
-   13| import numpy as np
-   14| 
-   15| PARTIES = ['R', 'D', 'O']
-   16| 
-   17| 
-   18| @dataclass
-   19| class World:
-   20|     adults: np.ndarray
-   21|     can: np.ndarray
-   22|     t: np.ndarray
-   23|     share: np.ndarray
-   24|     # Split of the barred fraction by reason, for slices: {reason: [D, C]}
-   25|     barred_by: dict
-   26| 
-   27|     def copy(self) -> 'World':
-   28|         return replace(self, adults=self.adults.copy(), can=self.can.copy(), t=self.t.copy(),
-   29|                        share=self.share.copy(), barred_by={k: v.copy() for k, v in self.barred_by.items()})
-   30| 
-   31|     def votes(self) -> np.ndarray:
-   32|         """[D, C, 3] votes by cell."""
-   33|         return (self.adults * self.can * self.t)[..., None] * self.share
-   34| 
-   35| 
-   36| def by_state(world: World, state_index: np.ndarray, n_states: int) -> np.ndarray:
-   37|     """[D, S, 3] votes by state."""
-   38|     v = world.votes()
-   39|     out = np.zeros((v.shape[0], n_states, 3))
-   40|     for p in range(3):
-   41|         np.add.at(out[:, :, p], (slice(None), state_index), v[:, :, p])
-   42|     return out
-   43| 
-   44| 
-   45| def outcome(state_votes: np.ndarray, ev: np.ndarray, fixed: np.ndarray | None = None,
-   46|             split: np.ndarray | None = None, o_single: np.ndarray | None = None) -> dict:
-   47|     """state_votes [D, S, 3]; ev [S] (or [D, S] for reapportionment).
-   48|     A state with no votes in a draw (its legislature chose the electors) casts no
-   49|     electoral votes, unless fixed [S, 3] gives its electors by party (NaN rows: none):
-   50|     then they count as given, and its winner is the party with the most.
-   51|     split [S, 3] (NaN rows: none): a state whose electors historically divided (district
-   52|     systems, split tickets, ME/NE) divides them as it did while its plurality winner is
-   53|     the historical one; a state that flips goes winner-take-all. A fourth column in
-   54|     split, when present, is the historical popular winner (MD 1908 went R by 605 votes
-   55|     while 6 of its 8 electors were D).
-   56|     o_single [S]: the largest single candidate's share of "other" (O lumps several:
-   57|     Bell and Breckinridge in 1860); only that candidate can carry a state."""
-   58|     if o_single is not None:
-   59|         ranked = state_votes * np.concatenate([np.ones((len(o_single), 2)), np.asarray(o_single, dtype=float)[:, None]], axis=1)[None]
-   60|         winner = ranked.argmax(axis=2)
-   61|     else:
-   62|         winner = state_votes.argmax(axis=2)                       # [D, S]
-   63|     total = state_votes.sum(axis=2)
-   64|     srt = np.sort(state_votes, axis=2)
-   65|     margin = (srt[:, :, -1] - srt[:, :, -2]) / np.maximum(total, 1) * 100
-   66|     ev = np.broadcast_to(ev, winner.shape)
-   67|     none = total <= 0
-   68|     if none.any():
-   69|         ev = np.where(none, 0, ev)
-   70|     ev_by = np.stack([(ev * (winner == p)).sum(axis=1) for p in range(3)], axis=1)  # [D, 3]
-   71|     if split is not None:
-   72|         sp = np.asarray(split, dtype=float)
-   73|         has = ~np.isnan(sp).all(axis=1)
-   74|         if has.any():
-   75|             sp0 = np.nan_to_num(sp)
-   76|             hist = sp0[:, :3].argmax(axis=1)                  # [S] the party with most of the split electors
-   77|             if sp.shape[1] > 3:
-   78|                 hist = np.where(np.isnan(sp[:, 3]), hist, np.nan_to_num(sp[:, 3])).astype(int)
-   79|                 sp0 = sp0[:, :3]
-   80|             keep = has[None, :] & (winner == hist[None, :]) & ~none   # [D, S]
-   81|             # Replace those states' winner-take-all electors with the historical division.
-   82|             wta = np.stack([(ev * keep * (winner == p)) for p in range(3)], axis=2).sum(axis=1)
-   83|             ev_by = ev_by - wta.astype(ev_by.dtype) + (keep[:, :, None] * sp0[None, :, :]).sum(axis=1).astype(ev_by.dtype)
-   84|     if fixed is not None and none.any():
-   85|         fx = np.nan_to_num(np.asarray(fixed, dtype=float))
-   86|         has = ~np.isnan(np.asarray(fixed, dtype=float)).all(axis=1)
-   87|         use = none & has[None, :]                             # [D, S]
-   88|         ev_by = ev_by + (use[:, :, None] * fx[None, :, :]).sum(axis=1).astype(ev_by.dtype)
-   89|         winner = np.where(use, fx.argmax(axis=1)[None, :], winner)
-   90|         ev = np.where(use, fx.sum(axis=1)[None, :], ev)
-   91|     need = ev.sum(axis=1)[:, None] / 2
-   92|     nat_winner = np.where((ev_by > need).any(axis=1), ev_by.argmax(axis=1), -1)
-   93|     return {'winner': winner, 'margin': margin, 'ev': ev_by, 'national_winner': nat_winner,
-   94|             'popular': state_votes.sum(axis=1), 'total': total}
-   95| 
-   96| 
-   97| def summarize(out: dict, base_winner: np.ndarray, level: float = 0.8) -> dict:
-   98|     """Point = median draw; ranges = central `level` interval; draw counts."""
-   99|     lo, hi = (1 - level) / 2, 1 - (1 - level) / 2
-  100|     ev = out['ev']
-  101|     D = ev.shape[0]
-  102|     # The point run: the draw whose EV split is closest to the median split.
-  103|     med = np.median(ev, axis=0)
-  104|     point = int(np.argmin(np.abs(ev - med).sum(axis=1)))
-  105|     flipped = out['winner'] != base_winner[None, :]
-  106|     return {
-  107|         'draws': D,
-  108|         'point': point,
-  109|         'ev_point': ev[point].tolist(),
-  110|         'ev_range': {p: [float(np.quantile(ev[:, i], lo)), float(np.quantile(ev[:, i], hi))] for i, p in enumerate(PARTIES)},
-  111|         'draws_won': {p: int((out['national_winner'] == i).sum()) for i, p in enumerate(PARTIES)},
-  112|         'draws_no_majority': int((out['national_winner'] == -1).sum()),
-  113|         'state_winner_point': out['winner'][point].tolist(),
-  114|         'state_margin_point': out['margin'][point].tolist(),
-  115|         # additive: states with no popular vote in the point draw (legislature-chosen electors)
-  116|         'state_no_vote_point': (out['total'][point] <= 0).tolist() if 'total' in out else None,
-  117|         'state_margin_range': np.stack([np.quantile(out['margin'], lo, axis=0), np.quantile(out['margin'], hi, axis=0)], axis=1).tolist(),
-  118|         'state_p_flip': flipped.mean(axis=0).tolist(),
-  119|         'popular_point': out['popular'][point].tolist(),
-  120|         'popular_range': np.stack([np.quantile(out['popular'], lo, axis=0), np.quantile(out['popular'], hi, axis=0)], axis=1).tolist(),
-  121|         # Signed margin (R minus D, points) for flips and near misses
-  122|         'rd_margin': None,
-  123|     }
-  124| 
-  125| 
-  126| def rd_margin(state_votes: np.ndarray) -> np.ndarray:
-  127|     total = np.maximum(state_votes.sum(axis=2), 1)
-  128|     return (state_votes[:, :, 0] - state_votes[:, :, 1]) / total * 100
 ```
