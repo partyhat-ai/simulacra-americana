@@ -16,13 +16,13 @@ than known.
 
 Read `VALIDITY.md` for what the system can and cannot claim.
 
-Generated from commit `c4694839a0a9` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `93f19ca29232` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 
 ## Start here
 
 - [README](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/README.md): overview
 - [File map](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/MAP.md): all 1097 files with size, line count, description, and which digest part holds each one
-- [Commit history](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/HISTORY.md): 2 commit(s)
+- [Commit history](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/HISTORY.md): 3 commit(s)
 
 ## Documentation
 
