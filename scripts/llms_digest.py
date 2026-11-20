@@ -92,8 +92,11 @@ def repo_identity(root: Path) -> tuple[str, str, str]:
 
 def build(root: Path, out: Path) -> dict:
     owner, name, branch = repo_identity(root)
-    sha = git("rev-parse", "HEAD", cwd=root).strip()
-    date = git("log", "-1", "--format=%cs", cwd=root).strip()
+    # The last commit that changed anything besides the digest: rebuilding after a
+    # digest-only commit then gives identical text, so the workflow never loops.
+    code_only = ("--", ".", ":(exclude)llms.txt", ":(exclude)llms")
+    sha = git("log", "-1", "--format=%H", *code_only, cwd=root).strip()
+    date = git("log", "-1", "--format=%cs", *code_only, cwd=root).strip()
     raw_base = f"https://raw.githubusercontent.com/{owner}/{name}/{branch}/"
     files = [f for f in git("ls-files", cwd=root).splitlines() if f and not f.startswith(OWN)]
     stamp = (f"Generated from commit `{sha[:12]}` ({date}) of github.com/{owner}/{name} by "
