@@ -57,12 +57,12 @@ production, copy it onto EFS on purpose.
 
 ## Stand-up (once)
 
-Each step marked ⛔ needs Cameron's yes.
+Steps marked (production) change production. Review the plan or dry-run output before running them.
 
 1. `infra/bootstrap.sh` creates the state bucket.
 2. `cd infra && terraform init && terraform plan`.
-3. ⛔ Certificates first: `terraform apply -target=aws_acm_certificate.api -target=aws_acm_certificate.assets -target=aws_ecr_repository.api`.
-4. ⛔ DNS for the certificates: `infra/vercel-dns.sh certs`, then
+3. (production) Certificates first: `terraform apply -target=aws_acm_certificate.api -target=aws_acm_certificate.assets -target=aws_ecr_repository.api`.
+4. (production) DNS for the certificates: `infra/vercel-dns.sh certs`, then
    `--apply`. This adds the `amazon.com` CAA record (without it ACM never
    issues; the zone allows only pki.goog, sectigo and letsencrypt) and the two
    validation CNAMEs.
@@ -76,7 +76,7 @@ Each step marked ⛔ needs Cameron's yes.
    Terraform creates the empty secret in step 7. If you want the value in
    place before the task first starts, run
    `terraform apply -target=aws_secretsmanager_secret.prod` first.
-7. ⛔ `terraform apply -var image=<ecr>/simulacra-api:<sha>`. This waits for
+7. (production) `terraform apply -var image=<ecr>/simulacra-api:<sha>`. This waits for
    the certificates to issue, then creates everything else, including the
    bill-monthly items: ALB, EFS, CloudFront. Pass `-var image` on the very
    apply that FIRST creates `aws_ecs_task_definition.api`: the task def
@@ -93,7 +93,7 @@ Each step marked ⛔ needs Cameron's yes.
    retrying, so seed right after step 7.
 9. Assets: `python3 scripts/mirror-portraits.py --out ../simulacra-assets`,
    then `scripts/publish-assets.sh`.
-10. ⛔ DNS for the endpoints: `infra/vercel-dns.sh endpoints`, then `--apply`.
+10. (production) DNS for the endpoints: `infra/vercel-dns.sh endpoints`, then `--apply`.
 11. Confirm the SNS subscription email to cam@partyhat.ai. Until it's
     confirmed, alarms reach nobody.
 12. Free reproducibility check on the server: a one-off task running
@@ -151,7 +151,7 @@ the same-origin rewrite to `api.`. `PUBLIC_ASSET_BASE` is a project env var
 (production and preview). `www.` redirects 308 to the apex as a domain
 setting (`vercel api /v9/projects/simulacra-americana/domains/www.simulacraamericana.com -X PATCH`).
 Once the repo is connected to Vercel's Git integration, Vercel builds a preview from every push. Promoting to production is
-manual (`vercel promote <url>`) and needs Cameron's yes. After a promotion,
+manual (`vercel promote <url>`) and needs the owner's sign-off. After a promotion,
 check that the site loads, a year opens through the rewrite, and the robot
 loads from `assets.`.
 

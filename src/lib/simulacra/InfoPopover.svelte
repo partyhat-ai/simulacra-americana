@@ -1,5 +1,5 @@
 <script lang="ts">
-  // An ⓘ button that opens a short explanation — for terms (backtest, held
+  // An info button that opens a short explanation — for terms (backtest, held
   // out, leakage) that need a sentence, not a tooltip.
   import { Info } from 'lucide-svelte';
   import type { Snippet } from 'svelte';

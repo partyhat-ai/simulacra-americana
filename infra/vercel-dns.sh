@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Every DNS record the AWS side needs, added in Vercel DNS (the zone lives
 # there; scope camerons-projects-2a650f0d). Prints the commands by default;
-# --apply runs them. Each run needs Cameron's yes: these change production DNS.
+# --apply runs them. These change production DNS, so check the dry run first.
 #
 #   infra/vercel-dns.sh certs [--apply]      before the full apply: CAA + ACM validation
 #   infra/vercel-dns.sh endpoints [--apply]  after it: api. -> ALB, assets. -> CloudFront
