@@ -160,6 +160,12 @@ The queue worker uses the agent when `SIMULACRA_AGENT=1`. `SIMULACRA_AGENT_PUBLI
 is `gate` by default; with `ask`, every new what-if waits for approval, and the
 waiting page is told it will go live once reviewed.
 
+Untrusted text is fenced in every pass: the reader's words reach compile and research inside
+`<reader_text>`, and the search's notes and source titles reach extraction inside `<research_notes>`
+and `<sources>` (`scenario.fence` swaps angle brackets so the text can't close its fence). Each system
+prompt says fenced text is material, never instructions. A text that tries to instruct the compiler
+is answered as not modelable.
+
 With `SIMULACRA_LOG=1`, the server (`pnpm serve`) logs requests to `sessions/`, queues unknown text,
 and reloads a changed bundle without a restart. `SIMULACRA_AUTORUN=configs/live-1920.json`
 also starts the queue worker as text arrives (`SIMULACRA_PYTHON` picks the interpreter;
