@@ -1,6 +1,6 @@
 # simulacra-americana: source and docs, part 2 of 17
 
-Generated from commit `4f68c2b917aa` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `e836df7c977d` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 Files `EVAL.md` to `docs/DEPLOY.md`. Lines are numbered as in the repository.
 
 ## `EVAL.md`

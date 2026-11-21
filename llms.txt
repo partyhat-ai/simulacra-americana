@@ -18,13 +18,13 @@ than known.
 
 Read `VALIDITY.md` for what the system can and cannot claim.
 
-Generated from commit `4f68c2b917aa` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `e836df7c977d` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 
 ## Start here
 
 - [README](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/README.md): overview
 - [File map](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/MAP.md): all 1113 files with size, line count, description, and which digest part holds each one
-- [Commit history](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/HISTORY.md): 12 commit(s)
+- [Commit history](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/HISTORY.md): 13 commit(s)
 
 ## Documentation
 
@@ -38,7 +38,7 @@ Generated from commit `4f68c2b917aa` (2026-11-20) of github.com/partyhat-ai/simu
 - [docs/DEPLOY.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/docs/DEPLOY.md)
 - [docs/harness/README.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/docs/harness/README.md)
 
-## Full source text (1,809,026 characters, about 452,256 tokens, in 17 part(s))
+## Full source text (1,809,230 characters, about 452,307 tokens, in 17 part(s))
 
 - [llms/code-1.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-1.md): 10 files, `.dockerignore` to `Dockerfile` (102,167 characters)
 - [llms/code-2.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-2.md): 9 files, `EVAL.md` to `docs/DEPLOY.md` (109,929 characters)
@@ -56,7 +56,7 @@ Generated from commit `4f68c2b917aa` (2026-11-20) of github.com/partyhat-ai/simu
 - [llms/code-14.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-14.md): 13 files, `src/lib/simulacra/api.ts` to `src/lib/simulacra/places.ts` (109,732 characters)
 - [llms/code-15.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-15.md): 10 files, `src/lib/simulacra/runs.test.ts` to `src/lib/simulacra/state.test.ts` (112,475 characters)
 - [llms/code-16.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-16.md): 16 files, `src/lib/simulacra/state.ts` to `tests/test_agent.py` (117,880 characters)
-- [llms/code-17.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-17.md): 12 files, `tests/test_agents.py` to `vite.config.ts` (43,574 characters)
+- [llms/code-17.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-17.md): 12 files, `tests/test_agents.py` to `vite.config.ts` (43,778 characters)
 
 ## Data
 

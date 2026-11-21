@@ -1,6 +1,6 @@
 # simulacra-americana: file map
 
-Generated from commit `4f68c2b917aa` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `e836df7c977d` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 
 1113 tracked files. 196 are reproduced in full in the `code-N.md` parts; the rest are listed with the reason they are not.
 
@@ -210,7 +210,7 @@ Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/si
 | `tests/test_contract.py` | 5,425 | 109 | The page's contract: what serialize emits and the bundle the server reads. | code-17.md |
 | `tests/test_data_1920.py` | 1,300 | 30 | data/1920: the public inputs to the 1920 backbone match their provenance and load on their own. | code-17.md |
 | `tests/test_evaluate.py` | 3,400 | 60 | The evaluate-stage checks (EVAL.md). | code-17.md |
-| `tests/test_intake_spend.py` | 5,214 | 118 | The intake's spend: daily and monthly caps across every visitor, and how a | code-17.md |
+| `tests/test_intake_spend.py` | 5,404 | 120 | The intake's spend: daily and monthly caps across every visitor, and how a | code-17.md |
 | `tests/test_isolation.py` | 7,700 | 150 | Held-out benchmark isolation. | code-17.md |
 | `tests/test_reliability.py` | 5,667 | 135 | The worker lock, the batch wait's deadline, and prices for models the table doesn't list. | code-17.md |
 | `tests/test_whatif.py` | 3,554 | 57 | What-ifs and their evidence: source tiers, grounding, blending and confidence (evidence.py). | code-17.md |

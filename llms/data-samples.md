@@ -1,6 +1,6 @@
 # simulacra-americana: data samples
 
-Generated from commit `4f68c2b917aa` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `e836df7c977d` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 
 Data files are not reproduced in full. One sample per top-level folder, first 40 lines:
 

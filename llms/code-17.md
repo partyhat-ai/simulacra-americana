@@ -1,6 +1,6 @@
 # simulacra-americana: source and docs, part 17 of 17
 
-Generated from commit `4f68c2b917aa` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `e836df7c977d` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 Files `tests/test_agents.py` to `vite.config.ts`. Lines are numbered as in the repository.
 
 ## `tests/test_agents.py`
@@ -361,75 +361,77 @@ Files `tests/test_agents.py` to `vite.config.ts`. Lines are numbered as in the r
    47|     assert b.spent == 5.5  # the stage that crossed is still counted
    48| 
    49| 
-   50| def test_budget_without_a_ceiling_never_stops():
-   51|     b = intake.Budget()
-   52|     b.add(500.0, 'compile', record=False)
-   53|     assert b.spent == 500.0
-   54| 
-   55| 
-   56| @pytest.fixture
-   57| def sessions(tmp_path, monkeypatch):
-   58|     for name, file in [('SESSIONS', ''), ('QUEUE', 'queue.jsonl'), ('DONE', 'queue-done.jsonl'),
-   59|                        ('FAILED', 'queue-failed.jsonl'), ('DEAD', 'queue-dead.jsonl'), ('LOCK', 'intake.lock')]:
-   60|         monkeypatch.setattr(intake, name, tmp_path / file if file else tmp_path)
-   61|     monkeypatch.setattr(llm, 'LEDGER', tmp_path / 'spend.jsonl')
-   62|     monkeypatch.setattr(intake, '_config_for', lambda year, fallback=None: tmp_path / 'cfg.json')
-   63|     return tmp_path
-   64| 
-   65| 
-   66| def _queue(sessions, *texts):
-   67|     (sessions / 'queue.jsonl').write_text(''.join(json.dumps({'year': 1920, 'text': t, 'who': None}) + '\n' for t in texts))
-   68| 
-   69| 
-   70| def _lines(path):
-   71|     return [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
-   72| 
-   73| 
-   74| def test_a_failing_text_is_retried_once_then_given_up_without_blocking_the_queue(sessions, monkeypatch):
-   75|     calls = []
-   76| 
-   77|     def fake_whatif(text, cfg, refresh=False, ceiling=None):
-   78|         calls.append(text)
-   79|         if text == 'always breaks':
-   80|             raise RuntimeError('boom')
-   81|         return {'status': 'modelled', 'key': 'k', 'dollars': 1.0}
-   82| 
-   83|     monkeypatch.setattr(intake, 'whatif', fake_whatif)
-   84|     _queue(sessions, 'always breaks', 'fine')
-   85| 
-   86|     first = intake.process_queue('cfg.json')
-   87|     assert [r['status'] for r in first] == ['error', 'modelled']   # the text behind the failure still runs
-   88|     assert not (sessions / 'queue-dead.jsonl').exists()
-   89| 
-   90|     second = intake.process_queue('cfg.json')
-   91|     assert [r['status'] for r in second] == ['error']               # retried once
-   92|     assert _lines(sessions / 'queue-dead.jsonl')[0]['attempts'] == intake.MAX_ATTEMPTS
-   93|     assert _lines(sessions / 'queue-done.jsonl')[-1]['status'] == 'gave-up'
-   94| 
-   95|     assert intake.process_queue('cfg.json') == []                    # settled: never billed again
-   96|     assert calls == ['always breaks', 'fine', 'always breaks']
-   97| 
-   98| 
-   99| def test_nothing_runs_once_the_cap_is_spent(sessions, monkeypatch):
-  100|     monkeypatch.setattr(intake, 'whatif', lambda *a, **k: pytest.fail('modelled over the cap'))
-  101|     (sessions / 'spend.jsonl').write_text(json.dumps({'day': _today(), 'dollars': intake.DAILY_USD}) + '\n')
-  102|     _queue(sessions, 'one', 'two')
-  103|     out = intake.process_queue('cfg.json')
-  104|     assert [r['status'] for r in out] == ['over-cap', 'over-cap']    # both settled, so no page waits for nothing
-  105|     assert [x['status'] for x in _lines(sessions / 'queue-done.jsonl')] == ['over-cap', 'over-cap']
-  106| 
-  107| 
-  108| def test_a_text_that_crosses_the_cap_mid_run_is_settled_and_stops_the_rest(sessions, monkeypatch):
-  109|     def fake_whatif(text, cfg, refresh=False, ceiling=None):
-  110|         b = intake.Budget(ceiling)
-  111|         b.add(ceiling + 1, 'ask')  # recorded in the ledger, and crosses
-  112|         return {'status': 'modelled'}
-  113| 
-  114|     monkeypatch.setattr(intake, 'whatif', fake_whatif)
-  115|     _queue(sessions, 'expensive', 'next')
-  116|     out = intake.process_queue('cfg.json')
-  117|     assert [r['status'] for r in out] == ['over-cap', 'over-cap']
-  118|     assert not (sessions / 'queue-failed.jsonl').exists()            # a cap stop is not a failure to retry
+   50| def test_per_text_budget_is_unlimited_when_no_ceiling_is_passed():
+   51|     # Only the per-text limit is unset here. The public intake always passes a ceiling: what is
+   52|     # left under the $20/day and $200/month caps (see the cap tests below).
+   53|     b = intake.Budget()
+   54|     b.add(500.0, 'compile', record=False)
+   55|     assert b.spent == 500.0
+   56| 
+   57| 
+   58| @pytest.fixture
+   59| def sessions(tmp_path, monkeypatch):
+   60|     for name, file in [('SESSIONS', ''), ('QUEUE', 'queue.jsonl'), ('DONE', 'queue-done.jsonl'),
+   61|                        ('FAILED', 'queue-failed.jsonl'), ('DEAD', 'queue-dead.jsonl'), ('LOCK', 'intake.lock')]:
+   62|         monkeypatch.setattr(intake, name, tmp_path / file if file else tmp_path)
+   63|     monkeypatch.setattr(llm, 'LEDGER', tmp_path / 'spend.jsonl')
+   64|     monkeypatch.setattr(intake, '_config_for', lambda year, fallback=None: tmp_path / 'cfg.json')
+   65|     return tmp_path
+   66| 
+   67| 
+   68| def _queue(sessions, *texts):
+   69|     (sessions / 'queue.jsonl').write_text(''.join(json.dumps({'year': 1920, 'text': t, 'who': None}) + '\n' for t in texts))
+   70| 
+   71| 
+   72| def _lines(path):
+   73|     return [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
+   74| 
+   75| 
+   76| def test_a_failing_text_is_retried_once_then_given_up_without_blocking_the_queue(sessions, monkeypatch):
+   77|     calls = []
+   78| 
+   79|     def fake_whatif(text, cfg, refresh=False, ceiling=None):
+   80|         calls.append(text)
+   81|         if text == 'always breaks':
+   82|             raise RuntimeError('boom')
+   83|         return {'status': 'modelled', 'key': 'k', 'dollars': 1.0}
+   84| 
+   85|     monkeypatch.setattr(intake, 'whatif', fake_whatif)
+   86|     _queue(sessions, 'always breaks', 'fine')
+   87| 
+   88|     first = intake.process_queue('cfg.json')
+   89|     assert [r['status'] for r in first] == ['error', 'modelled']   # the text behind the failure still runs
+   90|     assert not (sessions / 'queue-dead.jsonl').exists()
+   91| 
+   92|     second = intake.process_queue('cfg.json')
+   93|     assert [r['status'] for r in second] == ['error']               # retried once
+   94|     assert _lines(sessions / 'queue-dead.jsonl')[0]['attempts'] == intake.MAX_ATTEMPTS
+   95|     assert _lines(sessions / 'queue-done.jsonl')[-1]['status'] == 'gave-up'
+   96| 
+   97|     assert intake.process_queue('cfg.json') == []                    # settled: never billed again
+   98|     assert calls == ['always breaks', 'fine', 'always breaks']
+   99| 
+  100| 
+  101| def test_nothing_runs_once_the_cap_is_spent(sessions, monkeypatch):
+  102|     monkeypatch.setattr(intake, 'whatif', lambda *a, **k: pytest.fail('modelled over the cap'))
+  103|     (sessions / 'spend.jsonl').write_text(json.dumps({'day': _today(), 'dollars': intake.DAILY_USD}) + '\n')
+  104|     _queue(sessions, 'one', 'two')
+  105|     out = intake.process_queue('cfg.json')
+  106|     assert [r['status'] for r in out] == ['over-cap', 'over-cap']    # both settled, so no page waits for nothing
+  107|     assert [x['status'] for x in _lines(sessions / 'queue-done.jsonl')] == ['over-cap', 'over-cap']
+  108| 
+  109| 
+  110| def test_a_text_that_crosses_the_cap_mid_run_is_settled_and_stops_the_rest(sessions, monkeypatch):
+  111|     def fake_whatif(text, cfg, refresh=False, ceiling=None):
+  112|         b = intake.Budget(ceiling)
+  113|         b.add(ceiling + 1, 'ask')  # recorded in the ledger, and crosses
+  114|         return {'status': 'modelled'}
+  115| 
+  116|     monkeypatch.setattr(intake, 'whatif', fake_whatif)
+  117|     _queue(sessions, 'expensive', 'next')
+  118|     out = intake.process_queue('cfg.json')
+  119|     assert [r['status'] for r in out] == ['over-cap', 'over-cap']
+  120|     assert not (sessions / 'queue-failed.jsonl').exists()            # a cap stop is not a failure to retry
 ```
 
 ## `tests/test_isolation.py`
