@@ -1,1951 +1,1683 @@
-# synthetic-electorate-toy: source and docs, part 14 of 16
+# synthetic-electorate-toy: source and docs, part 14 of 17
 
-Generated from commit `5fc0a9e54bc9` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
-Files `src/lib/simulacra/sample.test.ts` to `src/lib/simulacra/state.ts`. Lines are numbered as in the repository.
+Generated from commit `4a07108d3ae4` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Files `src/lib/simulacra/api.ts` to `src/lib/simulacra/places.ts`. Lines are numbered as in the repository.
 
-## `src/lib/simulacra/sample.test.ts`
-
-```ts
-    1| import { describe, expect, test } from 'vitest';
-    2| import { ELECTION_YEARS } from './geo';
-    3| import { electionOf } from './history';
-    4| import { _model, createSampleApi, UNOPPOSED } from './sample';
-    5| import { RunResultSchema, RunStatusSchema, VoterSchema } from './schemas';
-    6| 
-    7| const fast = () => Promise.resolve();
-    8| 
-    9| describe('the sample model', () => {
-   10|   test.each(ELECTION_YEARS)('an unchanged rerun of %i reproduces history', (y) => {
-   11|     const e = electionOf(y);
-   12|     const r = _model.rerun(y);
-   13|     expect(e).not.toBeNull();
-   14|     expect(r).not.toBeNull();
-   15|     if (!e || !r) return;
-   16|     expect(r.winner).toBe(e.winner);
-   17|     expect(r.ev.A).toBe(e.candidates[0].ev);
-   18|     expect(r.ev.B).toBe(e.candidates[1]?.ev ?? 0);
-   19|     expect(r.states.filter((s) => s.flipped)).toEqual([]);
-   20|     expect(new Map(r.states.map((s) => [s.code, s.won]))).toEqual(new Map(e.states.map((s) => [s.code, s.won])));
-   21|     expect(r.confidence).toBeNull();
-   22|     // The sample's results satisfy the server's contract.
-   23|     expect(RunResultSchema.safeParse(r).success).toBe(true);
-   24|   });
-   25| 
-   26|   test('1789, unopposed, has no runner-up and doesn’t crash', async () => {
-   27|     expect(electionOf(1789)?.unopposed).toBe(true);
-   28|     expect(_model.national(1789)).toEqual(UNOPPOSED);
-   29|     expect(_model.whatIfsFor(1789)).toEqual([]);
-   30|     expect(_model.slicesFor(1789).length).toBeGreaterThan(0);
-   31|     expect(_model.rerun(1789, ['women'], 'what if women could vote')?.winner).toBe('A');
-   32| 
-   33|     let t = 0;
-   34|     const api = createSampleApi({ sleep: fast, now: () => t });
-   35|     const election = await api.election(1789);
-   36|     expect(election.kind === 'ok' && election.value.whatIfs).toEqual([]);
-   37|     const started = await api.startRun(1789);
-   38|     expect(started.kind).toBe('ok');
-   39|     if (started.kind !== 'ok') return;
-   40|     t = 1e6;
-   41|     const done = await api.run(started.value.id);
-   42|     expect(done.kind === 'ok' && done.value.status).toBe('done');
-   43|     const slice = _model.slicesFor(1789)[0]?.key ?? '';
-   44|     expect((await api.voter(1789, slice, started.value.id)).kind).toBe('ok');
-   45|   });
-   46| 
-   47|   test('every what-if of every year runs and stays inside the contract', () => {
-   48|     for (const y of ELECTION_YEARS) {
-   49|       for (const w of _model.whatIfsFor(y)) {
-   50|         const r = _model.rerun(y, [w.key]);
-   51|         expect(RunResultSchema.safeParse(r).success, `${y} ${w.key}`).toBe(true);
-   52|         expect(r?.applied.map((a) => a.key)).toEqual([w.key]);
-   53|       }
-   54|     }
-   55|   });
-   56| 
-   57|   test('typed words are read as a what-if, or handed back as unknown', () => {
-   58|     expect(_model.rerun(1912, [], 'what if Taft dropped out')?.applied.map((a) => a.key)).toEqual(['taft-out']);
-   59|     expect(_model.rerun(1912, [], 'what if it rained')?.unknown).toBe('what if it rained');
-   60|   });
-   61| 
-   62|   test('a dragged group changes the summary', () => {
-   63|     const r = _model.rerun(2000, [], '', { felony: { B: 0.2, barred: -0.2 } });
-   64|     expect(r?.summary).toMatch(/Among people with felony records, Gore gains 10 in 50/);
-   65|   });
-   66| });
-   67| 
-   68| describe('createSampleApi', () => {
-   69|   test('a run counts states over time, then is done; a stopped run fails', async () => {
-   70|     let t = 0;
-   71|     const api = createSampleApi({ sleep: fast, now: () => t });
-   72|     const started = await api.startRun(2000, { whatIfs: ['nader-out'] });
-   73|     if (started.kind !== 'ok') throw new Error('the sample run didn’t start');
-   74|     const id = started.value.id;
-   75|     t = 45 * 10;
-   76|     const running = await api.run(id);
-   77|     expect(running).toMatchObject({ kind: 'ok', value: { status: 'running', done: 10 } });
-   78|     t = 1e6;
-   79|     const done = await api.run(id);
-   80|     expect(done.kind === 'ok' && RunStatusSchema.safeParse(done.value).success).toBe(true);
-   81|     expect(done.kind === 'ok' && done.value.status === 'done' && done.value.result.applied[0]?.key).toBe('nader-out');
-   82|     const voter = await api.voter(2000, 'felony', id);
-   83|     expect(voter.kind === 'ok' && VoterSchema.safeParse(voter.value).success).toBe(true);
-   84|     await api.stopRun(id);
-   85|     expect(await api.run(id)).toEqual({ kind: 'ok', value: { status: 'failed', error: 'That run was stopped.' } });
-   86|   });
-   87| 
-   88|   test('an unknown group or year is a missing error, not an empty answer', async () => {
-   89|     const api = createSampleApi({ sleep: fast });
-   90|     expect((await api.voter(1912, 'nobody')).kind).toBe('error');
-   91|     expect((await api.startRun(1790)).kind).toBe('error');
-   92|   });
-   93| });
-```
-
-## `src/lib/simulacra/sample.ts`
+## `src/lib/simulacra/api.ts`
 
 ```ts
-    1| // Sample mode: the simulation server's answers (api.ts), made up, so the page
-    2| // can be reviewed without that server. The page says "Sample" while this is
-    3| // on. The elections are real (history.ts): who ran, who won, which party
-    4| // carried each state. What a simulation would work out — how groups of voters
-    5| // split, what a what-if changes, how close each state was — is invented here
-    6| // by a small deterministic model: plausible, never authoritative. Ten
-    7| // elections have written stories (stories.ts); every other year gets the
-    8| // groups every election has (sampleEras.ts), above all the people who
-    9| // couldn't vote.
-   10| import type { Edits, Outcome, RunAsk, SimulacraApi } from './api';
-   11| import { ELECTION_YEARS, STATE_BY_CODE } from './geo';
-   12| import { type Election, electionOf } from './history';
-   13| import {
-   14|   adultsIn,
-   15|   BORDER,
-   16|   blackShare,
-   17|   ENSLAVED,
-   18|   ERA_PEOPLE,
-   19|   REGIONS,
-   20|   SOUTH,
-   21|   SPREAD,
-   22|   southFactor,
-   23|   votesIn,
-   24| } from './sampleData';
-   25| import { eraSlices, eraWhatIfs } from './sampleEras';
-   26| import type {
-   27|   DropTo,
-   28|   Fractions,
-   29|   Lean,
-   30|   Region,
-   31|   SampleContext,
-   32|   SliceSpec,
-   33|   StateWeights,
-   34|   VoterSpec,
-   35|   Votes,
-   36| } from './sampleTypes';
-   37| import type { Choice, Kind, RunResult, Slice, StateResult, Voter } from './schemas';
-   38| import { STORIES } from './stories';
-   39| import { type Bucket, bucketOf } from './types';
-   40| 
-   41| const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
-   42| /** A stable number in [0, 1) for a string. */
-   43| const unit = (s: string) => {
-   44|   let h = 2166136261;
-   45|   for (const ch of s) h = Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0;
-   46|   return (h % 10007) / 10007;
-   47| };
-   48| const FIELDS = ['barred', 'home', 'A', 'B', 'O'] as const;
-   49| const IDX = { A: 0, B: 1, O: 2 } as const;
-   50| const round3 = (x: number) => Math.round(x * 1000) / 1000;
-   51| 
-   52| /** Who leads: A on a tie with anyone, then B over O. */
-   53| function leaderOf(v: Votes): Bucket {
-   54|   if (v.A >= v.B && v.A >= v.O) return 'A';
-   55|   return v.B >= v.O ? 'B' : 'O';
-   56| }
-   57| const topOf = (l: Lean): Bucket => leaderOf({ A: l[0], B: l[1], O: l[2] });
-   58| 
-   59| /** Where a group lives → state → weight, summing to 1 over the states voting in e. */
-   60| function weights(e: Election, where: Region, states?: StateWeights): Map<string, number> {
-   61|   const ev = new Map(e.states.map((s) => [s.code, s.ev]));
-   62|   const out = new Map<string, number>();
-   63|   const add = (code: string, w: number) => {
-   64|     if (ev.has(code) && w > 0) out.set(code, (out.get(code) ?? 0) + w);
-   65|   };
-   66|   if (states) for (const [c, w] of Object.entries(states)) add(c, w);
-   67|   else {
-   68|     switch (where) {
-   69|       case 'immigrant':
-   70|       case 'latino':
-   71|       case 'felony':
-   72|         for (const [c, w] of Object.entries(SPREAD[where])) add(c, w * (ev.get(c) ?? 0));
-   73|         for (const [c, v] of ev) add(c, v * 0.08);
-   74|         break;
-   75|       case 'black':
-   76|       case 'black-south':
-   77|       case 'black-north':
-   78|         for (const [c, v] of ev) {
-   79|           const south = SOUTH.includes(c) || BORDER.includes(c);
-   80|           if ((where === 'black-south' && !south) || (where === 'black-north' && south)) continue;
-   81|           add(c, v * blackShare(c, e.year));
-   82|         }
-   83|         break;
-   84|       case 'north':
-   85|         for (const [c, v] of ev) if (!SOUTH.includes(c)) add(c, v);
-   86|         break;
-   87|       case 'south':
-   88|       case 'new-england':
-   89|       case 'middle':
-   90|       case 'midwest':
-   91|       case 'plains':
-   92|       case 'industrial':
-   93|         for (const c of REGIONS[where]) add(c, ev.get(c) ?? 0);
-   94|         break;
-   95|       case 'all':
-   96|         for (const [c, v] of ev) add(c, v);
-   97|         break;
-   98|       default: {
-   99|         const never: never = where;
-  100|         throw new Error(`Unknown region ${String(never)}`);
-  101|       }
-  102|     }
-  103|   }
-  104|   const total = [...out.values()].reduce((a, b) => a + b, 0) || 1;
-  105|   for (const [c, w] of out) out.set(c, w / total);
-  106|   return out;
-  107| }
-  108| 
-  109| // ── The election as modelled ──
-  110| /** An unopposed election (1789, 1792, 1820): everyone who voted, voted for A. */
-  111| export const UNOPPOSED: Readonly<Votes> = { A: 1, B: 0, O: 0 };
-  112| 
-  113| /** The country's split: the popular vote when there is one, else one guessed from the electoral vote. */
-  114| function national(e: Election): Votes {
-  115|   const [a, b] = e.candidates;
-  116|   if (!b) return { ...UNOPPOSED };
-  117|   if (a.popular != null && b.popular != null) {
-  118|     const A = a.popular / 100;
-  119|     const B = b.popular / 100;
-  120|     return { A, B, O: Math.max(0, 1 - A - B) };
-  121|   }
-  122|   const A = 0.5 + (0.25 * (a.ev - b.ev)) / Math.max(1, a.ev + b.ev);
-  123|   return { A, B: 0.98 - A, O: 0.02 };
-  124| }
-  125| 
-  126| /** A state as modelled before any change: shares, votes cast (V, millions), electors, who carried it. */
-  127| interface Base extends Votes {
-  128|   readonly V: number;
-  129|   readonly ev: number;
-  130|   readonly won: string;
-  131|   readonly split: boolean;
-  132| }
-  133| 
-  134| function split(won: Bucket, lead: number, nat: Votes, h: number): Votes {
-  135|   if (won === 'O') {
-  136|     const o = Math.min(0.8, 0.46 + 0.14 * h + lead / 2);
-  137|     const ra = nat.A / Math.max(0.01, nat.A + nat.B);
-  138|     return { A: (1 - o) * ra, B: (1 - o) * (1 - ra), O: o };
-  139|   }
-  140|   let o = Math.min(0.3, nat.O * (0.5 + h));
-  141|   let w = (1 - o + lead) / 2;
-  142|   if (w - o < 0.03) {
-  143|     o = Math.max(0, (1 + lead) / 3 - 0.03);
-  144|     w = (1 - o + lead) / 2;
-  145|   }
-  146|   const r = Math.max(0, 1 - o - w);
-  147|   return won === 'A' ? { A: w, B: r, O: o } : { A: r, B: w, O: o };
-  148| }
-  149| 
-  150| // Each state's vote share by candidate. The winner is history's; how close
-  151| // it was is modelled — a state that stayed with the same party in the
-  152| // elections around this one was safe, one that swung was close — except for
-  153| // the states the written stories carry real shares for.
-  154| function baseline(e: Election): Map<string, Base> {
-  155|   const nat = national(e);
-  156|   const fixed = STORIES[e.year]?.states ?? {};
-  157|   const i = ELECTION_YEARS.indexOf(e.year);
-  158|   const near = [-2, -1, 1, 2].flatMap((d) => {
-  159|     const y = ELECTION_YEARS[i + d];
-  160|     const n = y === undefined ? null : electionOf(y);
-  161|     return n ? [n] : [];
-  162|   });
-  163|   const weight = (s: { code: string; ev: number }) => s.ev * southFactor(s.code, e.year);
-  164|   const total = e.states.reduce((a, s) => a + weight(s), 0);
-  165|   const votes = votesIn(e.year);
-  166|   const out = new Map<string, Base>();
-  167|   for (const s of e.states) {
-  168|     const h = unit(`${e.year}:${s.code}`);
-  169|     const real = fixed[s.code];
-  170|     let sh: Votes;
-  171|     if (real) sh = { A: real[0], B: real[1], O: Math.max(0, 1 - real[0] - real[1]) };
-  172|     else {
-  173|       const same = near.filter((n) => n.states.find((x) => x.code === s.code)?.party === s.party).length;
-  174|       const stable = near.length ? same / near.length : 0.5;
-  175|       const lead = ((2 + stable * stable * 24) * (0.7 + 0.6 * h) + Math.abs(nat.A - nat.B) * 35) / 100;
-  176|       sh = split(bucketOf(s.won), lead, nat, h);
-  177|     }
-  178|     out.set(s.code, { ...sh, V: (votes * weight(s)) / total, ev: s.ev, won: s.won, split: s.party === 'SP' });
-  179|   }
-  180|   return out;
-  181| }
-  182| 
-  183| // ── The groups ──
-  184| /** A group as the model carries it through a run. */
-  185| interface ModelSlice extends Fractions {
-  186|   readonly key: string;
-  187|   readonly label: string;
-  188|   readonly where: Region;
-  189|   readonly states: StateWeights | undefined;
-  190|   readonly mirror: boolean;
-  191|   readonly tilt: number;
-  192|   /** Millions. */
-  193|   readonly adults: number;
-  194|   readonly turnout: number;
-  195|   readonly leanIf: Lean;
-  196|   readonly voter: VoterSpec | null;
-  197| }
-  198| 
-  199| function compose(barred: number, turnout: number, lean: Lean): Fractions {
-  200|   const voting = (1 - barred) * turnout;
-  201|   return { barred, home: 1 - barred - voting, A: voting * lean[0], B: voting * lean[1], O: voting * lean[2] };
-  202| }
-  203| 
-  204| function build(e: Election, nat: Votes, s: SliceSpec): ModelSlice {
-  205|   const tilt = s.tilt ?? 0;
-  206|   const voted = s.lean.some((x) => x > 0);
-  207|   let leanIf: Lean;
-  208|   if (s.mirror) {
-  209|     // A group that votes like its own state (women) splits like the country.
-  210|     const m = [nat.A + tilt / 2, nat.B - tilt / 2, nat.O].map((x) => Math.max(0, x));
-  211|     const sum = m.reduce((a, b) => a + b, 0) || 1;
-  212|     leanIf = [(m[0] ?? 0) / sum, (m[1] ?? 0) / sum, (m[2] ?? 0) / sum];
-  213|   } else if (s.leanIf) leanIf = s.leanIf;
-  214|   else leanIf = voted ? s.lean : [0.5, 0.5, 0];
-  215|   const lean = voted ? s.lean : leanIf;
-  216|   return {
-  217|     key: s.key,
-  218|     label: s.label,
-  219|     where: s.where,
-  220|     states: s.states,
-  221|     mirror: !!s.mirror,
-  222|     tilt,
-  223|     adults: adultsIn(e.year) * s.share,
-  224|     turnout: s.turnout,
-  225|     leanIf,
-  226|     voter: s.voter ?? null,
-  227|     ...compose(s.barred, s.turnout, lean),
-  228|   };
-  229| }
-  230| 
-  231| const slicesFor = (e: Election): ModelSlice[] => {
-  232|   const nat = national(e);
-  233|   return (STORIES[e.year]?.slices ?? eraSlices(e, nat)).map((s) => build(e, nat, s));
-  234| };
-  235| 
-  236| // ── What-ifs ──
-  237| export interface ModelWhatIf {
-  238|   readonly key: string;
-  239|   readonly label: string;
-  240|   readonly kind: Kind;
-  241|   readonly detail: string;
-  242|   readonly slices: readonly string[];
-  243|   readonly apply: (c: SampleContext) => void;
-  244| }
-  245| 
-  246| function whatIfsFor(e: Election): ModelWhatIf[] {
-  247|   if (e.unopposed) return [];
-  248|   return (STORIES[e.year]?.whatIfs ?? eraWhatIfs(e.year)).map(([key, label, kind, detail, slices, apply]) => ({
-  249|     key,
-  250|     label,
-  251|     kind,
-  252|     detail,
-  253|     slices,
-  254|     apply,
-  255|   }));
-  256| }
-  257| 
-  258| // Words in a typed what-if → the what-if it most likely means. Sample mode
-  259| // only; the server reads free text for real.
-  260| const WORDS: readonly (readonly [RegExp, readonly string[]])[] = [
-  261|   [/wom[ae]n|suffrag|19th/i, ['women', 'no-19th']],
-  262|   [/15th|jim crow|poll tax|literacy|disenfranch|voting rights|black (men|voters|southerners)/i, ['fifteenth']],
-  263|   [/emancipat|slave|abolit|freed/i, ['emancipation']],
-  264|   [/three.?fifths|3\/5/i, ['three-fifths']],
-  265|   [/propert|landless|freehold/i, ['no-property']],
-  266|   [/\b18\b|eighteen|young|youth|26th/i, ['age18']],
-  267|   [/felon|prison|convict|incarcerat/i, ['felons']],
-  268|   [/migrat/i, ['migration']],
-  269|   [/everyone|every adult|universal|compulsory|all adults/i, ['everyone']],
-  270|   [/panic|depression|crash|economy|recession/i, ['panic']],
-  271|   [/nader/i, ['nader-out']], [/wallace/i, ['wallace-out']], [/thurmond|dixiecrat/i, ['thurmond-out']],
-  272|   [/taft/i, ['taft-out']], [/debs|socialist/i, ['debs-out']], [/comey|email/i, ['comey']],
-  273|   [/debate|televis|\btv\b/i, ['debate']], [/sedition|alien/i, ['sedition']],
-  274|   [/unite|split|douglas|breckinridge/i, ['unite']], [/ballot|butterfly|palm beach/i, ['ballot']],
-  275|   [/money|spend|hanna|campaign/i, ['money']], [/peace|vietnam|paris/i, ['peace']], [/turnout/i, ['turnout', 'everyone']],
-  276| ];
-  277| function understand(text: string, available: readonly ModelWhatIf[]): string | null {
-  278|   for (const [re, keys] of WORDS) {
-  279|     if (!re.test(text)) continue;
-  280|     const k = keys.find((x) => available.some((w) => w.key === x));
-  281|     if (k) return k;
-  282|   }
-  283|   return null;
-  284| }
-  285| 
-  286| // ── A run ──
-  287| /** One change to the country's votes, applied state by state once every what-if has run. */
-  288| type Delta =
-  289|   | { readonly type: 'votes'; readonly where: ReadonlyMap<string, number>; readonly A: number; readonly B: number; readonly O: number }
-  290|   | { readonly type: 'mirror'; readonly f: number; readonly tilt: number }
-  291|   | { readonly type: 'swing'; readonly pts: number; readonly to: 'A' | 'B'; readonly where: ReadonlyMap<string, number> | null }
-  292|   | { readonly type: 'drop'; readonly frac: number; readonly to: DropTo; readonly where: ReadonlyMap<string, number> | null }
-  293|   | { readonly type: 'shift'; readonly states: StateWeights; readonly to: 'A' | 'B' };
-  294| 
-  295| function fmtM(m: number): string {
-  296|   if (m >= 0.95) return `${m.toFixed(1).replace(/\.0$/, '')} million`;
-  297|   if (m >= 0.001) return `${Math.round(m * 1000).toLocaleString('en-US')},000`;
-  298|   return 'a few hundred';
-  299| }
-  300| // "Women" → "women" mid-sentence; proper adjectives and numbers stay.
-  301| const lower = (label: string) =>
-  302|   /^(Black|White|Latino|Southern|Northern|Irish|Catholic|Plains|New|Progressive|Loyal|Socialist|Northerners|\d)/.test(label)
-  303|     ? label
-  304|     : label.charAt(0).toLowerCase() + label.slice(1);
-  305| function howMany(share: number): string {
-  306|   if (share > 0.8) return 'nearly all';
-  307|   if (share > 0.6) return 'most';
-  308|   return 'more of them';
-  309| }
-  310| 
-  311| function makeContext(e: Election, base: ReadonlyMap<string, Base>) {
-  312|   const slices = new Map(slicesFor(e).map((s) => [s.key, s]));
-  313|   const deltas: Delta[] = [];
-  314|   const leads: string[] = [];
-  315|   const evs = new Map<string, number>();
-  316|   const name = (k: Bucket) =>
-  317|     k === 'O' ? (e.candidates[2]?.short ?? 'third parties') : (e.candidates.find((c) => c.key === k)?.short ?? '');
-  318|   const votes = votesIn(e.year);
-  319|   const set = (s: ModelSlice, next: Partial<Fractions>) => slices.set(s.key, { ...s, ...next });
-  320|   const at = (s: ModelSlice) => weights(e, s.where, s.states);
-  321|   /** The share of a group living inside region weights w. */
-  322|   const inside = (s: ModelSlice, w: ReadonlyMap<string, number> | null) =>
-  323|     w ? [...at(s)].reduce((a, [c, x]) => a + (w.has(c) ? x : 0), 0) : 1;
-  324|   const ctx: SampleContext = {
-  325|     year: e.year,
-  326|     has: (key) => slices.has(key),
-  327|     // Some of a group's barred members (or all) can vote, at the group's
-  328|     // turnout (or `turnout`), splitting like `lean` — or, for a group that
-  329|     // votes like its own state (women), like each state's voters.
-  330|     enfranchise(key, { barred = 0, turnout, lean } = {}) {
-  331|       const s = slices.get(key);
-  332|       if (!s) return;
-  333|       const t = turnout ?? s.turnout;
-  334|       const l = lean ?? s.leanIf;
-  335|       const add = s.barred - barred;
-  336|       const had = s.A + s.B + s.O > 0.01;
-  337|       let next: Fractions;
-  338|       if (add >= 0) {
-  339|         next = { barred, home: s.home + add * (1 - t), A: s.A + add * t * l[0], B: s.B + add * t * l[1], O: s.O + add * t * l[2] };
-  340|       } else {
-  341|         const k = 1 + add / Math.max(0.001, 1 - s.barred);
-  342|         next = { barred, home: s.home * k, A: s.A * k, B: s.B * k, O: s.O * k };
-  343|       }
-  344|       const d = { A: (next.A - s.A) * s.adults, B: (next.B - s.B) * s.adults, O: (next.O - s.O) * s.adults };
-  345|       const total = d.A + d.B + d.O;
-  346|       if (s.mirror) deltas.push({ type: 'mirror', f: total / votes, tilt: s.tilt });
-  347|       else deltas.push({ type: 'votes', where: at(s), ...d });
-  348|       set(s, next);
-  349|       const who = key === 'enslaved' ? 'freed men' : lower(s.label);
-  350|       const more = had ? 'more ' : '';
-  351|       if (total < 0) leads.push(`${fmtM(-total)} ${who} lose the vote.`);
-  352|       else if (s.mirror) leads.push(`${fmtM(total)} ${more}${who} vote, splitting much like the men of their states.`);
-  353|       else {
-  354|         const m = topOf(l);
-  355|         const share = l[IDX[m]] / (l[0] + l[1] + l[2] || 1);
-  356|         leads.push(`${fmtM(total)} ${more}${who} vote, ${howMany(share)} for ${name(m)}.`);
-  357|       }
-  358|     },
-  359|     swing(key, pts, to) {
-  360|       const s = slices.get(key);
-  361|       if (!s) return;
-  362|       const from = to === 'A' ? 'B' : 'A';
-  363|       const moved = Math.min(s[from], (pts / 100) * (s.A + s.B + s.O));
-  364|       const next = { ...s };
-  365|       next[to] += moved;
-  366|       next[from] -= moved;
-  367|       slices.set(key, next);
-  368|       const d = { A: 0, B: 0, O: 0 };
-  369|       d[to] = moved * s.adults;
-  370|       d[from] = -moved * s.adults;
-  371|       deltas.push({ type: 'votes', where: at(s), ...d });
-  372|       leads.push(`${name(to)} gains ${pts} points with ${lower(s.label)}.`);
-  373|     },
-  374|     swingAll(pts, to, region, text) {
-  375|       const w = region ? weights(e, region) : null;
-  376|       deltas.push({ type: 'swing', pts, to, where: w });
-  377|       const from = to === 'A' ? 'B' : 'A';
-  378|       for (const s of [...slices.values()]) {
-  379|         const moved = Math.min(s[from], (pts / 100) * inside(s, w) * (s.A + s.B + s.O));
-  380|         if (moved <= 0) continue;
-  381|         const next = { ...s };
-  382|         next[to] += moved;
-  383|         next[from] -= moved;
-  384|         slices.set(s.key, next);
-  385|       }
-  386|       leads.push(text);
-  387|     },
-  388|     drop(frac, to, text, region) {
-  389|       const w = region ? weights(e, region) : null;
-  390|       deltas.push({ type: 'drop', frac, to, where: w });
-  391|       const toA = to.A ?? 0;
-  392|       const toB = to.B ?? 0;
-  393|       for (const s of [...slices.values()]) {
-  394|         const moved = s.O * frac * inside(s, w);
-  395|         if (moved > 0) set(s, { O: s.O - moved, A: s.A + moved * toA, B: s.B + moved * toB, home: s.home + moved * (1 - toA - toB) });
-  396|       }
-  397|       leads.push(text);
-  398|     },
-  399|     unite(frac, text) {
-  400|       ctx.drop(frac, { B: 1 }, text);
-  401|     },
-  402|     shift(states, to, text) {
-  403|       deltas.push({ type: 'shift', states, to });
-  404|       leads.push(text);
-  405|     },
-  406|     move(key, frac, toKey) {
-  407|       const s = slices.get(key);
-  408|       const t = slices.get(toKey);
-  409|       if (!s || !t) return;
-  410|       const mix = (k: (typeof FIELDS)[number]) => (1 - frac) * s[k] + frac * t[k];
-  411|       const mixed: Fractions = { barred: mix('barred'), home: mix('home'), A: mix('A'), B: mix('B'), O: mix('O') };
-  412|       deltas.push({ type: 'votes', where: at(s), A: (mixed.A - s.A) * s.adults, B: (mixed.B - s.B) * s.adults, O: (mixed.O - s.O) * s.adults });
-  413|       deltas.push({ type: 'votes', where: at(t), A: frac * t.A * s.adults, B: frac * t.B * s.adults, O: frac * t.O * s.adults });
-  414|       const lost = (s.A + s.B + s.O - (mixed.A + mixed.B + mixed.O)) * s.adults;
-  415|       set(s, mixed);
-  416|       leads.push(`${fmtM(lost)} fewer Black votes are cast in the North, and almost none are added in the South.`);
-  417|     },
-  418|     turnout(key, t) {
-  419|       const s = slices.get(key);
-  420|       if (!s) return;
-  421|       const was = (s.A + s.B + s.O) / Math.max(0.001, 1 - s.barred);
-  422|       const k = t / Math.max(0.001, was);
-  423|       const A = s.A * k;
-  424|       const B = s.B * k;
-  425|       const O = s.O * k;
-  426|       const home = Math.max(0, 1 - s.barred - A - B - O);
-  427|       deltas.push({ type: 'votes', where: at(s), A: (A - s.A) * s.adults, B: (B - s.B) * s.adults, O: (O - s.O) * s.adults });
-  428|       set(s, { A, B, O, home });
-  429|       leads.push(`${s.label.replace(/ voters$/, '')} turnout rises from ${Math.round(was * 100)}% to ${Math.round(t * 100)}%.`);
-  430|     },
-  431|     everyone() {
-  432|       const before = leads.length;
-  433|       let added = 0;
-  434|       for (const key of [...slices.keys()]) {
-  435|         const was = slices.get(key);
-  436|         if (!was) continue;
-  437|         if (was.barred > 0) {
-  438|           ctx.enfranchise(key, { barred: 0, turnout: 1 });
-  439|           const n = slices.get(key) ?? was;
-  440|           added += (n.A + n.B + n.O - (was.A + was.B + was.O)) * was.adults;
-  441|         }
-  442|         // Those who could vote and stayed home vote too; they're counted
-  443|         // with everyone else below.
-  444|         const n = slices.get(key) ?? was;
-  445|         if (n.home > 0.0005) {
-  446|           const k = n.home / (n.A + n.B + n.O || 1);
-  447|           set(n, { home: 0, A: n.A * (1 + k), B: n.B * (1 + k), O: n.O * (1 + k) });
-  448|         }
-  449|       }
-  450|       // Every other adult who didn't vote does now — a little more
-  451|       // Democratic from the New Deal on.
-  452|       const rest = Math.max(0, adultsIn(e.year) - votes - added);
-  453|       let dem = 0;
-  454|       if (e.candidates[0].family === 'democratic') dem = 1;
-  455|       else if (e.candidates[1]?.family === 'democratic') dem = -1;
-  456|       deltas.push({ type: 'mirror', f: rest / votes, tilt: e.year >= 1936 ? 0.03 * dem : 0 });
-  457|       added += rest;
-  458|       leads.length = before;
-  459|       leads.push(`Every adult votes: about ${fmtM(added)} more ballots.`);
-  460|     },
-  461|     apportion() {
-  462|       const table = e.year <= 1830 ? ENSLAVED.early : ENSLAVED.late;
-  463|       let lost = 0;
-  464|       for (const [code, s] of base) {
-  465|         const share = table[code];
-  466|         if (!share) continue;
-  467|         const cut = Math.round((s.ev - 2) * ((0.6 * share) / (1 - 0.4 * share)));
-  468|         if (cut > 0) {
-  469|           evs.set(code, s.ev - cut);
-  470|           lost += cut;
-  471|         }
-  472|       }
-  473|       leads.push(`The slave states lose ${lost} electoral votes.`);
-  474|     },
-  475|     enfranchiseBlackSouth({ lean }) {
-  476|       const adults = adultsIn(e.year) * 0.04 * 0.9 * 0.6;
-  477|       deltas.push({ type: 'votes', where: weights(e, 'black-south'), A: adults * lean[0], B: adults * lean[1], O: adults * lean[2] });
-  478|       leads.push(`${fmtM(adults)} Black Southerners vote, most for ${name(topOf(lean))}.`);
-  479|     },
-  480|   };
-  481|   return { ctx, deltas, leads, evs, slices };
-  482| }
-  483| 
-  484| /** Each state's votes after every change. */
-  485| function tally(base: ReadonlyMap<string, Base>, deltas: readonly Delta[]): Map<string, Votes> {
-  486|   const now = new Map<string, Votes>();
-  487|   for (const [code, s] of base) now.set(code, { A: s.A * s.V, B: s.B * s.V, O: s.O * s.V });
-  488|   for (const d of deltas) {
-  489|     switch (d.type) {
-  490|       case 'votes':
-  491|         for (const [code, w] of d.where) {
-  492|           const s = now.get(code);
-  493|           if (!s) continue;
-  494|           s.A += d.A * w;
-  495|           s.B += d.B * w;
-  496|           s.O += d.O * w;
-  497|         }
-  498|         break;
-  499|       case 'mirror':
-  500|         for (const [code, b] of base) {
-  501|           const s = now.get(code);
-  502|           if (!s) continue;
-  503|           const add = d.f * b.V;
-  504|           s.A += add * clamp(b.A + d.tilt / 2, 0, 1);
-  505|           s.B += add * clamp(b.B - d.tilt / 2, 0, 1);
-  506|           s.O += add * b.O;
-  507|         }
-  508|         break;
-  509|       case 'swing': {
-  510|         const from = d.to === 'A' ? 'B' : 'A';
-  511|         for (const [code, s] of now) {
-  512|           if (d.where && !d.where.has(code)) continue;
-  513|           const moved = Math.min(s[from], (d.pts / 100) * (s.A + s.B + s.O));
-  514|           s[from] -= moved;
-  515|           s[d.to] += moved;
-  516|         }
-  517|         break;
-  518|       }
-  519|       case 'drop':
-  520|         for (const [code, s] of now) {
-  521|           if (d.where && !d.where.has(code)) continue;
-  522|           const moved = s.O * d.frac;
-  523|           s.O -= moved;
-  524|           s.A += moved * (d.to.A ?? 0);
-  525|           s.B += moved * (d.to.B ?? 0);
-  526|         }
-  527|         break;
-  528|       case 'shift':
-  529|         for (const [code, f] of Object.entries(d.states)) {
-  530|           const s = now.get(code);
-  531|           if (!s) continue;
-  532|           const moved = Math.min(s.O, f * (s.A + s.B + s.O));
-  533|           s.O -= moved;
-  534|           s[d.to] += moved;
-  535|         }
-  536|         break;
-  537|       default: {
-  538|         const never: never = d;
-  539|         throw new Error(`Unknown change ${JSON.stringify(never)}`);
-  540|       }
-  541|     }
-  542|   }
-  543|   return now;
-  544| }
-  545| 
-  546| const RANK: Readonly<Record<Kind, number>> = { franchise: 0, population: 1, issue: 2, candidate: 2 };
-  547| const CONFIDENCE = ['high', 'medium', 'low'] as const;
-  548| const stateName = (code: string) => STATE_BY_CODE.get(code)?.name ?? code;
-  549| const list = (names: readonly string[]) =>
-  550|   names.length <= 2 ? names.join(' and ') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
-  551| function pts(m: number): string {
-  552|   if (m < 0.1) return 'less than a tenth of a point';
-  553|   const p = m.toFixed(1);
-  554|   return `${p} point${p === '1.0' ? '' : 's'}`;
-  555| }
-  556| /** The gap between the first and second of three shares. */
-  557| const gap = (v: Votes) => {
-  558|   const [x = 0, y = 0] = [v.A, v.B, v.O].sort((p, q) => q - p);
-  559|   return x - y;
-  560| };
-  561| 
-  562| function rerunElection(e: Election, keys: readonly string[] = [], text = '', edits: Edits = {}): RunResult {
-  563|   const year = e.year;
-  564|   const base = baseline(e);
-  565|   const available = whatIfsFor(e);
-  566|   const { ctx, deltas, leads, evs, slices } = makeContext(e, base);
-  567|   const chosen = keys.flatMap((k) => available.filter((w) => w.key === k).slice(0, 1));
-  568|   let unknown: string | null = null;
-  569|   const typed = text.trim();
-  570|   if (typed) {
-  571|     const meant = understand(typed, available);
-  572|     const w = available.find((x) => x.key === meant);
-  573|     if (!w) unknown = typed;
-  574|     else if (!chosen.includes(w)) chosen.push(w);
-  575|   }
-  576|   for (const w of chosen) w.apply(ctx);
-  577|   const shortOf = (k: string) => e.candidates.find((c) => c.key === k)?.short ?? '';
-  578|   // Groups changed by hand: the new make-up, its votes spread over the
-  579|   // group's states.
-  580|   let edited = 0;
-  581|   for (const [key, d] of Object.entries(edits)) {
-  582|     const s = slices.get(key);
-  583|     if (!s) continue;
-  584|     const moved = (k: (typeof FIELDS)[number]) => Math.max(0, s[k] + (d[k] ?? 0));
-  585|     const next: Fractions = { barred: moved('barred'), home: moved('home'), A: moved('A'), B: moved('B'), O: moved('O') };
-  586|     deltas.push({
-  587|       type: 'votes',
-  588|       where: weights(e, s.where, s.states),
-  589|       A: (next.A - s.A) * s.adults,
-  590|       B: (next.B - s.B) * s.adults,
-  591|       O: (next.O - s.O) * s.adults,
-  592|     });
-  593|     slices.set(key, { ...s, ...next });
-  594|     const moves = (['A', 'B'] as const).flatMap((k) => {
-  595|       const n = Math.round((d[k] ?? 0) * 50);
-  596|       return n ? [`${shortOf(k)} ${n > 0 ? 'gains' : 'loses'} ${Math.abs(n)} in 50`] : [];
-  597|     });
-  598|     if (moves.length) {
-  599|       leads.push(`Among ${lower(s.label)}, ${moves.join(' and ')}.`);
-  600|       edited++;
-  601|     }
-  602|   }
-  603| 
-  604|   const now = tally(base, deltas);
-  605|   const ev: Votes = {
-  606|     A: e.candidates[0].ev,
-  607|     B: e.candidates[1]?.ev ?? 0,
-  608|     O: e.candidates.slice(2).reduce((a, c) => a + c.ev, 0),
-  609|   };
-  610|   const states: (StateResult & { ev: number })[] = [];
-  611|   for (const [code, b] of base) {
-  612|     const s = now.get(code) ?? { A: 0, B: 0, O: 0 };
-  613|     // A state history split between candidates stays split.
-  614|     const flipped = !b.split && leaderOf(s) !== leaderOf(b);
-  615|     let won = b.won;
-  616|     if (flipped) {
-  617|       const to = leaderOf(s);
-  618|       const from = bucketOf(b.won);
-  619|       const moved = Math.min(b.ev, ev[from]);
-  620|       ev[from] -= moved;
-  621|       ev[to] += moved;
-  622|       won = to;
-  623|     }
-  624|     const cutTo = evs.get(code);
-  625|     if (cutTo !== undefined) {
-  626|       const cut = cutTo - b.ev;
-  627|       if (b.split) {
-  628|         ev.A += Math.ceil(cut / 2);
-  629|         ev.B += Math.floor(cut / 2);
-  630|       } else ev[bucketOf(won)] += cut;
-  631|     }
-  632|     states.push({ code, won, flipped, ev: cutTo ?? b.ev, margin: (gap(s) / (s.A + s.B + s.O || 1)) * 100 });
-  633|   }
-  634|   const total = ev.A + ev.B + ev.O;
-  635|   const best = leaderOf(ev);
-  636|   const changed = states.some((s) => s.flipped) || evs.size > 0;
-  637|   let winner: Bucket | null = 'A';
-  638|   if (changed) winner = ev[best] > total / 2 ? best : null;
-  639| 
-  640|   // The verdict: what changed, then what it did.
-  641|   const nameOf = (k: Bucket) => (k === 'O' ? (e.candidates[2]?.short ?? 'third parties') : shortOf(k));
-  642|   const flips = states.filter((s) => s.flipped).sort((a, b) => b.ev - a.ev);
-  643|   const score = (k: Bucket) => `${ev[k]}–${ev[k === 'A' ? 'B' : 'A']}`;
-  644|   // Flips that cost history's winner a state, and ones that gave it one.
-  645|   const lost = flips.filter((f) => base.get(f.code)?.won === 'A');
-  646|   const gained = flips.filter((f) => f.won === 'A');
-  647|   const names = (arr: readonly StateResult[], n: number) =>
-  648|     arr.length > n
-  649|       ? `${arr
-  650|           .slice(0, n)
-  651|           .map((f) => stateName(f.code))
-  652|           .join(', ')} and ${arr.length - n} more`
-  653|       : list(arr.map((f) => stateName(f.code)));
-  654|   const to = (arr: readonly StateResult[]) => {
-  655|     const [only, ...more] = [...new Set(arr.map((f) => bucketOf(f.won)))];
-  656|     return only && !more.length ? ` to ${nameOf(only)}` : '';
-  657|   };
-  658|   const flipOf = (arr: readonly StateResult[]) => `${names(arr, 3)} flip${arr.length === 1 ? 's' : ''}${to(arr)}`;
-  659|   // The closest state the change pushed toward losing, and how close.
-  660|   const was = new Map([...base].map(([code, b]) => [code, gap(b) * 100] as const));
-  661|   const squeezed = (k: Bucket) =>
-  662|     states
-  663|       .filter((f) => !f.flipped && f.won === k && f.margin < (was.get(f.code) ?? 0) - 0.05)
-  664|       .sort((a, b) => a.margin - b.margin)[0];
-  665|   const heldA = squeezed('A');
-  666|   const holds = heldA ? `${stateName(heldA.code)} holds for ${nameOf('A')} by ${pts(heldA.margin)}.` : '';
-  667|   let outcome: string;
-  668|   if (!chosen.length && !edited) {
-  669|     outcome = unknown ? '' : `Rerun with nothing changed, ${year} comes out as it did: ${nameOf('A')} wins, ${score('A')}.`;
-  670|   } else if (winner && winner !== 'A') {
-  671|     outcome = `That’s enough: ${nameOf(winner)} wins, ${score(winner)}${lost.length ? `, flipping ${names(lost, 4)}` : ''}.`;
-  672|   } else if (!winner) {
-  673|     outcome = `${lost.length ? `${flipOf(lost)}, and` : 'Now'} no one has a majority of electoral votes: the House would decide.`;
-  674|   } else if (lost.length) {
-  675|     outcome = `${flipOf(lost)}, but it isn’t enough: ${nameOf('A')} still wins, ${score('A')}. ${holds}`;
-  676|   } else if (gained.length) {
-  677|     outcome = `${nameOf('A')} wins bigger, ${score('A')}, taking ${names(gained, 4)}.`;
-  678|   } else if (evs.size) {
-  679|     outcome = `${nameOf('A')} still wins, ${score('A')}.`;
-  680|   } else if (heldA) {
-  681|     outcome = `It isn’t enough to flip a state. ${holds}`;
-  682|   } else {
-  683|     const heldB = e.candidates[1] ? squeezed('B') : undefined;
-  684|     outcome = heldB
-  685|       ? `No state changes hands; ${stateName(heldB.code)} stays with ${nameOf('B')} by ${pts(heldB.margin)}.`
-  686|       : 'No state changes hands.';
-  687|   }
-  688|   const kinds = chosen.map((w) => RANK[w.kind]);
-  689|   return {
-  690|     ev,
-  691|     winner,
-  692|     states: states.map(({ code, won, flipped, margin }) => ({ code, won, flipped, margin: Math.round(margin * 10) / 10 })),
-  693|     slices: [...slices.values()].map(display),
-  694|     summary: [...leads, outcome].filter(Boolean).join(' '),
-  695|     confidence: kinds.length ? (CONFIDENCE[Math.max(...kinds)] ?? 'low') : null,
-  696|     applied: chosen.map(({ key, label, kind }) => ({ key, label, kind })),
-  697|     unknown,
-  698|   };
-  699| }
-  700| 
-  701| const display = (s: ModelSlice): Slice => ({
-  702|   key: s.key,
-  703|   label: s.label,
-  704|   adults: Math.round(s.adults * 100) / 100,
-  705|   barred: round3(s.barred),
-  706|   home: round3(Math.max(0, s.home)),
-  707|   A: round3(s.A),
-  708|   B: round3(s.B),
-  709|   O: round3(s.O),
-  710| });
-  711| 
-  712| // ── The people ──
-  713| /** What most of a group did. */
-  714| function most(c: Fractions): Choice {
-  715|   if (c.barred >= 0.5) return 'barred';
-  716|   if (c.home > c.A + c.B + c.O) return 'home';
-  717|   return leaderOf(c);
-  718| }
-  719| 
-  720| function voterOf(e: Election, key: string, result: RunResult | null): Voter | null {
-  721|   const s = slicesFor(e).find((x) => x.key === key);
-  722|   if (!s) return null;
-  723|   const after = result?.slices.find((x) => x.key === key);
-  724|   const changed = !!after && FIELDS.some((k) => Math.abs(after[k] - round3(s[k])) > 0.002);
-  725|   if (s.voter) {
-  726|     const [name, line, history, then, quote] = s.voter;
-  727|     return { name, line, quote, history, now: changed ? then : history };
-  728|   }
-  729|   const pool = ERA_PEOPLE[key] ?? [];
-  730|   const [name, line, quote] = pool[Math.floor(unit(`${e.year}:${key}`) * pool.length)] ?? ['A voter', '', ''];
-  731|   const history = most(s);
-  732|   const then = after ? most(after) : history;
-  733|   return { name, line, quote, history, now: changed ? then : history };
-  734| }
-  735| 
-  736| // ── The API (api.ts's shape) ──
-  737| export interface SampleOptions {
-  738|   /** Waits a while, as a server would; tests pass one that doesn't. */
-  739|   readonly sleep?: (ms: number) => Promise<void>;
-  740|   /** The clock a run's progress is measured on. */
-  741|   readonly now?: () => number;
-  742| }
-  743| 
-  744| const ok = <T>(value: T): Outcome<T> => ({ kind: 'ok', value });
-  745| const missing = (message: string): Outcome<never> => ({ kind: 'error', reason: 'missing', message, status: 404 });
-  746| /** A sample run counts one state every RUN_MS, so it takes a moment, like a server's. */
-  747| const RUN_MS = 45;
-  748| 
-  749| export function createSampleApi(options: SampleOptions = {}): SimulacraApi {
-  750|   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-  751|   const clock = options.now ?? Date.now;
-  752|   const runs = new Map<string, { at: number; total: number; result: RunResult }>();
-  753|   let n = 0;
-  754|   return {
-  755|     sample: true,
-  756|     async election(year) {
-  757|       await sleep(220);
-  758|       const e = electionOf(year);
-  759|       if (!e) return ok({ slices: [], whatIfs: [], simulated: false });
-  760|       return ok({
-  761|         slices: slicesFor(e).map(display),
-  762|         whatIfs: whatIfsFor(e).map(({ key, label, kind, detail, slices }) => ({ key, label, kind, detail, slices: [...slices] })),
-  763|         simulated: true,
-  764|       });
-  765|     },
-  766|     async startRun(year, { whatIfs = [], text = '', edits = {} }: RunAsk = {}) {
-  767|       await sleep(120);
-  768|       const e = electionOf(year);
-  769|       if (!e) return missing('No simulation for this year.');
-  770|       n += 1;
-  771|       const id = `sample-${n}`;
-  772|       runs.set(id, { at: clock(), total: e.states.length, result: rerunElection(e, whatIfs, text, edits) });
-  773|       return ok({ id });
-  774|     },
-  775|     async run(id) {
-  776|       await sleep(40);
-  777|       const r = runs.get(id);
-  778|       if (!r) return ok({ status: 'failed', error: 'That run was stopped.' });
-  779|       const done = Math.min(r.total, Math.floor((clock() - r.at) / RUN_MS));
-  780|       if (done < r.total) return ok({ status: 'running', done, total: r.total });
-  781|       return ok({ status: 'done', done: r.total, total: r.total, result: r.result });
-  782|     },
-  783|     async stopRun(id) {
-  784|       runs.delete(id);
-  785|       return ok(null);
-  786|     },
-  787|     async voter(year, sliceKey, runId) {
-  788|       await sleep(140);
-  789|       const e = electionOf(year);
-  790|       const result = runId ? (runs.get(runId)?.result ?? null) : null;
-  791|       const v = e ? voterOf(e, sliceKey, result) : null;
-  792|       return v ? ok(v) : missing('No one from that group.');
-  793|     },
-  794|   };
-  795| }
-  796| 
-  797| /** The model, for checking it outside the page (scripts/model-check.ts, the tests). */
-  798| export const _model = {
-  799|   national: (year: number): Votes | null => {
-  800|     const e = electionOf(year);
-  801|     return e ? national(e) : null;
-  802|   },
-  803|   rerun: (year: number, keys: readonly string[] = [], text = '', edits: Edits = {}): RunResult | null => {
-  804|     const e = electionOf(year);
-  805|     return e ? rerunElection(e, keys, text, edits) : null;
-  806|   },
-  807|   slicesFor: (year: number): Slice[] => {
-  808|     const e = electionOf(year);
-  809|     return e ? slicesFor(e).map(display) : [];
-  810|   },
-  811|   whatIfsFor: (year: number): ModelWhatIf[] => {
-  812|     const e = electionOf(year);
-  813|     return e ? whatIfsFor(e) : [];
-  814|   },
-  815| };
-```
-
-## `src/lib/simulacra/sampleData.ts`
-
-```ts
-    1| // The sample model's numbers (sample.ts): the country, roughly, by year;
-    2| // where groups live; and the people it quotes for years with no written
-    3| // story. Rough on purpose: the sample is labelled, and only shows how a
-    4| // rerun works.
-    5| import type { Region } from './sampleTypes';
-    6| 
-    7| /** [[x, y], …], x ascending, for lerp(). */
-    8| export type Table = readonly (readonly [number, number])[];
-    9| 
-   10| /** Piecewise-linear lookup in a table, flat past either end. */
-   11| export function lerp(table: Table, x: number): number {
-   12|   let prev: readonly [number, number] | undefined;
-   13|   for (const pt of table) {
-   14|     if (x <= pt[0]) {
-   15|       if (!prev) return pt[1];
-   16|       return prev[1] + ((pt[1] - prev[1]) * (x - prev[0])) / (pt[0] - prev[0]);
-   17|     }
-   18|     prev = pt;
-   19|   }
-   20|   return prev ? prev[1] : 0;
-   21| }
-   22| 
-   23| // ── The country, roughly ──
-   24| // Population, millions.
-   25| const POPULATION: Table = [[1790, 3.9], [1800, 5.3], [1810, 7.2], [1820, 9.6], [1830, 12.9], [1840, 17.1], [1850, 23.2], [1860, 31.4], [1870, 38.6], [1880, 50.2], [1890, 63], [1900, 76.2], [1910, 92.2], [1920, 106], [1930, 123.2], [1940, 132.2], [1950, 151.3], [1960, 179.3], [1970, 203.2], [1980, 226.5], [1990, 248.7], [2000, 281.4], [2010, 308.7], [2020, 331.4], [2024, 340]];
-   26| // Adults' share of it: 21 and over until the 26th Amendment, then 18.
-   27| const ADULT: Table = [[1790, 0.43], [1850, 0.47], [1880, 0.5], [1900, 0.53], [1920, 0.58], [1940, 0.64], [1950, 0.64], [1960, 0.61], [1968, 0.61], [1972, 0.7], [1980, 0.72], [1990, 0.74], [2010, 0.76], [2024, 0.78]];
-   28| /** Adults in year y, millions. */
-   29| export const adultsIn = (y: number): number => lerp(POPULATION, y) * lerp(ADULT, y);
-   30| // Popular votes cast, millions.
-   31| const VOTES: Readonly<Record<number, number>> = { 1789: 0.044, 1792: 0.028, 1796: 0.066, 1800: 0.068, 1804: 0.143, 1808: 0.193, 1812: 0.278, 1816: 0.113, 1820: 0.109, 1824: 0.366, 1828: 1.148, 1832: 1.293, 1836: 1.503, 1840: 2.412, 1844: 2.703, 1848: 2.879, 1852: 3.162, 1856: 4.054, 1860: 4.686, 1864: 4.031, 1868: 5.723, 1872: 6.467, 1876: 8.413, 1880: 9.217, 1884: 10.058, 1888: 11.383, 1892: 12.057, 1896: 13.936, 1900: 13.97, 1904: 13.518, 1908: 14.884, 1912: 15.044, 1916: 18.536, 1920: 26.768, 1924: 29.095, 1928: 36.805, 1932: 39.758, 1936: 45.655, 1940: 49.9, 1944: 47.977, 1948: 48.794, 1952: 61.552, 1956: 62.027, 1960: 68.838, 1964: 70.645, 1968: 73.212, 1972: 77.744, 1976: 81.556, 1980: 86.515, 1984: 92.653, 1988: 91.595, 1992: 104.425, 1996: 96.278, 2000: 105.426, 2004: 122.295, 2008: 131.473, 2012: 129.085, 2016: 136.669, 2020: 158.429, 2024: 155.238 };
-   32| // Before 1828 most states chose electors through their legislatures, so the
-   33| // popular vote above understates who took part: the model uses the men who
-   34| // voted for those legislatures.
-   35| const EARLY: Readonly<Record<number, number>> = { 1789: 0.25, 1792: 0.3, 1796: 0.35, 1800: 0.45, 1804: 0.5, 1808: 0.6, 1812: 0.7, 1816: 0.75, 1820: 0.8, 1824: 0.85 };
-   36| /** Votes cast in year y, millions. */
-   37| export const votesIn = (y: number): number => Math.max(VOTES[y] ?? 0, EARLY[y] ?? 0);
-   38| // Turnout of those who could vote.
-   39| export const TURNOUT: Table = [[1789, 0.2], [1824, 0.27], [1828, 0.57], [1840, 0.8], [1860, 0.81], [1876, 0.82], [1896, 0.79], [1900, 0.73], [1912, 0.59], [1920, 0.49], [1936, 0.61], [1960, 0.63], [1972, 0.55], [1996, 0.49], [2008, 0.58], [2020, 0.66], [2024, 0.64]];
-   40| 
-   41| // ── Where groups live ──
-   42| export const SOUTH: readonly string[] = ['VA', 'NC', 'SC', 'GA', 'FL', 'AL', 'MS', 'LA', 'TX', 'AR', 'TN'];
-   43| export const BORDER: readonly string[] = ['KY', 'MD', 'DE', 'MO', 'WV', 'OK'];
-   44| type Listed = Extract<Region, 'south' | 'new-england' | 'middle' | 'midwest' | 'plains' | 'industrial'>;
-   45| export const REGIONS: Readonly<Record<Listed, readonly string[]>> = {
-   46|   south: SOUTH,
-   47|   'new-england': ['ME', 'NH', 'VT', 'MA', 'RI', 'CT'],
-   48|   middle: ['NY', 'NJ', 'PA', 'DE', 'MD'],
-   49|   midwest: ['OH', 'IN', 'IL', 'MI', 'WI', 'MN', 'IA', 'MO', 'KS', 'NE', 'ND', 'SD'],
-   50|   plains: ['KS', 'NE', 'ND', 'SD', 'MN', 'IA', 'CO', 'MT', 'ID', 'WA', 'OK', 'WY', 'NV', 'UT'],
-   51|   industrial: ['NY', 'PA', 'NJ', 'MA', 'OH', 'IL', 'MI', 'CT', 'RI', 'IN', 'WI'],
-   52| };
-   53| type Spread = Extract<Region, 'immigrant' | 'latino' | 'felony'>;
-   54| export const SPREAD: Readonly<Record<Spread, Readonly<Record<string, number>>>> = {
-   55|   immigrant: { NY: 3, PA: 2, MA: 2, IL: 2, OH: 1.5, WI: 1.5, MO: 1, NJ: 1, MI: 1, MN: 1, CA: 1, LA: 0.5 },
-   56|   latino: { CA: 5, TX: 4, FL: 2, AZ: 2, NM: 2, NY: 1.5, NV: 1, CO: 1, IL: 1, NJ: 1 },
-   57|   felony: { FL: 6, TX: 2, VA: 1.5, TN: 1.2, AL: 1, KY: 1, GA: 1.2, MS: 0.8, AZ: 0.8, WA: 0.4 },
-   58| };
-   59| // Black share of each state's population (census), 1900, 1960 and 2000.
-   60| const BLACK = {
-   61|   1900: { MS: 0.58, SC: 0.58, LA: 0.47, GA: 0.47, AL: 0.45, FL: 0.44, VA: 0.36, NC: 0.33, AR: 0.28, TN: 0.24, TX: 0.2, MD: 0.2, DE: 0.17, KY: 0.13, DC: 0.31, MO: 0.05, WV: 0.05, OK: 0.07, KS: 0.035, OH: 0.023, PA: 0.025, NY: 0.014, NJ: 0.037, IL: 0.018, IN: 0.023 },
-   62|   1960: { MS: 0.42, SC: 0.35, LA: 0.32, GA: 0.28, AL: 0.3, FL: 0.18, VA: 0.21, NC: 0.25, AR: 0.22, TN: 0.16, TX: 0.12, MD: 0.17, DE: 0.14, KY: 0.07, DC: 0.54, MO: 0.09, WV: 0.05, OK: 0.07, KS: 0.04, OH: 0.08, PA: 0.075, NY: 0.084, NJ: 0.085, IL: 0.1, IN: 0.06, MI: 0.09, CA: 0.056, CT: 0.042, MA: 0.022, WI: 0.019 },
-   63|   2000: { MS: 0.36, SC: 0.29, LA: 0.32, GA: 0.29, AL: 0.26, FL: 0.15, VA: 0.2, NC: 0.22, AR: 0.16, TN: 0.16, TX: 0.12, MD: 0.28, DE: 0.19, KY: 0.07, DC: 0.6, MO: 0.11, OK: 0.08, OH: 0.12, PA: 0.1, NY: 0.16, NJ: 0.14, IL: 0.15, IN: 0.08, MI: 0.14, CA: 0.07, CT: 0.09, MA: 0.05, WI: 0.06, NV: 0.07, CO: 0.04, MN: 0.035 },
-   64| } as const satisfies Record<number, Readonly<Record<string, number>>>;
-   65| export function blackShare(code: string, y: number): number {
-   66|   const at = (t: keyof typeof BLACK): number => {
-   67|     const table: Readonly<Record<string, number>> = BLACK[t];
-   68|     return table[code] ?? 0.01;
-   69|   };
-   70|   if (y <= 1900) return at(1900);
-   71|   if (y <= 1960) return at(1900) + ((at(1960) - at(1900)) * (y - 1900)) / 60;
-   72|   return at(1960) + (at(2000) - at(1960)) * Math.min(1, (y - 1960) / 40);
-   73| }
-   74| // Share of each slave state's people held in slavery (1800 and 1860
-   75| // censuses), for the three-fifths what-if.
-   76| export const ENSLAVED: Readonly<Record<'early' | 'late', Readonly<Record<string, number>>>> = {
-   77|   early: { VA: 0.39, SC: 0.42, GA: 0.37, NC: 0.28, MD: 0.31, KY: 0.18, TN: 0.13, DE: 0.06, LA: 0.45, MS: 0.42, AL: 0.33, MO: 0.15 },
-   78|   late: { VA: 0.31, SC: 0.57, GA: 0.44, NC: 0.33, MD: 0.13, KY: 0.2, TN: 0.25, DE: 0.02, LA: 0.47, MS: 0.55, AL: 0.45, MO: 0.1, FL: 0.44, AR: 0.26, TX: 0.3 },
-   79| };
-   80| // Southern votes per electoral vote, against the North's: from the 1880s to
-   81| // the 1960s the South cast far fewer, most of its Black citizens and many
-   82| // poor whites kept from the polls — the Deep South fewest of all.
-   83| const DEEP_SOUTH: readonly string[] = ['SC', 'MS', 'LA', 'GA', 'AL', 'FL'];
-   84| export function southFactor(code: string, y: number): number {
-   85|   // Before emancipation a slave state's electors counted three-fifths of its
-   86|   // enslaved people, so it had fewer voters per elector.
-   87|   if (y <= 1864) {
-   88|     const share = (y <= 1830 ? ENSLAVED.early : ENSLAVED.late)[code] ?? 0;
-   89|     return (1 - share) / (1 - 0.4 * share);
-   90|   }
-   91|   if (!SOUTH.includes(code) || y < 1880 || y > 1964) return 1;
-   92|   const deep = DEEP_SOUTH.includes(code);
-   93|   if (y < 1890) return deep ? 0.6 : 0.8;
-   94|   if (y <= 1900) return deep ? 0.3 : 0.6;
-   95|   return deep ? 0.2 : 0.4;
-   96| }
-   97| 
-   98| // ── The people ──
-   99| // Era groups' people, for years with no written story: [name, who, quote].
-  100| export type EraPerson = readonly [name: string, line: string, quote: string];
-  101| export const ERA_PEOPLE: Readonly<Record<string, readonly EraPerson[]>> = {
-  102|   'property-men': [['Nathaniel Brooks', '45, farmer with ninety acres, Hampshire County, Massachusetts', 'I own my land free and clear. That gives me a stake in the country, and a vote to show for it.']],
-  103|   'no-property': [['Patrick Doyle', '27, dockworker, New York City', 'New York lets a man vote for the Assembly only if he pays enough rent. I pay less, so I have no say in who picks our electors.'],
-  104|     ['Samuel Tuttle', '31, journeyman cooper, Baltimore, Maryland', 'I pay my taxes in sweat. The law says a man needs fifty acres before his opinion counts.']],
-  105|   enslaved: [['Hannah', '30, enslaved cook, Albemarle County, Virginia', 'The Constitution counts me as three-fifths of a person, so Virginia gets more electors for owning me. I get no say at all.'],
-  106|     ['Cato', '40, enslaved blacksmith, Charleston, South Carolina', 'I am hired out, and my master keeps the wages. The men who make the laws own the men who live under them.']],
-  107|   women: [['Abigail Foster', '36, farm wife, Litchfield County, Connecticut', 'My husband votes the way his father did. I read the newspapers aloud to him in the evening.'],
-  108|     ['Harriet Lowell', '24, mill worker, Lowell, Massachusetts', 'I work thirteen hours a day at the looms and pay my board from my own wages. The men who set our hours are elected by men.'],
-  109|     ['Nora Brennan', '41, laundress, Chicago, Illinois', 'The saloon on our corner takes half of what my husband earns. If I could vote, it would be gone by spring.'],
-  110|     ['Ida Lindgren', '32, stenographer, Minneapolis, Minnesota', 'The boy who delivers my newspaper turns twenty-one this year and gets the vote before I do.']],
-  111|   'north-men': [['Caleb Morse', '47, farmer, Oneida County, New York', 'My father voted, and his father fought the British for the right to. I haven’t missed an election.'],
-  112|     ['Henry Voss', '39, carpenter, Cincinnati, Ohio', 'I vote for the party that fought for the Union. Most of the men in my ward do.']],
-  113|   'south-men': [['William Hardee', '44, farmer, Wilkes County, Georgia', 'My people have voted Democratic since Jackson. I don’t see a reason to stop.']],
-  114|   'south-white': [['Robert Dunn', '47, cotton farmer, Hill County, Texas', 'Cotton is cheap and the railroads take half of it. Down here the Democrats are the only party that counts.'],
-  115|     ['Earl Cobb', '46, mill hand, Spartanburg, South Carolina', 'I paid my poll tax this year. Most of the men at the mill didn’t, and can’t vote.']],
-  116|   freedmen: [['Jacob Wells', '30, sharecropper, Hinds County, Mississippi', 'I voted for Grant the first time anyone ever asked me anything. The Klan came to the schoolhouse the next week.']],
-  117|   'black-south': [['Henry Toussaint', '48, dockworker, New Orleans, Louisiana', 'They moved the polling place three times this year and never told us where.'],
-  118|     ['Albert Mayes', '50, farmer, Lowndes County, Alabama', 'The poll tax adds up for every year you missed, back to twenty-one. I would owe a month’s wages to vote once.'],
-  119|     ['Ruth Jenkins', '34, schoolteacher, Sunflower County, Mississippi', 'The registrar asked me how many bubbles are in a bar of soap. I teach algebra. I did not get registered.']],
-  120|   'black-north': [['Leon Carter', '29, packinghouse worker, Chicago, Illinois', 'My folks came up from Mississippi so we could vote. In Chicago nobody asks me to count the bubbles in a bar of soap.']],
-  121|   immigrants: [['Michael Brennan', '31, canal laborer, Buffalo, New York', 'The ward boss found me work the week I landed. He’ll want my vote the day I’m naturalized.'],
-  122|     ['Giuseppe Russo', '28, bricklayer, Providence, Rhode Island', 'Four years here. One more and I can be naturalized. Until then the ward boss talks to me like I already vote.']],
-  123|   north: [['Helen Kowalski', '38, telephone operator, Cleveland, Ohio', 'My mother never got to vote. I haven’t missed an election since I could.']],
-  124|   youth: [['Frank Doyle', '19, sailor, Norfolk, Virginia', 'I’ve been in the Navy a year. Old enough to fight, not old enough to vote.']],
-  125|   white: [['Karen Mills', '51, insurance agent, Columbus, Ohio', 'I split my ticket most years. This time I went with whoever I trust on the economy.']],
-  126|   black: [['James Whitfield', '58, bus driver, Atlanta, Georgia', 'My father couldn’t vote in this state. I have never missed an election, and neither has anyone in my house.']],
-  127|   latino: [['Ana Morales', '34, dental hygienist, San Antonio, Texas', 'My parents became citizens when I was ten. They took me to the polls with them every time.']],
-  128|   young: [['Kevin Tran', '22, line cook, San Jose, California', 'I registered at the DMV and forgot about it. My roommate dragged me to the polls.']],
-  129|   felony: [['Marcus Webb', '41, roofer, Tallahassee, Florida', 'I served my time years ago. I pay taxes and coach Little League, and I still can’t vote.']],
-  130| };
-```
-
-## `src/lib/simulacra/sampleEras.ts`
-
-```ts
-    1| // The groups and what-ifs every election has in the sample, by era, for the
-    2| // years with no written story (stories.ts) — above all, who couldn't vote.
-    3| import type { Election } from './history';
-    4| import type { Family } from './palette';
-    5| import { lerp, TURNOUT } from './sampleData';
-    6| import type { Lean, Region, SliceSpec, Votes, WhatIfSpec } from './sampleTypes';
-    7| 
-    8| const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
-    9| 
-   10| /** The first value whose test holds, else `otherwise`. */
-   11| const firstOf = (cases: readonly (readonly [boolean, number])[], otherwise: number): number =>
-   12|   cases.find(([holds]) => holds)?.[1] ?? otherwise;
-   13| 
-   14| /** The era's groups for election `e`, whose national split is `nat`. */
-   15| export function eraSlices(e: Election, nat: Votes): SliceSpec[] {
-   16|   const y = e.year;
-   17|   const fam = (k: string) => e.candidates.find((c) => c.key === k)?.family;
-   18|   // How a group leaning `pts` points toward `family` splits [A, B, O].
-   19|   const lean = (family: Family | null, pts = 0, o = nat.O): Lean => {
-   20|     let two = nat.A / Math.max(0.01, nat.A + nat.B);
-   21|     if (family && fam('A') === family) two += pts / 100;
-   22|     else if (family && fam('B') === family) two -= pts / 100;
-   23|     two = clamp(two, 0.03, 0.97);
-   24|     return [two * (1 - o), (1 - two) * (1 - o), o];
-   25|   };
-   26|   const T = lerp(TURNOUT, y);
-   27|   const s: SliceSpec[] = [];
-   28|   const add = (
-   29|     key: string,
-   30|     label: string,
-   31|     share: number,
-   32|     barred: number,
-   33|     turnout: number,
-   34|     l: Lean,
-   35|     where: Region,
-   36|     extra: { mirror?: boolean; tilt?: number } = {},
-   37|   ) => s.push({ key, label, share, barred, turnout, lean: barred >= 1 ? [0, 0, 0] : l, leanIf: l, where, ...extra });
-   38|   if (y <= 1824) {
-   39|     add('property-men', 'Men who own property', 0.28, 0, T, lean(null), 'all');
-   40|     add('no-property', 'Men without property', 0.14, lerp([[1789, 0.6], [1800, 0.5], [1812, 0.4], [1824, 0.25]], y), T, lean('democratic-republican', 12), 'all');
-   41|     // Freed, they'd have voted against the planters' party (in 1824, against Jackson).
-   42|     add('enslaved', 'Enslaved people', 0.16, 1, 0.6, y === 1824 ? [0.75, 0.05, 0.2] : lean('federalist', 10, 0), 'black');
-   43|     add('women', 'Women', 0.47, y >= 1792 && y <= 1804 ? 0.995 : 1, 0.4, lean(null), 'all', { mirror: true });
-   44|   } else if (y <= 1860) {
-   45|     add('north-men', 'Northern white men', 0.27, 0.04, T, y >= 1856 ? lean('republican', 12) : lean('whig', 3), 'north');
-   46|     add('south-men', 'White Southern men', 0.12, 0.03, T * 0.95, lean('democratic', y >= 1856 ? 30 : 6), 'south');
-   47|     if (y >= 1844) add('immigrants', 'Irish and German immigrants', 0.05, 0.45, 0.75, lean('democratic', 20), 'immigrant');
-   48|     add('enslaved', 'Enslaved people', 0.14, 1, 0.7, y >= 1856 ? lean('republican', 40, 0) : lean('whig', 15, 0), 'black');
-   49|     add('women', 'Women', 0.48, 1, 0.5, lean(null), 'all', { mirror: true });
-   50|   } else if (y <= 1876) {
-   51|     add('north-men', 'Northern white men', 0.29, 0.04, T, lean('republican', 6), 'north');
-   52|     if (y === 1864) add('enslaved', 'Black Americans', 0.1, 1, 0.8, lean('republican', 40, 0), 'black');
-   53|     else {
-   54|       add('south-men', 'White Southern men', 0.1, 0.02, T * 0.95, lean('democratic', 35), 'south');
-   55|       add('freedmen', 'Black men in the South', 0.045, lerp([[1868, 0.2], [1872, 0.25], [1876, 0.45]], y), 0.85, lean('republican', 40, 0), 'black-south');
-   56|     }
-   57|     add('immigrants', 'Immigrants', 0.05, 0.45, 0.75, lean('democratic', 20), 'immigrant');
-   58|     add('women', 'Women', 0.48, 1, 0.5, lean(null), 'all', { mirror: true });
-   59|   } else if (y <= 1916) {
-   60|     add('north-men', 'Northern men', 0.3, 0.06, T, lean('republican', 4), 'north');
-   61|     add('south-white', 'White Southern men', 0.1, y >= 1900 ? 0.2 : 0.05, y >= 1900 ? 0.45 : 0.6, lean('democratic', 38), 'south');
-   62|     add('black-south', 'Black men in the South', 0.04, lerp([[1880, 0.35], [1892, 0.5], [1896, 0.6], [1900, 0.75], [1904, 0.88], [1916, 0.94]], y), 0.6,
-   63|       lean('republican', 40, 0), 'black-south');
-   64|     add('women', 'Women', 0.48, lerp([[1888, 1], [1892, 0.999], [1896, 0.985], [1908, 0.985], [1912, 0.92], [1916, 0.88]], y), 0.5, lean(null), 'all', { mirror: true });
-   65|     add('immigrants', 'Immigrants not yet citizens', 0.06, 0.85, 0.6, lean('democratic', 12), 'immigrant');
-   66|   } else if (y <= 1968) {
-   67|     add('north', 'Northerners', 0.5, 0.03, Math.min(0.8, T + 0.05), lean('republican', y <= 1928 ? 3 : 0), 'north');
-   68|     const southBarred = firstOf([[y >= 1964, 0.03], [y >= 1948, 0.15]], 0.25);
-   69|     const southDemPts = firstOf([[y >= 1952, 8], [y === 1928, 15]], 35);
-   70|     const southLean = y === 1964 ? lean('republican', 15) : lean('democratic', southDemPts);
-   71|     add('south-white', 'White Southerners', 0.18, southBarred, y >= 1948 ? 0.45 : 0.3, southLean, 'south');
-   72|     const blackDemPts = y >= 1964 ? 45 : 20;
-   73|     const blackSouthLean = y <= 1932 ? lean('republican', 25, 0) : lean('democratic', blackDemPts, 0);
-   74|     add('black-south', 'Black Southerners', 0.05, lerp([[1944, 0.95], [1948, 0.88], [1952, 0.8], [1960, 0.7], [1964, 0.45], [1968, 0.3]], y), 0.6,
-   75|       blackSouthLean, 'black-south');
-   76|     const blackNorthLean = y <= 1932 ? lean('republican', 20, 0) : lean('democratic', blackDemPts, 0);
-   77|     add('black-north', 'Black Northerners', lerp([[1920, 0.02], [1960, 0.045]], y), 0.05, 0.6, blackNorthLean, 'black-north');
-   78|     if (y === 1920) add('women', 'Women', 0.48, 0.08, 0.35, lean('republican', 3), 'all', { mirror: true, tilt: 0.03 });
-   79|     else add('youth', '18- to 20-year-olds', 0.075, firstOf([[y >= 1956, 0.95], [y >= 1944, 0.97]], 1), 0.5, lean(null), 'all');
-   80|   } else {
-   81|     add('white', 'White voters', lerp([[1972, 0.8], [2024, 0.6]], y), 0.02, T + 0.04, lean('republican', 10), 'all');
-   82|     add('black', 'Black voters', 0.12, 0.08, T - 0.02, lean('democratic', 40, 0.02), 'black');
-   83|     if (y >= 1980) add('latino', 'Latino voters', lerp([[1980, 0.04], [2024, 0.15]], y), 0.4, 0.45, lean('democratic', 15), 'latino');
-   84|     add('young', 'Voters under 30', 0.22, 0.05, T - 0.15, lean('democratic', 6), 'all');
-   85|     if (y >= 1976) add('felony', 'People with felony records', lerp([[1976, 0.01], [2016, 0.025], [2024, 0.021]], y), 0.75, 0.3, lean('democratic', 20, 0), 'felony');
-   86|   }
-   87|   return s;
-   88| }
-   89| 
-   90| /** An era what-if: a WhatIfSpec, and the years it fits. */
-   91| type EraWhatIf = readonly [...WhatIfSpec, when: (y: number) => boolean];
-   92| 
-   93| const ERA_WHAT_IFS: readonly EraWhatIf[] = [
-   94|   ['women', 'Women Vote', 'franchise', 'Every woman can vote on the same terms as the men of her state.', ['women'],
-   95|     (c) => c.enfranchise('women', { barred: c.year < 1868 ? 0.14 : 0.08 }), (y) => y < 1920],
-   96|   ['no-19th', 'The 19th Amendment Fails', 'franchise', 'Women can vote only in the fifteen states that already let them.', ['women'],
-   97|     (c) => c.enfranchise('women', { barred: 0.7 }), (y) => y === 1920],
-   98|   ['fifteenth', 'Enforce the 15th Amendment', 'franchise', 'Black Southerners vote as freely as white Southerners: no literacy tests, poll taxes or terror.', ['black-south', 'freedmen'],
-   99|     (c) => c.enfranchise(c.has('freedmen') ? 'freedmen' : 'black-south', { barred: 0.05 }), (y) => y >= 1868 && y <= 1964],
-  100|   ['emancipation', 'Emancipation and the Vote', 'franchise', 'Slavery ends before the election, and freed men vote like other men in their states.', ['enslaved'],
-  101|     (c) => c.enfranchise('enslaved', { barred: 0.5 }), (y) => y >= 1796 && y <= 1860],
-  102|   ['three-fifths', 'No Three-Fifths Bonus', 'franchise', 'Slave states lose the electors they got for counting enslaved people as three-fifths of a person.', ['enslaved'],
-  103|     (c) => c.apportion(), (y) => y >= 1796 && y <= 1860],
-  104|   ['no-property', 'No Property Test', 'franchise', 'Every free man can vote, whether or not he owns land.', ['no-property'],
-  105|     (c) => c.enfranchise('no-property', { barred: 0 }), (y) => y <= 1824],
-  106|   ['age18', 'Vote at 18', 'franchise', 'Eighteen-year-olds can vote everywhere, as they could after 1971.', ['youth'],
-  107|     (c) => c.enfranchise('youth', { barred: 0 }), (y) => y >= 1924 && y <= 1968 && y !== 1920],
-  108|   ['felons', 'Felony Records Don’t Bar Voting', 'franchise', 'Everyone who has served a sentence can vote, as in Maine and Vermont.', ['felony'],
-  109|     (c) => c.enfranchise('felony', { barred: 0 }), (y) => y >= 1976],
-  110|   ['migration', 'No Great Migration', 'population', 'The Black Southerners who moved north after 1910 stay in the South, where most can’t vote.', ['black-north', 'black-south'],
-  111|     (c) => c.move('black-north', 0.7, 'black-south'), (y) => y >= 1928 && y <= 1968],
-  112|   ['everyone', 'Everyone Votes', 'franchise', 'Every adult can vote, and turns out.', [],
-  113|     (c) => c.everyone(), () => true],
-  114| ];
-  115| 
-  116| /** The era's what-ifs that fit year y: up to three, then Everyone Votes. */
-  117| export function eraWhatIfs(y: number): WhatIfSpec[] {
-  118|   const fits = ERA_WHAT_IFS.filter((w) => w[6](y));
-  119|   return [...fits.filter((w) => w[0] !== 'everyone').slice(0, 3), ...fits.filter((w) => w[0] === 'everyone')].map(
-  120|     ([key, label, kind, detail, slices, apply]) => [key, label, kind, detail, slices, apply] as const,
-  121|   );
-  122| }
-```
-
-## `src/lib/simulacra/sampleTypes.ts`
-
-```ts
-    1| // Types shared by the sample model (sample.ts) and its written stories
-    2| // (stories.ts). Nothing here is read from outside the page.
-    3| import type { Choice, Kind } from './schemas';
-    4| 
-    5| /** How a group's voters split: [winner, runner-up, everyone else], summing to 1. */
-    6| export type Lean = readonly [number, number, number];
-    7| 
-    8| /**
-    9|  * Where a group lives, as the sample model spreads its votes over the
-   10|  * states: a region, a demographic spread, or every state by its electors.
-   11|  */
-   12| export type Region =
-   13|   | 'all'
-   14|   | 'north'
-   15|   | 'south'
-   16|   | 'new-england'
-   17|   | 'middle'
-   18|   | 'midwest'
-   19|   | 'plains'
-   20|   | 'industrial'
-   21|   | 'immigrant'
-   22|   | 'latino'
-   23|   | 'felony'
-   24|   | 'black'
-   25|   | 'black-south'
-   26|   | 'black-north';
+    1| // Simulacra Americana's connection to the simulation server, under
+    2| // /api/simulacra (pnpm serve in development, proxied by Vite). The page
+    3| // shows each election as it happened (history.ts) with none of it; the
+    4| // groups of voters, the what-ifs and every rerun come from here, or from the
+    5| // labelled stand-in in sample.ts, which has the same shape.
+    6| //
+    7| // Every answer is parsed once here (schemas.ts). Every call returns an
+    8| // Outcome, never throws:
+    9| //   ok            the parsed value
+   10| //   error         the server answered no, was unreachable, or sent something unreadable
+   11| //   indeterminate a write timed out after it may have landed: poll, don't resubmit
+   12| //   unsupported   there is no simulation service (a 404 before any answer)
+   13| import type { z } from 'zod';
+   14| import {
+   15|   CancelledSchema,
+   16|   type Edits,
+   17|   type ElectionResponse,
+   18|   ElectionResponseSchema,
+   19|   ManifestSchema,
+   20|   type RunStatus,
+   21|   RunStatusSchema,
+   22|   type StartedRun,
+   23|   StartedRunSchema,
+   24|   type Voter,
+   25|   VoterSchema,
+   26| } from './schemas';
    27| 
-   28| /** Explicit weights by state code, overriding a region. */
-   29| export type StateWeights = Readonly<Record<string, number>>;
-   30| 
-   31| /** One written person: [name, who they are, what they did in history, what they do once a what-if reaches them, quote]. */
-   32| export type VoterSpec = readonly [name: string, line: string, history: Choice, then: Choice, quote: string];
-   33| 
-   34| /** A group of voters as written (a story) or as an era has it. */
-   35| export interface SliceSpec {
-   36|   readonly key: string;
-   37|   readonly label: string;
-   38|   /** Share of all adults. */
-   39|   readonly share: number;
-   40|   /** Share of the group that couldn't vote. */
-   41|   readonly barred: number;
-   42|   /** Turnout of those who could. */
-   43|   readonly turnout: number;
-   44|   /** How its voters split. */
-   45|   readonly lean: Lean;
-   46|   /** How its barred members would vote. */
-   47|   readonly leanIf?: Lean;
-   48|   readonly where: Region;
-   49|   /** Explicit state weights, used instead of `where` when present. */
-   50|   readonly states?: StateWeights;
-   51|   /** Enfranchised, it votes like its own state… */
-   52|   readonly mirror?: boolean;
-   53|   /** …with this lean toward A. */
-   54|   readonly tilt?: number;
-   55|   readonly voter?: VoterSpec;
-   56| }
-   57| 
-   58| /** Vote-share changes keyed by candidate bucket, for drop(). */
-   59| export interface DropTo {
-   60|   readonly A?: number;
-   61|   readonly B?: number;
-   62| }
-   63| 
-   64| /** The levers a what-if pulls (sample.ts implements them). */
-   65| export interface SampleContext {
-   66|   /** The election's year. */
-   67|   readonly year: number;
-   68|   /** Whether this election has a group with this key. */
-   69|   has(key: string): boolean;
-   70|   /** Some of a group's barred members (or all) can vote. */
-   71|   enfranchise(key: string, opts?: { barred?: number; turnout?: number; lean?: Lean }): void;
-   72|   /** A group's voters swing `pts` points to `to`. */
-   73|   swing(key: string, pts: number, to: 'A' | 'B'): void;
-   74|   /** Everyone in `region` (or everywhere) swings `pts` points to `to`. */
-   75|   swingAll(pts: number, to: 'A' | 'B', region: Region | null, text: string): void;
-   76|   /** A share of the other candidates' voters (in `region`) choose A or B instead; the rest stay home. */
-   77|   drop(frac: number, to: DropTo, text: string, region?: Region): void;
-   78|   /** The runner-up absorbs most of the others' voters (1860's Democrats). */
-   79|   unite(frac: number, text: string): void;
-   80|   /** Votes moved straight to `to` from the others, in given states. */
-   81|   shift(states: StateWeights, to: 'A' | 'B', text: string): void;
-   82|   /** A share of a group lives where another group does, and fares like it. */
-   83|   move(key: string, frac: number, toKey: string): void;
-   84|   /** A group turns out at `t`. */
-   85|   turnout(key: string, t: number): void;
-   86|   /** Every adult can vote, and does. */
-   87|   everyone(): void;
-   88|   /** The slave states lose their three-fifths bonus in electors. */
-   89|   apportion(): void;
-   90|   /** Black Southerners vote, where the story has no group for them (1912). */
-   91|   enfranchiseBlackSouth(opts: { lean: Lean }): void;
-   92| }
-   93| 
-   94| /** [key, label, kind, detail, the groups it reaches, how it changes the election]. */
-   95| export type WhatIfSpec = readonly [
-   96|   key: string,
-   97|   label: string,
-   98|   kind: Kind,
-   99|   detail: string,
-  100|   slices: readonly string[],
-  101|   apply: (c: SampleContext) => void,
-  102| ];
-  103| 
-  104| /** One written election. `states`: a few states' real vote shares [A, B]. */
-  105| export interface Story {
-  106|   readonly slices: readonly SliceSpec[];
-  107|   readonly whatIfs: readonly WhatIfSpec[];
-  108|   readonly states: Readonly<Record<string, readonly [number, number]>>;
-  109| }
-  110| 
-  111| /** Votes or shares for the winner (A), the runner-up (B) and everyone else (O). */
-  112| export interface Votes {
-  113|   A: number;
-  114|   B: number;
-  115|   O: number;
-  116| }
-  117| 
-  118| /** A group's make-up, as fractions of its adults: barred (couldn't vote), home (could, didn't), A / B / O (voted for). */
-  119| export interface Fractions extends Votes {
-  120|   barred: number;
-  121|   home: number;
-  122| }
-```
-
-## `src/lib/simulacra/schemas.ts`
-
-```ts
-    1| // The simulation server's answers, parsed once where they enter the page
-    2| // (api.ts). The schemas are the server's own (serve/contract.ts, one
-    3| // definition for both sides), so the page's types can't drift from what the
-    4| // server sends; every type the page uses for them derives from these.
-    5| export * from '../../../serve/contract';
-```
-
-## `src/lib/simulacra/state.svelte.ts`
-
-```ts
-    1| // The page's state, reactive: per year, the groups and what-ifs the server
-    2| // sent (sims), the chosen what-ifs, the dragged dots (edits) and the rerun on
-    3| // show (results); the year and view (kept in the URL); and the run in hand.
-    4| // The pure parts are state.ts; reruns are runs.ts.
-    5| import { SvelteMap } from 'svelte/reactivity';
-    6| import type { Edits, SimulacraApi, SliceEdit } from './api';
-    7| import { ELECTION_YEARS } from './geo';
-    8| import { traceOf } from './narrator';
-    9| import { type ActiveRun, createRunner, type Finished, type Runner } from './runs';
-   10| import type { Voter } from './schemas';
-   11| import {
-   12|   addEdit,
-   13|   askOf,
-   14|   chipOrder,
-   15|   electionFor,
-   16|   isDirty,
-   17|   type Server,
-   18|   serverAfter,
-   19|   type ShownRun,
-   20|   type Sim,
-   21|   toggled,
-   22|   urlForYear,
-   23|   type View,
-   24| } from './state';
-   25| 
-   26| export interface PageStateOptions {
-   27|   readonly api: SimulacraApi;
-   28|   readonly year: number;
-   29|   /** Puts a URL in the address bar without navigating. */
-   30|   readonly replaceUrl?: (url: string) => void;
-   31|   /** The page's address now. */
-   32|   readonly href?: () => string;
-   33|   /** A rerun finished for the year on show: its steps start coming out. */
-   34|   readonly onFresh?: (steps: number) => void;
-   35|   readonly sleep?: (ms: number) => Promise<void>;
-   36|   readonly now?: () => number;
-   37| }
-   38| 
-   39| export class PageState {
-   40|   readonly api: SimulacraApi;
-   41|   year = $state(1789);
-   42|   view = $state<View>('history');
-   43|   server = $state<Server>('connecting');
-   44|   /** Why the year's groups didn't load. */
-   45|   simFailed = $state<string | null>(null);
-   46|   readonly sims = new SvelteMap<number, Sim>();
-   47|   readonly chosen = new SvelteMap<number, readonly string[]>();
-   48|   /** Dots dragged by hand, per year: each group's change in its fractions, summed over drags. */
-   49|   readonly edits = new SvelteMap<number, Edits>();
-   50|   readonly results = new SvelteMap<number, ShownRun>();
-   51|   /** Chips added this visit, per year, newest first: they lead the row. */
-   52|   readonly added = new SvelteMap<number, readonly string[]>();
-   53|   /** Bumped by Reset, so the rows drop any drag in hand. */
-   54|   editEpoch = $state(0);
-   55|   typed = $state('');
-   56|   lastToggled = $state<string | null>(null);
-   57|   run = $state<ActiveRun | null>(null);
-   58|   runError = $state<string | null>(null);
-   59|   openSlice = $state<string | null>(null);
-   60|   readonly voters = new SvelteMap<string, Voter | null>();
-   61|   voterLoading = $state<string | null>(null);
-   62|   /** The URL is written once the router is ready. */
-   63|   urlReady = false;
-   64| 
-   65|   readonly election = $derived(electionFor(this.year));
-   66|   readonly sim = $derived(this.sims.get(this.year) ?? null);
-   67|   readonly whatIfs = $derived(chipOrder(this.sim?.whatIfs ?? [], this.added.get(this.year)));
-   68|   readonly selected = $derived(this.chosen.get(this.year) ?? []);
-   69|   readonly result = $derived(this.results.get(this.year) ?? null);
-   70|   /** The rerun on show: the year's result in the Rerun view. */
-   71|   readonly rerun = $derived(this.view === 'whatif' ? this.result : null);
-   72|   readonly showing = $derived<'history' | 'whatif'>(this.rerun ? 'whatif' : 'history');
-   73|   readonly light = $derived(this.view !== 'whatif');
-   74|   readonly running = $derived(!!this.run && this.run.year === this.year);
-   75|   readonly canRun = $derived(this.server === 'online' && !!this.sim && this.whatIfs.length > 0 && !this.running);
-   76|   readonly canEdit = $derived(this.server === 'online' && !!this.sim && !this.running && !this.election.unopposed);
-   77|   readonly dirty = $derived(isDirty(this.result, this.selected, this.typed, this.edits.get(this.year)));
-   78|   readonly voterKey = $derived(this.openSlice ? `${this.year}|${this.openSlice}|${this.rerun?.runId ?? ''}` : null);
-   79|   readonly voter = $derived(this.voterKey ? (this.voters.get(this.voterKey) ?? null) : null);
-   80| 
-   81|   readonly #runner: Runner;
-   82|   readonly #replaceUrl: ((url: string) => void) | undefined;
-   83|   readonly #href: () => string;
-   84|   readonly #onFresh: ((steps: number) => void) | undefined;
-   85| 
-   86|   constructor(o: PageStateOptions) {
-   87|     this.api = o.api;
-   88|     this.year = o.year;
-   89|     this.#replaceUrl = o.replaceUrl;
-   90|     this.#href = o.href ?? (() => location.href);
-   91|     this.#onFresh = o.onFresh;
-   92|     this.#runner = createRunner({
-   93|       api: o.api,
-   94|       ...(o.sleep ? { sleep: o.sleep } : {}),
-   95|       ...(o.now ? { now: o.now } : {}),
-   96|       getRun: () => this.run,
-   97|       setRun: (r) => {
-   98|         this.run = r;
-   99|       },
-  100|       reloadSim: async (y) => {
-  101|         const before = new Set((this.sims.get(y)?.whatIfs ?? []).map((w) => w.key));
-  102|         this.sims.delete(y);
-  103|         await this.loadSim(y, true);
-  104|         const fresh = (this.sims.get(y)?.whatIfs ?? []).map((w) => w.key).filter((k) => !before.has(k));
-  105|         if (fresh.length) this.added.set(y, [...fresh, ...(this.added.get(y) ?? [])]);
-  106|       },
-  107|       whatIfsOf: (y) => this.sims.get(y)?.whatIfs ?? [],
-  108|       finished: (f) => this.#finish(f),
-  109|       failed: (message) => {
-  110|         this.runError = message;
-  111|       },
-  112|     });
-  113|   }
-  114| 
-  115|   /** What a rerun of year `y` would send. */
-  116|   askOf(y: number, keys: readonly string[], text: string): string {
-  117|     return askOf(keys, text, this.edits.get(y));
-  118|   }
-  119| 
-  120|   // ── Loading an election's groups and what-ifs ──
-  121|   /** Loads a year once; `fresh` skips every cache (after a run). */
-  122|   async loadSim(y: number, fresh = false): Promise<void> {
-  123|     if (this.sims.has(y)) return;
-  124|     this.simFailed = null;
-  125|     const out = await this.api.election(y, { fresh });
-  126|     switch (out.kind) {
-  127|       case 'ok':
-  128|         this.sims.set(y, { slices: out.value.slices, whatIfs: out.value.whatIfs });
-  129|         this.server = 'online';
-  130|         return;
-  131|       case 'unsupported':
-  132|         this.server = 'unsupported';
-  133|         break;
-  134|       case 'error':
-  135|         this.server = serverAfter(this.server, out.reason);
-  136|         break;
-  137|       case 'indeterminate':
-  138|         if (this.server === 'connecting') this.server = 'offline';
-  139|         break;
-  140|       default:
-  141|         out satisfies never;
-  142|     }
-  143|     this.simFailed = out.message || 'Couldn’t load this election’s voters.';
-  144|   }
-  145| 
-  146|   retry(): void {
-  147|     this.server = 'connecting';
-  148|     this.sims.delete(this.year);
-  149|     void this.loadSim(this.year);
-  150|   }
-  151| 
-  152|   setYear(y: number): void {
-  153|     if (!ELECTION_YEARS.includes(y) || y === this.year) return;
-  154|     this.year = y;
-  155|     this.openSlice = null;
-  156|     this.typed = '';
-  157|     this.lastToggled = null;
-  158|     this.runError = null;
-  159|     this.view = this.results.has(y) ? 'whatif' : 'history';
-  160|     this.syncUrl();
-  161|   }
-  162| 
-  163|   step(d: number): void {
-  164|     const i = ELECTION_YEARS.indexOf(this.year);
-  165|     const y = ELECTION_YEARS[Math.max(0, Math.min(ELECTION_YEARS.length - 1, i + d))];
-  166|     if (y !== undefined) this.setYear(y);
-  167|   }
-  168| 
-  169|   syncUrl(): void {
-  170|     if (!this.urlReady || !this.#replaceUrl) return;
-  171|     const url = urlForYear(this.#href(), this.year);
-  172|     if (url) this.#replaceUrl(url);
-  173|   }
-  174| 
-  175|   // ── What-ifs and reruns ──
-  176|   toggle(key: string): void {
-  177|     const next = toggled(this.chosen.get(this.year) ?? [], key);
-  178|     this.chosen.set(this.year, next);
-  179|     this.lastToggled = next.includes(key) ? key : null;
-  180|     this.runError = null;
-  181|   }
-  182| 
-  183|   rerunNow(): void {
-  184|     if (!this.canRun) return;
-  185|     // Nothing changed since this year's last rerun: show it again rather than
-  186|     // running (and walking the robot) for the same answer.
-  187|     const r = this.results.get(this.year);
-  188|     if (r && !this.typed.trim() && this.askOf(this.year, this.chosen.get(this.year) ?? [], '') === r.ask) {
-  189|       this.view = 'whatif';
-  190|       this.lastToggled = null;
-  191|       return;
-  192|     }
-  193|     void this.startRerun();
-  194|   }
-  195| 
-  196|   /** A drag on a group's dots: added to the year's edits, then rerun at once. */
-  197|   editSlice(key: string, d: SliceEdit): void {
-  198|     if (!this.canEdit) return;
-  199|     this.edits.set(this.year, addEdit(this.edits.get(this.year), key, d));
-  200|     void this.startRerun();
-  201|   }
-  202| 
-  203|   startRerun(): Promise<void> {
-  204|     const y = this.year;
-  205|     const keys = [...(this.chosen.get(y) ?? [])];
-  206|     const labels = keys.flatMap((k) => this.whatIfs.find((w) => w.key === k)?.label ?? []);
-  207|     const text = this.typed.trim();
-  208|     this.runError = null;
-  209|     this.openSlice = null;
-  210|     const edits = this.edits.get(y) ?? {};
-  211|     return this.#runner.start({ year: y, keys, text, edits, total: this.election.states.length, labels });
-  212|   }
-  213| 
-  214|   stop(): void {
-  215|     this.#runner.stop();
-  216|   }
-  217| 
-  218|   #finish(f: Finished): void {
-  219|     const { year: y, id, result, keys, text, applied } = f;
-  220|     // ask: the page's state right after this run, so pressing Rerun again
-  221|     // with nothing changed just shows this.
-  222|     const trace = traceOf(result, text, keys, y);
-  223|     this.results.set(y, { ...result, runId: id, keys, text, trace, ask: this.askOf(y, applied, ''), ran: applied });
-  224|     if (y === this.year) this.#onFresh?.(trace.length);
-  225|     // What was applied, typed words included, shows as the chosen what-ifs.
-  226|     this.chosen.set(y, applied);
-  227|     this.run = null;
-  228|     if (y === this.year) {
-  229|       this.typed = '';
-  230|       this.lastToggled = null;
-  231|       this.view = 'whatif';
-  232|     }
-  233|   }
-  234| 
-  235|   reset(): void {
-  236|     this.chosen.set(this.year, []);
-  237|     this.results.delete(this.year);
-  238|     this.edits.delete(this.year);
-  239|     this.editEpoch += 1;
-  240|     this.typed = '';
-  241|     this.lastToggled = null;
-  242|     this.runError = null;
-  243|     this.view = 'history';
-  244|   }
-  245| 
-  246|   // ── One person from a group ──
-  247|   toggleSlice(key: string): void {
-  248|     this.openSlice = this.openSlice === key ? null : key;
-  249|     this.lastToggled = null;
-  250|   }
-  251| 
-  252|   /** Fetches the open group's person, once per year, group and rerun. */
-  253|   fetchVoter(): void {
-  254|     const key = this.voterKey;
-  255|     const slice = this.openSlice;
-  256|     if (!key || !slice || this.voters.has(key) || this.voterLoading === key) return;
-  257|     this.voterLoading = key;
-  258|     void this.api.voter(this.year, slice, this.rerun?.runId ?? null).then((out) => {
-  259|       this.voters.set(key, out.kind === 'ok' ? out.value : null);
-  260|       if (this.voterLoading === key) this.voterLoading = null;
-  261|     });
-  262|   }
-  263| 
-  264|   /** Stops the run on show (the page is going away). */
-  265|   dispose(): void {
-  266|     this.run = null;
-  267|   }
-  268| }
-```
-
-## `src/lib/simulacra/state.test.ts`
-
-```ts
-    1| import { describe, expect, test } from 'vitest';
-    2| import type { Outcome, SimulacraApi } from './api';
-    3| import type { ElectionResponse } from './schemas';
-    4| import { addEdit, apiOptionsFor, askOf, isDirty, randomStory, readParams, serverAfter, toggled, urlForYear } from './state';
-    5| import { PageState } from './state.svelte';
-    6| 
-    7| describe('askOf', () => {
-    8|   test('the same what-ifs in any order, the same words with any spacing: the same ask', () => {
-    9|     expect(askOf(['no-19th', 'league'], '  women stay home ', undefined)).toBe(askOf(['league', 'no-19th'], 'women stay home', undefined));
-   10|   });
-   11| 
-   12|   test('different what-ifs, words or dots: a different ask', () => {
-   13|     const base = askOf(['league'], '', undefined);
-   14|     expect(askOf(['league', 'no-19th'], '', undefined)).not.toBe(base);
-   15|     expect(askOf(['league'], 'and more', undefined)).not.toBe(base);
-   16|     expect(askOf(['league'], '', { women: { A: 0.1, home: -0.1 } })).not.toBe(base);
-   17|   });
-   18| 
-   19|   test('no edits and empty edits ask the same; the keys passed in are left alone', () => {
-   20|     const keys = ['b', 'a'];
-   21|     expect(askOf(keys, '', undefined)).toBe(askOf(keys, '', {}));
-   22|     expect(keys).toEqual(['b', 'a']);
-   23|   });
-   24| });
-   25| 
-   26| describe('the pure parts', () => {
-   27|   test('isDirty: typed words always; with no rerun, anything chosen or dragged; else anything changed since', () => {
-   28|     expect(isDirty(null, [], ' x ', undefined)).toBe(true);
-   29|     expect(isDirty(null, [], '', undefined)).toBe(false);
-   30|     expect(isDirty(null, ['league'], '', undefined)).toBe(true);
-   31|     const shown = { ask: askOf(['league'], '', undefined) };
-   32|     expect(isDirty(shown, ['league'], '  ', undefined)).toBe(false);
-   33|     expect(isDirty(shown, ['league', 'no-19th'], '', undefined)).toBe(true);
-   34|   });
-   35| 
-   36|   test('addEdit sums each fraction over drags, per group', () => {
-   37|     const one = addEdit(undefined, 'women', { A: 0.1, home: -0.1 });
-   38|     const two = addEdit(one, 'women', { A: 0.05, B: -0.05 });
-   39|     const three = addEdit(two, 'men', { O: 0.02, home: -0.02 });
-   40|     expect(three).toEqual({ women: { A: 0.15000000000000002, home: -0.1, B: -0.05 }, men: { O: 0.02, home: -0.02 } });
-   41|     expect(one).toEqual({ women: { A: 0.1, home: -0.1 } });
-   42|   });
-   43| 
-   44|   test('toggled adds or removes one key', () => {
-   45|     expect(toggled(['a'], 'b')).toEqual(['a', 'b']);
-   46|     expect(toggled(['a', 'b'], 'a')).toEqual(['b']);
-   47|   });
+   28| export type * from './schemas';
+   29| 
+   30| /** Why a call failed. */
+   31| export type ErrorReason =
+   32|   /** No answer: the network, or a read that timed out. */
+   33|   | 'offline'
+   34|   /** 429: too many requests from here; try again later. */
+   35|   | 'limited'
+   36|   /** A 404 after the service has answered before. */
+   37|   | 'missing'
+   38|   /** Any other non-2xx. */
+   39|   | 'failed'
+   40|   /** A 2xx whose body isn't the contract. */
+   41|   | 'malformed';
+   42| 
+   43| export type Outcome<T> =
+   44|   | { readonly kind: 'ok'; readonly value: T }
+   45|   | { readonly kind: 'error'; readonly reason: ErrorReason; readonly message: string; readonly status: number }
+   46|   | { readonly kind: 'indeterminate'; readonly message: string }
+   47|   | { readonly kind: 'unsupported'; readonly message: string };
    48| 
-   49|   test('the URL: sample, simapi in dev only, an election year or none', () => {
-   50|     const p = (q: string, dev = true) => readParams(new URLSearchParams(q), dev);
-   51|     expect(p('sample=1&year=1896')).toEqual({ sample: true, simapi: null, year: 1896 });
-   52|     expect(p('sample=true&year=1897').year).toBeNull();
-   53|     expect(p('simapi=http://localhost:8787').simapi).toBe('http://localhost:8787');
-   54|     expect(p('simapi=http://localhost:8787', false).simapi).toBeNull();
-   55|     expect(apiOptionsFor('http://localhost:8787')).toEqual({ base: 'http://localhost:8787/api/simulacra' });
-   56|     expect(apiOptionsFor(null)).toEqual({});
-   57|     expect(apiOptionsFor(null, 'k'.repeat(16))).toEqual({ accessKey: 'k'.repeat(16) });
-   58|     expect(urlForYear('http://x.test/?sample=1&year=1896', 1896)).toBeNull();
-   59|     expect(urlForYear('http://x.test/?sample=1', 1912)).toBe('http://x.test/?sample=1&year=1912');
-   60|   });
-   61| 
-   62|   test('serverAfter: offline is offline; too many requests is limited until the service has answered; others stay', () => {
-   63|     expect(serverAfter('online', 'offline')).toBe('offline');
-   64|     expect(serverAfter('connecting', 'limited')).toBe('limited');
-   65|     expect(serverAfter('online', 'limited')).toBe('online');
-   66|     expect(serverAfter('connecting', 'failed')).toBe('offline');
-   67|     expect(serverAfter('online', 'malformed')).toBe('online');
-   68|     expect(serverAfter('limited', 'missing')).toBe('limited');
-   69|   });
-   70| 
-   71|   test('randomStory never repeats the year it leaves', () => {
-   72|     for (const r of [0, 0.3, 0.6, 0.999]) expect(randomStory(1896, () => r)).not.toBe(1896);
-   73|   });
-   74| });
-   75| 
-   76| const ELECTION: ElectionResponse = {
-   77|   slices: [{ key: 'women', label: 'Women', adults: 27, barred: 0, home: 0.5, A: 0.3, B: 0.15, O: 0.05 }],
-   78|   whatIfs: [{ key: 'league', label: 'The League', kind: 'issue', detail: 'The Senate ratifies.', slices: ['women'] }],
-   79|   simulated: true,
-   80| };
-   81| 
-   82| /** A server that answers every year and never starts a run. */
-   83| function fakeApi(): SimulacraApi & { elections: number[] } {
-   84|   const elections: number[] = [];
-   85|   const no: Outcome<never> = { kind: 'error', reason: 'failed', message: 'The simulation server answered 500.', status: 500 };
-   86|   return {
-   87|     sample: false,
-   88|     elections,
-   89|     election: async (y) => {
-   90|       elections.push(y);
-   91|       return { kind: 'ok', value: ELECTION };
-   92|     },
-   93|     startRun: async () => no,
-   94|     run: async () => no,
-   95|     stopRun: async () => ({ kind: 'ok', value: null }),
-   96|     voter: async () => no,
-   97|   };
-   98| }
-   99| 
-  100| describe('PageState', () => {
-  101|   test('edits and chosen what-ifs per year survive switching years', async () => {
-  102|     const api = fakeApi();
-  103|     const page = new PageState({ api, year: 1920 });
-  104|     await page.loadSim(1920);
-  105|     expect(page.server).toBe('online');
-  106|     page.toggle('league');
-  107|     page.editSlice('women', { A: 0.1, home: -0.1 });
-  108|     await new Promise((resolve) => setTimeout(resolve, 0));
-  109|     expect(page.runError).toBe('The simulation server answered 500.');
-  110|     const asked = page.askOf(1920, ['league'], '');
-  111| 
-  112|     page.setYear(1896);
-  113|     expect(page.year).toBe(1896);
-  114|     expect(page.view).toBe('history');
-  115|     expect(page.runError).toBeNull();
-  116|     expect(page.edits.get(1896)).toBeUndefined();
-  117|     expect(page.selected).toEqual([]);
-  118| 
-  119|     page.setYear(1920);
-  120|     expect(page.edits.get(1920)).toEqual({ women: { A: 0.1, home: -0.1 } });
-  121|     expect(page.selected).toEqual(['league']);
-  122|     expect(page.askOf(1920, ['league'], '')).toBe(asked);
-  123|     expect(page.dirty).toBe(true);
-  124|   });
-  125| 
-  126|   test('reset clears only the year on show', async () => {
-  127|     const page = new PageState({ api: fakeApi(), year: 1920 });
-  128|     await page.loadSim(1920);
-  129|     page.toggle('league');
-  130|     page.setYear(1896);
-  131|     await page.loadSim(1896);
-  132|     page.toggle('league');
-  133|     page.reset();
-  134|     expect(page.chosen.get(1896)).toEqual([]);
-  135|     expect(page.chosen.get(1920)).toEqual(['league']);
-  136|   });
-  137| 
-  138|   test('the URL follows the year once it is ready', () => {
-  139|     const urls: string[] = [];
-  140|     let href = 'http://x.test/?sample=1';
-  141|     const page = new PageState({
-  142|       api: fakeApi(),
-  143|       year: 1920,
-  144|       href: () => href,
-  145|       replaceUrl: (u) => {
-  146|         urls.push(u);
-  147|         href = u;
-  148|       },
-  149|     });
-  150|     page.setYear(1912);
-  151|     expect(urls).toEqual([]);
-  152|     page.urlReady = true;
-  153|     page.syncUrl();
-  154|     page.setYear(1916);
-  155|     page.syncUrl();
-  156|     expect(urls).toEqual(['http://x.test/?sample=1&year=1912', 'http://x.test/?sample=1&year=1916']);
-  157|   });
-  158| 
-  159|   test('no simulation service: the page says so, and a year loads once', async () => {
-  160|     const api = fakeApi();
-  161|     const page = new PageState({
-  162|       api: { ...api, election: async () => ({ kind: 'unsupported', message: 'This server has no simulation service yet.' }) },
-  163|       year: 1920,
-  164|     });
-  165|     await page.loadSim(1920);
-  166|     expect(page.server).toBe('unsupported');
-  167|     expect(page.simFailed).toBe('This server has no simulation service yet.');
-  168|     const ok = new PageState({ api, year: 1920 });
-  169|     await ok.loadSim(1920);
-  170|     await ok.loadSim(1920);
-  171|     expect(api.elections).toEqual([1920]);
-  172|   });
-  173| });
-```
-
-## `src/lib/simulacra/state.ts`
-
-```ts
-    1| // The page's state, the pure parts: what the URL asks for, what a rerun of a
-    2| // year would send (askOf), whether there's anything new to run, and the
-    3| // types the page keeps per year. The reactive holder is state.svelte.ts.
-    4| import type { ApiOptions, Edits, ErrorReason, SliceEdit } from './api';
-    5| import { ELECTION_YEARS } from './geo';
-    6| import { type Election, electionOf, FEATURED } from './history';
-    7| import type { RunResult, Slice, WhatIf } from './schemas';
-    8| 
-    9| /** History is light; the Rerun view (the switch, with or without a rerun) is dark. */
-   10| export type View = 'history' | 'whatif';
-   11| 
-   12| /** Where the simulation service stands: no answer yet, answering, or why not. */
-   13| export type Server = 'connecting' | 'online' | 'offline' | 'unsupported' | 'limited';
-   14| 
-   15| /**
-   16|  * Where the service stands after a year's voters failed to load: unreachable
-   17|  * is offline; too many requests is `limited` until it has answered (then the
-   18|  * year's own message says so); any other answer leaves it as it was, except
-   19|  * that a first load that never got a usable answer counts as offline.
-   20|  */
-   21| export function serverAfter(now: Server, reason: ErrorReason): Server {
-   22|   switch (reason) {
-   23|     case 'offline':
-   24|       return 'offline';
-   25|     case 'limited':
-   26|       return now === 'online' ? now : 'limited';
-   27|     case 'missing':
-   28|     case 'failed':
-   29|     case 'malformed':
-   30|       return now === 'connecting' ? 'offline' : now;
-   31|     default:
-   32|       return reason satisfies never;
-   33|   }
-   34| }
-   35| 
-   36| /** A year's groups and what-ifs, as the server sent them. */
-   37| export interface Sim {
-   38|   readonly slices: readonly Slice[];
-   39|   readonly whatIfs: readonly WhatIf[];
-   40| }
-   41| 
-   42| /** A finished rerun as the page keeps it: the server's result and what was asked. */
-   43| export type ShownRun = RunResult & {
-   44|   readonly runId: string;
-   45|   /** The what-ifs chosen when it ran. */
-   46|   readonly keys: readonly string[];
-   47|   /** The typed words it ran with. */
-   48|   readonly text: string;
-   49|   /** Its steps, for the robot's bubble (narrator.ts traceOf). */
-   50|   readonly trace: readonly string[];
-   51|   /** The page's state right after it ran (askOf), so Rerun with nothing changed just shows it. */
-   52|   readonly ask: string;
-   53|   /** The what-ifs it applied that the year lists. */
-   54|   readonly ran: readonly string[];
-   55| };
-   56| 
-   57| export interface UrlParams {
-   58|   /** ?sample=1: the labelled stand-in (sample.ts). */
-   59|   readonly sample: boolean;
-   60|   /** Dev only, ?simapi=<origin>: a local harness server. */
-   61|   readonly simapi: string | null;
-   62|   /** ?year=, when it's an election year. */
-   63|   readonly year: number | null;
-   64| }
-   65| 
-   66| export function readParams(params: URLSearchParams, dev: boolean): UrlParams {
-   67|   const sample = params.get('sample');
-   68|   const asked = Number(params.get('year'));
-   69|   return {
-   70|     sample: sample === '1' || sample === 'true',
-   71|     simapi: dev ? params.get('simapi') : null,
-   72|     year: ELECTION_YEARS.includes(asked) ? asked : null,
-   73|   };
+   49| /** Fractions of a group's adults moved by hand (the page's dragged dots); each change sums to 0. */
+   50| export type SliceEdit = Edits[string];
+   51| 
+   52| export interface RunAsk {
+   53|   /** What-if keys, as the election lists them. */
+   54|   readonly whatIfs?: readonly string[];
+   55|   /** A what-if in the user's own words, for the server to read. */
+   56|   readonly text?: string;
+   57|   /** Groups changed by hand, applied after the what-ifs. */
+   58|   readonly edits?: Edits;
+   59| }
+   60| 
+   61| /** What the page needs from a simulation: the server (createSimulacraApi) or the sample (createSampleApi). */
+   62| export interface SimulacraApi {
+   63|   /** True for the made-up stand-in; the page labels it. */
+   64|   readonly sample: boolean;
+   65|   /**
+   66|    * A year's voters and what-ifs. `fresh` skips every cache (after a run that
+   67|    * may have published a new what-if for the year).
+   68|    */
+   69|   election(year: number, opts?: { readonly fresh?: boolean }): Promise<Outcome<ElectionResponse>>;
+   70|   startRun(year: number, ask?: RunAsk): Promise<Outcome<StartedRun>>;
+   71|   run(runId: string): Promise<Outcome<RunStatus>>;
+   72|   stopRun(runId: string): Promise<Outcome<null>>;
+   73|   voter(year: number, slice: string, runId?: string | null): Promise<Outcome<Voter>>;
    74| }
    75| 
-   76| /** What the API is pointed at (?simapi=<url> reads <url>/api/simulacra), and the access key it sends (accessKey.ts). */
-   77| export const apiOptionsFor = (simapi: string | null, accessKey: string | null = null): ApiOptions => ({
-   78|   ...(simapi ? { base: `${simapi}/api/simulacra` } : {}),
-   79|   ...(accessKey ? { accessKey } : {}),
-   80| });
-   81| 
-   82| /** A featured year at random, other than `not`. */
-   83| export function randomStory(not?: number, random: () => number = Math.random): number {
-   84|   const pool = FEATURED.filter((y) => y !== not);
-   85|   return pool[Math.floor(random() * pool.length)] ?? FEATURED[0] ?? ELECTION_YEARS[0] ?? 1789;
-   86| }
-   87| 
-   88| /** The chip on the far left wherever the year has it, until a new chip is added. */
-   89| export const LEAD_CHIP = 'no-19th';
-   90| 
-   91| /**
-   92|  * What-ifs the page never shows as chips. Their data stays on the server (the
-   93|  * bundles are primary data); drop a key here to bring its chip back.
-   94|  */
-   95| export const HIDDEN_CHIPS: ReadonlySet<string> = new Set([
-   96|   'eisenhower-runs-as-a-democrat', // 1952
-   97|   'first-debate-on-radio-only', // 1960
-   98|   'no-call-to-mrs-king', // 1960
-   99|   'kennedy-survives-wins-nomination', // 1968
-  100|   'democratic-nominee-is-a-man', // 2016
-  101|   'no-october-comey-letter', // 2016
-  102|   'democratic-nominee-twenty-years-younger', // 2020
-  103|   'hunter-biden-laptop-story-spreads', // 2020
-  104|   'no-black-lives-matter-movement', // 2020
-  105| ]);
-  106| 
-  107| /**
-  108|  * The year's what-ifs in chip order, HIDDEN_CHIPS left out: chips added this
-  109|  * visit first (newest first), then LEAD_CHIP, then the rest in the server's order.
-  110|  */
-  111| export function chipOrder(whatIfs: readonly WhatIf[], added: readonly string[] = []): WhatIf[] {
-  112|   const rank = (w: WhatIf): number => {
-  113|     const i = added.indexOf(w.key);
-  114|     if (i >= 0) return i;
-  115|     return w.key === LEAD_CHIP ? added.length : added.length + 1;
-  116|   };
-  117|   return whatIfs
-  118|     .filter((w) => !HIDDEN_CHIPS.has(w.key))
-  119|     .map((w, i) => ({ w, i }))
-  120|     .sort((a, b) => rank(a.w) - rank(b.w) || a.i - b.i)
-  121|     .map(({ w }) => w);
-  122| }
-  123| 
-  124| /** The year a visit opens on without ?year=. */
-  125| export const OPENING_YEAR = 1920;
-  126| 
-  127| /** The URL with `year` set, or null when it already has it. */
-  128| export function urlForYear(href: string, year: number): string | null {
-  129|   const url = new URL(href);
-  130|   url.searchParams.set('year', String(year));
-  131|   return url.href === href ? null : url.href;
-  132| }
-  133| 
-  134| /** One election as it happened. Every ELECTION_YEARS year has one (history.test.ts). */
-  135| export function electionFor(year: number): Election {
-  136|   const e = electionOf(year);
-  137|   if (!e) throw new Error(`No election in ${year}.`);
-  138|   return e;
-  139| }
-  140| 
-  141| /**
-  142|  * What a rerun would send: the what-ifs (in any order), the typed words
-  143|  * (trimmed) and the year's dragged dots. Equal strings, same rerun.
-  144|  */
-  145| export const askOf = (keys: readonly string[], text: string, edits: Edits | undefined): string =>
-  146|   JSON.stringify([[...keys].sort(), text.trim(), edits ?? {}]);
-  147| 
-  148| /**
-  149|  * Something to run since this year's rerun on show (or, with none yet, a
-  150|  * what-if, words or dots to run at all).
-  151|  */
-  152| export function isDirty(
-  153|   shown: Pick<ShownRun, 'ask'> | null,
-  154|   selected: readonly string[],
-  155|   typed: string,
-  156|   edits: Edits | undefined,
-  157| ): boolean {
-  158|   if (typed.trim()) return true;
-  159|   if (!shown) return selected.length > 0 || !!edits;
-  160|   return askOf(selected, '', edits) !== shown.ask;
-  161| }
-  162| 
-  163| /** A drag on a group's dots added to the year's edits: each fraction's change summed over drags. */
-  164| export function addEdit(edits: Edits | undefined, slice: string, d: SliceEdit): Edits {
-  165|   const next: Record<string, SliceEdit> = { ...edits };
-  166|   const sum: Record<string, number> = { ...next[slice] };
-  167|   for (const [k, v] of Object.entries(d)) sum[k] = (sum[k] ?? 0) + (v ?? 0);
-  168|   next[slice] = sum;
-  169|   return next;
-  170| }
-  171| 
-  172| /** A what-if chosen or unchosen. */
-  173| export const toggled = (now: readonly string[], key: string): string[] =>
-  174|   now.includes(key) ? now.filter((k) => k !== key) : [...now, key];
+   76| export type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
+   77| 
+   78| export interface ApiOptions {
+   79|   /** Defaults to the global fetch. */
+   80|   readonly fetch?: Fetch;
+   81|   /** Defaults to the same-origin /api/simulacra. */
+   82|   readonly base?: string;
+   83|   /** How long a call waits for an answer, ms. */
+   84|   readonly timeoutMs?: number;
+   85|   /**
+   86|    * The key for typed what-ifs (accessKey.ts): sent with POST /runs only, as
+   87|    * `Authorization: Bearer <key>`. Without one the server answers new words
+   88|    * with `unknown` and says why (`unknownWhy`).
+   89|    */
+   90|   readonly accessKey?: string;
+   91| }
+   92| 
+   93| export const DEFAULT_BASE = '/api/simulacra';
+   94| export const DEFAULT_TIMEOUT_MS = 20_000;
+   95| export const LIMITED_MESSAGE = 'Too many requests just now. Try again in a few minutes.';
+   96| 
+   97| const failed = (reason: ErrorReason, message: string, status = 0): Outcome<never> => ({
+   98|   kind: 'error',
+   99|   reason,
+  100|   message,
+  101|   status,
+  102| });
+  103| 
+  104| function statusError(status: number): Outcome<never> {
+  105|   if (status === 429) return failed('limited', LIMITED_MESSAGE, status);
+  106|   return failed('failed', `The simulation server answered ${status}.`, status);
+  107| }
+  108| 
+  109| export function createSimulacraApi(options: ApiOptions = {}): SimulacraApi {
+  110|   const doFetch: Fetch = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
+  111|   const root = options.base ?? DEFAULT_BASE;
+  112|   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  113|   // A 404 before the service has ever answered means there's no service.
+  114|   let answered = false;
+  115|   // year → the run its bundle came from (GET /manifest): each year is asked
+  116|   // for at /elections/<year>?v=<runId>, a URL the CDN may keep for good.
+  117|   let manifest: Promise<Map<number, string>> | null = null;
+  118| 
+  119|   async function readManifest(): Promise<Map<number, string>> {
+  120|     const abort = new AbortController();
+  121|     const timer = setTimeout(() => abort.abort(), timeoutMs);
+  122|     try {
+  123|       const res = await doFetch(`${root}/manifest`, { signal: abort.signal });
+  124|       if (!res.ok) return new Map();
+  125|       const parsed = ManifestSchema.safeParse(await res.json());
+  126|       if (!parsed.success) return new Map();
+  127|       return new Map(Object.entries(parsed.data.years).map(([y, run]) => [Number(y), run]));
+  128|     } catch {
+  129|       // No manifest (an older server, or offline): years load unversioned.
+  130|       return new Map();
+  131|     } finally {
+  132|       clearTimeout(timer);
+  133|     }
+  134|   }
+  135| 
+  136|   /** `keyed`: the call carries the access key, when there is one. */
+  137|   async function call<S extends z.ZodType>(path: string, schema: S, body?: unknown, keyed = false): Promise<Outcome<z.output<S>>> {
+  138|     const write = body !== undefined;
+  139|     const abort = new AbortController();
+  140|     let timedOut = false;
+  141|     const timer = setTimeout(() => {
+  142|       timedOut = true;
+  143|       abort.abort();
+  144|     }, timeoutMs);
+  145|     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  146|     if (keyed && options.accessKey) headers.Authorization = `Bearer ${options.accessKey}`;
+  147|     const init: RequestInit = write
+  148|       ? { method: 'POST', headers, body: JSON.stringify(body), signal: abort.signal }
+  149|       : { signal: abort.signal };
+  150|     let res: Response;
+  151|     let json: unknown;
+  152|     try {
+  153|       res = await doFetch(root + path, init);
+  154|       if (res.status === 404 && !answered) {
+  155|         return { kind: 'unsupported', message: 'This server has no simulation service yet.' };
+  156|       }
+  157|       if (res.status === 404) return failed('missing', 'Not found.', 404);
+  158|       if (!res.ok) return statusError(res.status);
+  159|       answered = true;
+  160|       try {
+  161|         json = await res.json();
+  162|       } catch {
+  163|         if (timedOut && write) return { kind: 'indeterminate', message: 'The simulation server stopped answering mid-reply.' };
+  164|         if (timedOut) return failed('offline', 'The simulation server stopped answering.', res.status);
+  165|         return failed('malformed', 'The simulation server sent an unreadable answer.', res.status);
+  166|       }
+  167|     } catch {
+  168|       // The write may have reached the server before the wait ran out.
+  169|       if (timedOut && write) return { kind: 'indeterminate', message: 'The simulation server didn’t answer in time.' };
+  170|       return failed('offline', 'Can’t reach the simulation server.');
+  171|     } finally {
+  172|       clearTimeout(timer);
+  173|     }
+  174|     const parsed = schema.safeParse(json);
+  175|     if (!parsed.success) return failed('malformed', 'The simulation server sent an answer this page can’t read.', res.status);
+  176|     return { kind: 'ok', value: parsed.data };
+  177|   }
+  178| 
+  179|   const id = encodeURIComponent;
+  180|   return {
+  181|     sample: false,
+  182|     election: async (year, opts = {}) => {
+  183|       manifest ??= readManifest();
+  184|       const versions = await manifest;
+  185|       const known = versions.get(year);
+  186|       let v = '';
+  187|       if (opts.fresh) v = `?v=fresh-${Date.now().toString(36)}`;
+  188|       else if (known) v = `?v=${id(known)}`;
+  189|       const out = await call(`/elections/${year}${v}`, ElectionResponseSchema);
+  190|       if (out.kind === 'ok' && out.value.runId) versions.set(year, out.value.runId);
+  191|       return out;
+  192|     },
+  193|     startRun: (year, { whatIfs = [], text = '', edits = {} } = {}) =>
+  194|       call('/runs', StartedRunSchema, { year, whatIfs, text, edits }, true),
+  195|     run: (runId) => call(`/runs/${id(runId)}`, RunStatusSchema),
+  196|     stopRun: async (runId) => {
+  197|       const out = await call(`/runs/${id(runId)}/cancel`, CancelledSchema, {});
+  198|       return out.kind === 'ok' ? { kind: 'ok', value: null } : out;
+  199|     },
+  200|     voter: (year, slice, runId) =>
+  201|       call(`/elections/${year}/voters/${id(slice)}${runId ? `?run=${id(runId)}` : ''}`, VoterSchema),
+  202|   };
+  203| }
+```
+
+## `src/lib/simulacra/format.ts`
+
+```ts
+    1| // Number formats for Simulacra Americana.
+    2| const compact = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
+    3| 
+    4| /** 4100000 → "4.1M"; a missing or non-finite number → "—". */
+    5| export const fmtCompact = (n: number | null | undefined): string =>
+    6|   n != null && Number.isFinite(n) ? compact.format(n) : '—';
+```
+
+## `src/lib/simulacra/geo.test.ts`
+
+```ts
+    1| import { describe, expect, test } from 'vitest';
+    2| import { ELECTION_YEARS, GRID, STATE_BY_CODE, STATES } from './geo';
+    3| import { segments } from './places';
+    4| 
+    5| describe('geo', () => {
+    6|   test('60 elections, every four years from 1792, 1789 first', () => {
+    7|     expect(ELECTION_YEARS.length).toBe(60);
+    8|     expect(ELECTION_YEARS[0]).toBe(1789);
+    9|     expect(ELECTION_YEARS.at(-1)).toBe(2024);
+   10|     for (let i = 2; i < ELECTION_YEARS.length; i++) expect((ELECTION_YEARS[i] ?? 0) - (ELECTION_YEARS[i - 1] ?? 0)).toBe(4);
+   11|   });
+   12| 
+   13|   test('the grid covers every state, one tile each', () => {
+   14|     expect(STATES.length).toBe(51);
+   15|     const cells = new Set<string>();
+   16|     for (const s of STATES) {
+   17|       expect(s.row, s.code).toBeGreaterThanOrEqual(0);
+   18|       expect(s.row, s.code).toBeLessThan(GRID.rows);
+   19|       expect(s.col, s.code).toBeGreaterThanOrEqual(0);
+   20|       expect(s.col, s.code).toBeLessThan(GRID.cols);
+   21|       cells.add(`${s.row},${s.col}`);
+   22|     }
+   23|     expect(cells.size).toBe(STATES.length);
+   24|     expect(STATE_BY_CODE.size).toBe(STATES.length);
+   25|   });
+   26| });
+   27| 
+   28| describe('places', () => {
+   29|   test('state names and regions become pointable runs', () => {
+   30|     const parts = segments('New Hampshire and the Deep South went for him.');
+   31|     expect(parts.map((p) => p.t)).toEqual(['New Hampshire', ' and the ', 'Deep South', ' went for him.']);
+   32|     expect(parts[0]?.codes).toEqual(['NH']);
+   33|     expect(parts[2]?.codes).toContain('MS');
+   34|   });
+   35| 
+   36|   test('George Washington is a man; the District of Columbia is a district', () => {
+   37|     expect(segments('George Washington won.').every((p) => !p.codes)).toBe(true);
+   38|     expect(segments('District of Columbia voted.')[0]?.codes).toEqual(['DC']);
+   39|     expect(segments('Washington state voted.')[0]?.codes).toEqual(['WA']);
+   40|   });
+   41| });
+```
+
+## `src/lib/simulacra/geo.ts`
+
+```ts
+    1| // Simulacra Americana's geography: every election year, and the tile map's
+    2| // grid with the year each state first cast electoral votes. Who won what is
+    3| // in history.ts.
+    4| 
+    5| /** Every presidential election, 1788–89 (drawn as 1789) to 2024. */
+    6| export const ELECTION_YEARS: readonly number[] = [1789, ...Array.from({ length: 59 }, (_, i) => 1792 + i * 4)];
+    7| 
+    8| export interface UsState {
+    9|   readonly code: string;
+   10|   readonly name: string;
+   11|   /** Tile row and column on the map grid. */
+   12|   readonly row: number;
+   13|   readonly col: number;
+   14|   /** The first presidential election the state cast electoral votes in. */
+   15|   readonly first: number;
+   16| }
+   17| 
+   18| // [code, name, row, col, first presidential election cast]. A 12 × 8 square
+   19| // tile grid, west to east, north to south; `first` is the first election
+   20| // after admission (a state admitted before Election Day votes that year).
+   21| type Raw = readonly [code: string, name: string, row: number, col: number, first: number];
+   22| const RAW: readonly Raw[] = [
+   23|   ['AK', 'Alaska', 0, 0, 1960], ['ME', 'Maine', 0, 11, 1820],
+   24|   ['WI', 'Wisconsin', 1, 6, 1848], ['VT', 'Vermont', 1, 10, 1792], ['NH', 'New Hampshire', 1, 11, 1789],
+   25|   ['WA', 'Washington', 2, 1, 1892], ['ID', 'Idaho', 2, 2, 1892], ['MT', 'Montana', 2, 3, 1892], ['ND', 'North Dakota', 2, 4, 1892],
+   26|   ['MN', 'Minnesota', 2, 5, 1860], ['IL', 'Illinois', 2, 6, 1820], ['MI', 'Michigan', 2, 7, 1840], ['NY', 'New York', 2, 9, 1789],
+   27|   ['MA', 'Massachusetts', 2, 10, 1789],
+   28|   ['OR', 'Oregon', 3, 1, 1860], ['NV', 'Nevada', 3, 2, 1864], ['WY', 'Wyoming', 3, 3, 1892], ['SD', 'South Dakota', 3, 4, 1892],
+   29|   ['IA', 'Iowa', 3, 5, 1848], ['IN', 'Indiana', 3, 6, 1816], ['OH', 'Ohio', 3, 7, 1804], ['PA', 'Pennsylvania', 3, 8, 1789],
+   30|   ['NJ', 'New Jersey', 3, 9, 1789], ['CT', 'Connecticut', 3, 10, 1789], ['RI', 'Rhode Island', 3, 11, 1792],
+   31|   ['CA', 'California', 4, 1, 1852], ['UT', 'Utah', 4, 2, 1896], ['CO', 'Colorado', 4, 3, 1876], ['NE', 'Nebraska', 4, 4, 1868],
+   32|   ['MO', 'Missouri', 4, 5, 1824], ['KY', 'Kentucky', 4, 6, 1792], ['WV', 'West Virginia', 4, 7, 1864], ['VA', 'Virginia', 4, 8, 1789],
+   33|   ['MD', 'Maryland', 4, 9, 1789], ['DE', 'Delaware', 4, 10, 1789],
+   34|   ['AZ', 'Arizona', 5, 2, 1912], ['NM', 'New Mexico', 5, 3, 1912], ['KS', 'Kansas', 5, 4, 1864], ['AR', 'Arkansas', 5, 5, 1836],
+   35|   ['TN', 'Tennessee', 5, 6, 1796], ['NC', 'North Carolina', 5, 7, 1792], ['SC', 'South Carolina', 5, 8, 1789],
+   36|   ['DC', 'District of Columbia', 5, 9, 1964],
+   37|   ['OK', 'Oklahoma', 6, 4, 1908], ['LA', 'Louisiana', 6, 5, 1812], ['MS', 'Mississippi', 6, 6, 1820], ['AL', 'Alabama', 6, 7, 1820],
+   38|   ['GA', 'Georgia', 6, 8, 1789],
+   39|   ['HI', 'Hawaii', 7, 0, 1960], ['TX', 'Texas', 7, 4, 1848], ['FL', 'Florida', 7, 8, 1848],
+   40| ];
+   41| 
+   42| export const STATES: readonly UsState[] = RAW.map(([code, name, row, col, first]) => ({ code, name, row, col, first }));
+   43| export const STATE_BY_CODE: ReadonlyMap<string, UsState> = new Map(STATES.map((s) => [s.code, s]));
+   44| export const GRID = { cols: 12, rows: 8 } as const;
+```
+
+## `src/lib/simulacra/groups.ts`
+
+```ts
+    1| // The five voter groups every simulated year is built from, in the order the
+    2| // page shows them, and why a year can be missing one. Thirteen years
+    3| // (1789-1836) have no immigrant group; 1864 has no Southern ones. On a narrow
+    4| // window the page holds a missing group's place with an AbsentRow, so every
+    5| // year shows five rows and nothing under them moves with the year.
+    6| import type { Slice } from './schemas';
+    7| 
+    8| export const GROUP_ORDER = ['men', 'women', 'south-white', 'black-south', 'immigrants'] as const;
+    9| /** Each group is drawn as this many people, a row of dots (SliceRow; AbsentRow's rule spans as many). */
+   10| export const DOTS = 50;
+   11| const IN_ORDER: ReadonlySet<string> = new Set(GROUP_ORDER);
+   12| 
+   13| export interface Absent {
+   14|   readonly key: string;
+   15|   readonly label: string;
+   16|   readonly why: string;
+   17| }
+   18| 
+   19| // One line each, so a held row is as tall as a group's.
+   20| const CONFEDERACY = 'Didn’t vote: the Confederacy had seceded.';
+   21| 
+   22| const ABSENT: Readonly<Record<string, Omit<Absent, 'key'>>> = {
+   23|   immigrants: { label: 'Immigrants not yet citizens', why: 'Not counted in the census data before 1840.' },
+   24|   'south-white': { label: 'White Southerners', why: CONFEDERACY },
+   25|   'black-south': { label: 'Black Southerners, most of them enslaved', why: CONFEDERACY },
+   26| };
+   27| 
+   28| /** The year's groups in GROUP_ORDER, each missing one replaced by its Absent (any group outside the order kept, last). */
+   29| export function withAbsent(slices: readonly Slice[]): (Slice | Absent)[] {
+   30|   const byKey = new Map(slices.map((s) => [s.key, s]));
+   31|   const rows: (Slice | Absent)[] = [];
+   32|   for (const key of GROUP_ORDER) {
+   33|     const s = byKey.get(key);
+   34|     if (s) rows.push(s);
+   35|     else if (ABSENT[key]) rows.push({ key, ...ABSENT[key] });
+   36|   }
+   37|   for (const s of slices) if (!IN_ORDER.has(s.key)) rows.push(s);
+   38|   return rows;
+   39| }
+   40| 
+   41| export const isAbsent = (row: Slice | Absent): row is Absent => 'why' in row;
+```
+
+## `src/lib/simulacra/header.ts`
+
+```ts
+    1| // The election header's derived text and colours: who gets which paint, the
+    2| // names the dots and map use, the "Also ran" line and the map's label.
+    3| import type { Candidate, Election } from './history';
+    4| import { candidateHues, onPaint, paint } from './palette';
+    5| import type { Colors, MapState, Names } from './types';
+    6| 
+    7| export interface Paints {
+    8|   readonly colors: Colors;
+    9|   /** The check's colour on the winner's and runner-up's rings. */
+   10|   readonly inks: Readonly<Record<'A' | 'B', string>>;
+   11| }
+   12| 
+   13| /** The winner's and runner-up's party colours and everyone else's grey, for the mode. */
+   14| export function paintsOf(election: Election, light: boolean): Paints {
+   15|   const hues = candidateHues(
+   16|     election.candidates.map((c) => ({ key: c.key, party: c.family })),
+   17|     Object.fromEntries(election.candidates.map((c) => [c.key, c.ev])),
+   18|   );
+   19|   const a = hues.get('A');
+   20|   const b = hues.get('B') ?? 'other';
+   21|   return {
+   22|     colors: { A: paint(a, light), B: paint(b, light), O: paint('other', light) },
+   23|     inks: { A: onPaint(a, light), B: onPaint(b, light) },
+   24|   };
+   25| }
+   26| 
+   27| export function namesOf(election: Election): Names {
+   28|   const [a, b, ...others] = election.candidates;
+   29|   const only = others.length === 1 ? others[0] : undefined;
+   30|   return { A: a.short, B: b?.short, O: only ? only.short : 'Others' };
+   31| }
+   32| 
+   33| /** Everyone else who won electoral votes or a real share of the vote. */
+   34| export function alsoRanOf(others: readonly Candidate[]): string {
+   35|   const won = others.filter((c) => c.ev > 0).map((c) => `${c.name} ${c.ev}`);
+   36|   const polled = others.filter((c) => !(c.ev > 0) && (c.popular ?? 0) >= 5).map((c) => `${c.name} ${c.popular}% of the vote`);
+   37|   const one = won.length === 1 && others.find((c) => c.ev > 0)?.ev === 1;
+   38|   return [won.length ? `${won.join(', ')} electoral vote${one ? '' : 's'}` : '', polled.join(', ')].filter(Boolean).join(' · ');
+   39| }
+   40| 
+   41| /** The map's spoken label: how many states each candidate carried, and how many flipped. */
+   42| export function mapLabelOf(year: number, rerun: boolean, election: Election, states: readonly MapState[], flips: number): string {
+   43|   const carried = (c: Candidate) =>
+   44|     states.filter((s) => (c.key === 'A' || c.key === 'B' ? s.won === c.key : s.won !== 'A' && s.won !== 'B' && s.won === c.key))
+   45|       .length;
+   46|   return (
+   47|     `Map of ${rerun ? `your ${year}` : year}: ` +
+   48|     election.candidates.map((c) => `${c.short} carried ${carried(c)} states`).join(', ') +
+   49|     (flips ? `; ${flips} flipped` : '')
+   50|   );
+   51| }
+```
+
+## `src/lib/simulacra/history.test.ts`
+
+```ts
+    1| import { describe, expect, test } from 'vitest';
+    2| import { assetUrl } from '$lib/robot/assets';
+    3| import { ELECTION_YEARS, STATE_BY_CODE } from './geo';
+    4| import { electionOf, FEATURED, wikiUrl } from './history';
+    5| 
+    6| // Years whose per-state electoral votes don't sum to the electoral votes cast,
+    7| // with the per-state sum the table holds: these list the electors each state
+    8| // was allotted, not those who voted (1789: New York chose none; 1864: one
+    9| // Nevada elector didn't vote). Pinned so a data change shows.
+   10| const ALLOTTED_NOT_CAST: Readonly<Record<number, number>> = {
+   11|   1789: 73,
+   12|   1792: 135,
+   13|   1808: 176,
+   14|   1812: 218,
+   15|   1816: 221,
+   16|   1820: 236,
+   17|   1832: 288,
+   18|   1864: 234,
+   19| };
+   20| 
+   21| // States whose votes were counted before geo.ts's `first` year (both were
+   22| // counted "in the alternative" before admission), so the map leaves their
+   23| // tile empty that year. Pinned until the data owner decides which is right.
+   24| const COUNTED_EARLY: ReadonlySet<string> = new Set(['1820 MO', '1836 MI']);
+   25| 
+   26| describe('electionOf', () => {
+   27|   test.each(ELECTION_YEARS)('%i: 51 or fewer real states, a majority, electors summing to the total', (y) => {
+   28|     const e = electionOf(y);
+   29|     expect(e).not.toBeNull();
+   30|     if (!e) return;
+   31|     expect(e.year).toBe(y);
+   32|     expect(e.states.length).toBeLessThanOrEqual(51);
+   33|     expect(new Set(e.states.map((s) => s.code)).size).toBe(e.states.length);
+   34|     for (const s of e.states) {
+   35|       expect(STATE_BY_CODE.has(s.code), s.code).toBe(true);
+   36|       // A state votes only once it's in the Union.
+   37|       if (!COUNTED_EARLY.has(`${y} ${s.code}`)) expect(STATE_BY_CODE.get(s.code)?.first, s.code).toBeLessThanOrEqual(y);
+   38|       expect(s.ev, s.code).toBeGreaterThan(0);
+   39|     }
+   40|     expect(e.majority).toBe(Math.floor(e.total / 2) + 1);
+   41|     const sum = e.states.reduce((a, s) => a + s.ev, 0);
+   42|     expect(sum).toBe(ALLOTTED_NOT_CAST[y] ?? e.total);
+   43|   });
+   44| 
+   45|   test('the winner is A, the runner-up B, and unopposed years have no B', () => {
+   46|     for (const y of ELECTION_YEARS) {
+   47|       const e = electionOf(y);
+   48|       if (!e) continue;
+   49|       expect(e.candidates[0].key).toBe('A');
+   50|       expect(e.unopposed).toBe(e.candidates[1]?.key !== 'B');
+   51|     }
+   52|     expect(ELECTION_YEARS.filter((y) => electionOf(y)?.unopposed)).toEqual([1789, 1792, 1820]);
+   53|   });
+   54| 
+   55|   test('a year with no election is null; story years are elections', () => {
+   56|     expect(electionOf(1790)).toBeNull();
+   57|     for (const y of FEATURED) expect(electionOf(y)).not.toBeNull();
+   58|   });
+   59| 
+   60|   test('every winner and runner-up has a name and a portrait on the assets host', () => {
+   61|     for (const y of ELECTION_YEARS) {
+   62|       for (const c of electionOf(y)?.candidates.slice(0, 2) ?? []) {
+   63|         expect(c.name.length, `${y} ${c.key}`).toBeGreaterThan(0);
+   64|         expect(c.portrait, `${y} ${c.key}`).toBe(assetUrl(`portraits/${c.id}.jpg`));
+   65|       }
+   66|     }
+   67|   });
+   68| 
+   69|   test('every candidate links to the Wikipedia article titled with their name', () => {
+   70|     for (const y of ELECTION_YEARS) {
+   71|       for (const c of electionOf(y)?.candidates ?? []) {
+   72|         expect(c.wiki, `${y} ${c.key}`).toMatch(/^https:\/\/en\.wikipedia\.org\/wiki\/[^\s/?#]+$/);
+   73|         if (c.id !== 'stevenson') expect(decodeURIComponent(c.wiki.slice(30)).replace(/_/g, ' ')).toBe(c.name);
+   74|       }
+   75|     }
+   76|   });
+   77| 
+   78|   test('a name that titles a disambiguation page links to the right article', () => {
+   79|     expect(electionOf(1952)?.candidates[1]?.wiki).toBe('https://en.wikipedia.org/wiki/Adlai_Stevenson_II');
+   80|     expect(wikiUrl(null, 'Adlai Stevenson')).toBe('https://en.wikipedia.org/wiki/Adlai_Stevenson');
+   81|     expect(wikiUrl('lincoln', 'Abraham Lincoln')).toBe('https://en.wikipedia.org/wiki/Abraham_Lincoln');
+   82|   });
+   83| });
+```
+
+## `src/lib/simulacra/history.ts`
+
+```ts
+    1| // Every presidential election from 1789 to 2024 as it happened: who ran, who
+    2| // won, the electoral and popular vote, and which party carried each state.
+    3| // This is the page's starting point, the truth every rerun is measured
+    4| // against, so it ships with the page rather than coming from the simulation
+    5| // server, and the page can show who won before anything else answers.
+    6| //
+    7| // Sources: results and notes, the standard record (the National Archives'
+    8| // Electoral College tables, each election's Wikipedia article); each state's
+    9| // winner, Wikipedia's "List of United States presidential election results by
+   10| // state"; electoral votes by state, the House apportionments plus two (D.C.
+   11| // three). Portraits: the lead image of each candidate's Wikipedia article,
+   12| // from Wikimedia Commons, mirrored to the assets bucket as portraits/<id>.jpg
+   13| // by scripts/mirror-portraits.py; the portrait links to the article.
+   14| import { assetUrl } from '$lib/robot/assets';
+   15| import { STATES } from './geo';
+   16| import type { Family } from './palette';
+   17| 
+   18| // Each candidate's Wikipedia article: their name is its exact title (checked
+   19| // against the Wikipedia API), except where it names a
+   20| // disambiguation page.
+   21| const WIKI = 'https://en.wikipedia.org/wiki/';
+   22| const WIKI_TITLE: Readonly<Partial<Record<PersonId, string>>> = { stevenson: 'Adlai Stevenson II' };
+   23| /** The candidate's Wikipedia article. */
+   24| export const wikiUrl = (id: PersonId | null, name: string): string =>
+   25|   WIKI + encodeURIComponent(((id && WIKI_TITLE[id]) || name).replace(/ /g, '_'));
+   26| 
+   27| // Party codes (the by-state table's) → label and the palette family
+   28| // (palette.ts candidateHues) that sets the colour.
+   29| const PARTIES = {
+   30|   GW: ['No party', null],
+   31|   F: ['Federalist', 'federalist'],
+   32|   DR: ['Democratic-Republican', 'democratic-republican'],
+   33|   DR2: ['Democratic-Republican', 'democratic-republican'],
+   34|   Adams: ['Democratic-Republican', 'democratic-republican'],
+   35|   Jackson: ['Democratic-Republican', 'democratic-republican'],
+   36|   Crawford: ['Democratic-Republican', 'democratic-republican'],
+   37|   Clay: ['Democratic-Republican', 'democratic-republican'],
+   38|   D: ['Democratic', 'democratic'],
+   39|   NR: ['National Republican', 'national-republican'],
+   40|   W: ['Whig', 'whig'], W2: ['Whig', 'whig'], W3: ['Whig', 'whig'], W4: ['Whig', 'whig'],
+   41|   N: ['Nullifier', null],
+   42|   AM: ['Anti-Masonic', null],
+   43|   FS: ['Free Soil', null],
+   44|   KN: ['American', null],
+   45|   R: ['Republican', 'republican'],
+   46|   SD: ['Southern Democratic', 'democratic'],
+   47|   ND: ['Northern Democratic', 'democratic'],
+   48|   CU: ['Constitutional Union', null],
+   49|   LR: ['Liberal Republican', 'democratic'],
+   50|   PO: ['Populist', null],
+   51|   BM: ['Progressive', null],
+   52|   PR: ['Progressive', null],
+   53|   S: ['Socialist', null],
+   54|   SR: ['States’ Rights', null],
+   55|   PG: ['Progressive', null],
+   56|   I: ['Unpledged electors', null],
+   57|   AI: ['American Independent', null],
+   58|   IA: ['Independent', null],
+   59|   IP: ['Independent', null],
+   60|   RF: ['Reform', null],
+   61|   SP: ['Split', null],
+   62| } as const satisfies Record<string, readonly [string, Family | null]>;
+   63| type PartyCode = keyof typeof PARTIES;
+   64| const PARTY_BY_CODE: ReadonlyMap<string, readonly [string, Family | null]> = new Map(Object.entries(PARTIES));
+   65| 
+   66| // [full name, surname, Commons thumbnail path (the source scripts/mirror-portraits.py
+   67| // mirrors to portraits/<id>.jpg)].
+   68| const PEOPLE = {
+   69|   washington: ["George Washington", "Washington", "b/b6/Gilbert_Stuart_Williamstown_Portrait_of_George_Washington.jpg/330px-Gilbert_Stuart_Williamstown_Portrait_of_George_Washington.jpg"],
+   70|   adams: ["John Adams", "Adams", "7/75/John_Adams_Portrait.jpg/330px-John_Adams_Portrait.jpg"],
+   71|   jefferson: ["Thomas Jefferson", "Jefferson", "0/07/Official_Presidential_portrait_of_Thomas_Jefferson_%28by_Rembrandt_Peale%2C_1800%29.jpg/330px-Official_Presidential_portrait_of_Thomas_Jefferson_%28by_Rembrandt_Peale%2C_1800%29.jpg"],
+   72|   pinckney: ["Charles Cotesworth Pinckney", "Pinckney", "4/45/James_Earl_-_General_Charles_Cotesworth_Pinckney_-_Google_Art_Project.jpg/330px-James_Earl_-_General_Charles_Cotesworth_Pinckney_-_Google_Art_Project.jpg"],
+   73|   madison: ["James Madison", "Madison", "1/1d/James_Madison.jpg/330px-James_Madison.jpg"],
+   74|   clinton: ["DeWitt Clinton", "Clinton", "6/63/DeWitt_Clinton_by_Rembrandt_Peale.jpg/330px-DeWitt_Clinton_by_Rembrandt_Peale.jpg"],
+   75|   monroe: ["James Monroe", "Monroe", "5/5e/James_Monroe_White_House_portrait_1819_%28cropped%29%282%29.jpg/330px-James_Monroe_White_House_portrait_1819_%28cropped%29%282%29.jpg"],
+   76|   king: ["Rufus King", "King", "5/59/Gilbert_Stuart_-_Portrait_of_Rufus_King_%281819-1820%29_-_Google_Art_Project.jpg/330px-Gilbert_Stuart_-_Portrait_of_Rufus_King_%281819-1820%29_-_Google_Art_Project.jpg"],
+   77|   adams2: ["John Quincy Adams", "Adams", "3/3a/JQA_Photo_Crop_%28cropped%29.jpg/330px-JQA_Photo_Crop_%28cropped%29.jpg"],
+   78|   jackson: ["Andrew Jackson", "Jackson", "2/2a/Andrew_jackson_head_%28cropped%29.jpg/330px-Andrew_jackson_head_%28cropped%29.jpg"],
+   79|   clay: ["Henry Clay", "Clay", "6/67/Clay_1848.jpg/330px-Clay_1848.jpg"],
+   80|   vanburen: ["Martin Van Buren", "Van Buren", "7/72/Martin_Van_Buren_by_Mathew_Brady_c1855-58-%284%29.jpg/330px-Martin_Van_Buren_by_Mathew_Brady_c1855-58-%284%29.jpg"],
+   81|   harrison: ["William Henry Harrison", "Harrison", "2/2c/William_Henry_Harrison_crop.jpg/330px-William_Henry_Harrison_crop.jpg"],
+   82|   polk: ["James K. Polk", "Polk", "f/f3/James_K._Polk_restored_%283x4_cropped%29.jpg/330px-James_K._Polk_restored_%283x4_cropped%29.jpg"],
+   83|   taylor: ["Zachary Taylor", "Taylor", "3/35/Zachary_Taylor_restored_and_cropped_%283.5x4.5_cropped%29_%282%29.jpg/330px-Zachary_Taylor_restored_and_cropped_%283.5x4.5_cropped%29_%282%29.jpg"],
+   84|   cass: ["Lewis Cass", "Cass", "a/ae/Lewis_Cass_circa_1855.jpg/330px-Lewis_Cass_circa_1855.jpg"],
+   85|   pierce: ["Franklin Pierce", "Pierce", "7/74/Mathew_Brady_-_Franklin_Pierce_-_alternate_crop_%28cropped%29%282%29.jpg/330px-Mathew_Brady_-_Franklin_Pierce_-_alternate_crop_%28cropped%29%282%29.jpg"],
+   86|   scott: ["Winfield Scott", "Scott", "5/5f/Winfield_Scott_by_Fredricks%2C_1862_crop.jpg/330px-Winfield_Scott_by_Fredricks%2C_1862_crop.jpg"],
+   87|   buchanan: ["James Buchanan", "Buchanan", "2/21/James_Buchanan_%28cropped%29.jpg/330px-James_Buchanan_%28cropped%29.jpg"],
+   88|   frmont: ["John C. Frémont", "Frémont", "b/b3/John_Charles_Fremont_Oval.png/330px-John_Charles_Fremont_Oval.png"],
+   89|   lincoln: ["Abraham Lincoln", "Lincoln", "a/ab/Abraham_Lincoln_O-77_matte_collodion_print.jpg/330px-Abraham_Lincoln_O-77_matte_collodion_print.jpg"],
+   90|   breckinridge: ["John C. Breckinridge", "Breckinridge", "6/65/John_C._Breckinridge_1860_portrait_%283x4_cropped%29.jpg/330px-John_C._Breckinridge_1860_portrait_%283x4_cropped%29.jpg"],
+   91|   mcclellan: ["George B. McClellan", "McClellan", "8/86/George_B_McClellan_-_retouched%2C_cropped.jpg/330px-George_B_McClellan_-_retouched%2C_cropped.jpg"],
+   92|   grant: ["Ulysses S. Grant", "Grant", "9/98/Ulysses_S._Grant_1870-1880_%28cropped%29.jpg/330px-Ulysses_S._Grant_1870-1880_%28cropped%29.jpg"],
+   93|   seymour: ["Horatio Seymour", "Seymour", "6/6e/Horatio_Seymour_%28cropped%2C_retouched%29.jpg/330px-Horatio_Seymour_%28cropped%2C_retouched%29.jpg"],
+   94|   greeley: ["Horace Greeley", "Greeley", "1/11/Horace_Greeley_restored.jpg/330px-Horace_Greeley_restored.jpg"],
+   95|   hayes: ["Rutherford B. Hayes", "Hayes", "5/50/President_Rutherford_Hayes_1870_-_1880_Restored.jpg/330px-President_Rutherford_Hayes_1870_-_1880_Restored.jpg"],
+   96|   tilden: ["Samuel J. Tilden", "Tilden", "e/e8/Samuel_Tilden._Portrait_of_the_American_politician%2C_who_served_as_the_25th_Governor_of_New_York%2C_Samuel_Jones_Tilden_%281814-1886%29%2C_by_Jos%C3%A9_Mar%C3%ADa_Mora%2C_c._1870.jpg/330px-thumbnail.jpg"],
+   97|   garfield: ["James A. Garfield", "Garfield", "1/1f/James_Abram_Garfield%2C_photo_portrait_seated.jpg/330px-James_Abram_Garfield%2C_photo_portrait_seated.jpg"],
+   98|   hancock: ["Winfield Scott Hancock", "Hancock", "5/5b/Gen._Winfield_S._Hancock_-_NARA_-_529369_%28cropped%2C_retouched%29.jpg/330px-Gen._Winfield_S._Hancock_-_NARA_-_529369_%28cropped%2C_retouched%29.jpg"],
+   99|   cleveland: ["Grover Cleveland", "Cleveland", "3/36/StephenGroverCleveland.jpg/330px-StephenGroverCleveland.jpg"],
+  100|   blaine: ["James G. Blaine", "Blaine", "f/fb/James_G._Blaine_-_Brady-Handy.jpg/330px-James_G._Blaine_-_Brady-Handy.jpg"],
+  101|   harrison2: ["Benjamin Harrison", "Harrison", "4/49/Pach_Brothers_-_Benjamin_Harrison_%28cropped%29_%28cropped%29.jpg/330px-Pach_Brothers_-_Benjamin_Harrison_%28cropped%29_%28cropped%29.jpg"],
+  102|   mckinley: ["William McKinley", "McKinley", "3/30/McKinley_%28cropped%29.jpg/330px-McKinley_%28cropped%29.jpg"],
+  103|   bryan: ["William Jennings Bryan", "Bryan", "2/20/Portrait_of_Secretary_William_Jennings_Bryan_of_Nebraska%2C_1913.jpeg/330px-Portrait_of_Secretary_William_Jennings_Bryan_of_Nebraska%2C_1913.jpeg"],
+  104|   roosevelt: ["Theodore Roosevelt", "Roosevelt", "6/69/Theodore_Roosevelt_by_the_Pach_Bros_%284x5_cropped%29_%282%29.jpg/330px-Theodore_Roosevelt_by_the_Pach_Bros_%284x5_cropped%29_%282%29.jpg"],
+  105|   parker: ["Alton B. Parker", "Parker", "b/b4/Alton_Brooks_Parker_Portrait_%283x4_cropped%29.jpg/330px-Alton_Brooks_Parker_Portrait_%283x4_cropped%29.jpg"],
+  106|   taft: ["William Howard Taft", "Taft", "1/11/William_Howard_Taft_by_Pach_Brothers_%283x4_ropped%29_%28cropped%29.jpg/330px-William_Howard_Taft_by_Pach_Brothers_%283x4_ropped%29_%28cropped%29.jpg"],
+  107|   wilson: ["Woodrow Wilson", "Wilson", "9/96/President_Woodrow_Wilson_Harris_%26_Ewing_%283x4_cropped_b%29.jpg/330px-President_Woodrow_Wilson_Harris_%26_Ewing_%283x4_cropped_b%29.jpg"],
+  108|   hughes: ["Charles Evans Hughes", "Hughes", "e/ee/Charles_Evans_Hughes_cph.3b15401.jpg/330px-Charles_Evans_Hughes_cph.3b15401.jpg"],
+  109|   harding: ["Warren G. Harding", "Harding", "4/4e/Warren_G._Harding_1920s_portrait_%283x4_cropped%29.jpg/330px-Warren_G._Harding_1920s_portrait_%283x4_cropped%29.jpg"],
+  110|   cox: ["James M. Cox", "Cox", "5/57/James_M._Cox_Portrait_%283x4_cropped_b%29.jpg/330px-James_M._Cox_Portrait_%283x4_cropped_b%29.jpg"],
+  111|   coolidge: ["Calvin Coolidge", "Coolidge", "4/4c/President_Calvin_Coolidge%2C_1924_portrait_photograph_%283x4_cropped_2%29.jpeg/330px-President_Calvin_Coolidge%2C_1924_portrait_photograph_%283x4_cropped_2%29.jpeg"],
+  112|   davis: ["John W. Davis", "Davis", "c/c5/DAVIS%2C_JOHN_W._HONORABLE_LCCN2016862563_%28cropped%29.jpg/330px-DAVIS%2C_JOHN_W._HONORABLE_LCCN2016862563_%28cropped%29.jpg"],
+  113|   hoover: ["Herbert Hoover", "Hoover", "5/57/President_Hoover_portrait.jpg/330px-President_Hoover_portrait.jpg"],
+  114|   smith: ["Al Smith", "Smith", "1/1f/SMITH%2C_ALFRED._HONORABLE_LCCN2016862532_Trim.jpg/330px-SMITH%2C_ALFRED._HONORABLE_LCCN2016862532_Trim.jpg"],
+  115|   roosevelt2: ["Franklin D. Roosevelt", "Roosevelt", "f/fd/FDR-1944-Campaign-Portrait_%283x4_retouched%2C_cropped%29.jpg/330px-FDR-1944-Campaign-Portrait_%283x4_retouched%2C_cropped%29.jpg"],
+  116|   landon: ["Alf Landon", "Landon", "3/37/Unsuccessful_1936.jpg/330px-Unsuccessful_1936.jpg"],
+  117|   willkie: ["Wendell Willkie", "Willkie", "b/b5/Portrait_of_Wendell_Lewis_Willkie_Sitting_by_Wall_%28cropped%29.jpg/330px-Portrait_of_Wendell_Lewis_Willkie_Sitting_by_Wall_%28cropped%29.jpg"],
+  118|   dewey: ["Thomas E. Dewey", "Dewey", "5/52/Thomas_Dewey_in_1944.jpg/330px-Thomas_Dewey_in_1944.jpg"],
+  119|   truman: ["Harry S. Truman", "Truman", "0/0b/TRUMAN_58-766-06_%28cropped%29.jpg/330px-TRUMAN_58-766-06_%28cropped%29.jpg"],
+  120|   eisenhower: ["Dwight D. Eisenhower", "Eisenhower", "0/02/Dwight_D._Eisenhower%2C_official_photo_portrait%2C_May_29%2C_1959_%28cropped%29%283%29.jpg/330px-Dwight_D._Eisenhower%2C_official_photo_portrait%2C_May_29%2C_1959_%28cropped%29%283%29.jpg"],
+  121|   stevenson: ["Adlai Stevenson", "Stevenson", "c/ce/Portrait_of_Ambassador_Adlai_E._Stevenson_II_%28cropped%29.jpg/330px-Portrait_of_Ambassador_Adlai_E._Stevenson_II_%28cropped%29.jpg"],
+  122|   kennedy: ["John F. Kennedy", "Kennedy", "c/c3/John_F._Kennedy%2C_White_House_color_photo_portrait.jpg/330px-John_F._Kennedy%2C_White_House_color_photo_portrait.jpg"],
+  123|   nixon: ["Richard Nixon", "Nixon", "2/2c/Richard_Nixon_presidential_portrait_%281%29.jpg/330px-Richard_Nixon_presidential_portrait_%281%29.jpg"],
+  124|   johnson: ["Lyndon B. Johnson", "Johnson", "5/54/Lyndon_B._Johnson%2C_photo_portrait%2C_color_%283x4_cropped%29%282%29.jpg/330px-Lyndon_B._Johnson%2C_photo_portrait%2C_color_%283x4_cropped%29%282%29.jpg"],
+  125|   goldwater: ["Barry Goldwater", "Goldwater", "1/19/Senator_Goldwater_1960.jpg/330px-Senator_Goldwater_1960.jpg"],
+  126|   humphrey: ["Hubert Humphrey", "Humphrey", "2/23/Hubert_Humphrey_vice_presidential_portrait.jpg/330px-Hubert_Humphrey_vice_presidential_portrait.jpg"],
+  127|   mcgovern: ["George McGovern", "McGovern", "6/6f/George_McGovern_%28D-SD%29.jpg/330px-George_McGovern_%28D-SD%29.jpg"],
+  128|   carter: ["Jimmy Carter", "Carter", "6/6a/Jimmy_Carter_Official_Portrait2_%283x4_cropped%29.jpg/330px-Jimmy_Carter_Official_Portrait2_%283x4_cropped%29.jpg"],
+  129|   ford: ["Gerald Ford", "Ford", "3/36/Gerald_Ford_presidential_portrait_%28cropped%29.jpg/330px-Gerald_Ford_presidential_portrait_%28cropped%29.jpg"],
+  130|   reagan: ["Ronald Reagan", "Reagan", "1/16/Official_Portrait_of_President_Reagan_1981.jpg/330px-Official_Portrait_of_President_Reagan_1981.jpg"],
+  131|   mondale: ["Walter Mondale", "Mondale", "4/41/Walter_Mondale_1977_vice_presidential_portrait.jpg/330px-Walter_Mondale_1977_vice_presidential_portrait.jpg"],
+  132|   bush: ["George H. W. Bush", "Bush", "d/dc/George_H._W._Bush_presidential_portrait_%28cropped%29_%282%29.jpg/330px-George_H._W._Bush_presidential_portrait_%28cropped%29_%282%29.jpg"],
+  133|   dukakis: ["Michael Dukakis", "Dukakis", "0/0c/Michael_Dukakis_%283x4_cropped%29.jpg/330px-Michael_Dukakis_%283x4_cropped%29.jpg"],
+  134|   clinton2: ["Bill Clinton", "Clinton", "d/d3/Bill_Clinton.jpg/330px-Bill_Clinton.jpg"],
+  135|   dole: ["Bob Dole", "Dole", "a/a9/Ks_1996_dole.jpg/330px-Ks_1996_dole.jpg"],
+  136|   bush2: ["George W. Bush", "Bush", "d/d4/George-W-Bush.jpeg/330px-George-W-Bush.jpeg"],
+  137|   gore: ["Al Gore", "Gore", "c/c5/Al_Gore%2C_Vice_President_of_the_United_States%2C_official_portrait_1994.jpg/330px-Al_Gore%2C_Vice_President_of_the_United_States%2C_official_portrait_1994.jpg"],
+  138|   kerry: ["John Kerry", "Kerry", "7/73/John_Kerry_portrait_of_Climate_Envoy_%28cropped%29.jpg/330px-John_Kerry_portrait_of_Climate_Envoy_%28cropped%29.jpg"],
+  139|   obama: ["Barack Obama", "Obama", "8/8d/President_Barack_Obama.jpg/330px-President_Barack_Obama.jpg"],
+  140|   mccain: ["John McCain", "McCain", "7/74/John_McCain_official_portrait_2009_%283x4_cropped%29.jpg/330px-John_McCain_official_portrait_2009_%283x4_cropped%29.jpg"],
+  141|   romney: ["Mitt Romney", "Romney", "7/7f/Mitt_Romney_official_US_Senate_portrait.jpg/330px-Mitt_Romney_official_US_Senate_portrait.jpg"],
+  142|   trump: ["Donald Trump", "Trump", "1/16/Official_Presidential_Portrait_of_President_Donald_J._Trump_%282025%29.jpg/330px-Official_Presidential_Portrait_of_President_Donald_J._Trump_%282025%29.jpg"],
+  143|   clinton3: ["Hillary Clinton", "Clinton", "e/ec/Former_United_States_Secretary_of_State_Hillary_Rodham_Clinton_at_the_U.S._Department_of_State_on_September_26%2C_2023_in_Washington%2C_D.C._14_%28cropped%29.jpg/330px-Former_United_States_Secretary_of_State_Hillary_Rodham_Clinton_at_the_U.S._Department_of_State_on_September_26%2C_2023_in_Washington%2C_D.C._14_%28cropped%29.jpg"],
+  144|   biden: ["Joe Biden", "Biden", "6/68/Joe_Biden_presidential_portrait.jpg/330px-Joe_Biden_presidential_portrait.jpg"],
+  145|   harris: ["Kamala Harris", "Harris", "4/41/Kamala_Harris_Vice_Presidential_Portrait.jpg/330px-Kamala_Harris_Vice_Presidential_Portrait.jpg"],
+  146| } as const satisfies Record<string, readonly [string, string, string]>;
+  147| type PersonId = keyof typeof PEOPLE;
+  148| 
+  149| // winner / runner-up: [person, party, electoral votes, popular vote %]
+  150| type Ran = readonly [id: PersonId, party: PartyCode, ev: number, popular: number | null];
+  151| // others: [name, surname, party, electoral votes, popular vote %]
+  152| type Other = readonly [name: string, short: string, party: PartyCode, ev: number, popular: number | null];
+  153| // [year, electoral votes, needed to win, winner, runner-up, others, note,
+  154| //  each state's winning party (geo.ts STATES order; - = no vote), each state's electoral votes]
+  155| type Row = readonly [
+  156|   year: number,
+  157|   total: number,
+  158|   majority: number,
+  159|   winner: Ran,
+  160|   runnerUp: Ran | null,
+  161|   others: readonly Other[],
+  162|   note: string,
+  163|   parties: string,
+  164|   evs: string,
+  165| ];
+  166| const RESULTS: readonly Row[] = [
+  167|   [1789, 69, 35, ['washington', "GW", 69, null], null, [], "Unopposed. Every elector voted for him; John Adams came second and became vice president.",
+  168|     "- - - - GW - - - - - - - - GW - - - - - - - GW GW GW - - - - - - - - GW GW GW - - - - - - GW - - - - - GW - - -",
+  169|     "0 0 0 0 5 0 0 0 0 0 0 0 0 10 0 0 0 0 0 0 0 10 6 7 0 0 0 0 0 0 0 0 12 8 3 0 0 0 0 0 0 7 0 0 0 0 0 5 0 0 0"],
+  170|   [1792, 132, 67, ['washington', "GW", 132, null], null, [], "Unopposed again. John Adams came second and stayed vice president.",
+  171|     "- - - GW GW - - - - - - - GW GW - - - - - - - GW GW GW GW - - - - - GW - GW GW GW - - - - - GW GW - - - - - GW - - -",
+  172|     "0 0 0 4 6 0 0 0 0 0 0 0 12 16 0 0 0 0 0 0 0 15 7 9 4 0 0 0 0 0 4 0 21 10 3 0 0 0 0 0 12 8 0 0 0 0 0 4 0 0 0"],
+  173|   [1796, 138, 70, ['adams', "F", 71, null], ['jefferson', "DR", 68, null], [], "Jefferson came second and, under the rules then, became Adams’s vice president.",
+  174|     "- - - F F - - - - - - - F F - - - - - - - DR F F F - - - - - DR - DR F F - - - - DR DR DR - - - - - DR - - -",
+  175|     "0 0 0 4 6 0 0 0 0 0 0 0 12 16 0 0 0 0 0 0 0 15 7 9 4 0 0 0 0 0 4 0 21 10 3 0 0 0 0 3 12 8 0 0 0 0 0 4 0 0 0"],
+  176|   [1800, 138, 70, ['jefferson', "DR", 73, null], ['adams', "F", 65, null], [], "Jefferson tied his own running mate, Aaron Burr, at 73. The House chose Jefferson on its 36th ballot.",
+  177|     "- - - F F - - - - - - - DR F - - - - - - - DR F F F - - - - - DR - DR SP F - - - - DR DR DR - - - - - DR - - -",
+  178|     "0 0 0 4 6 0 0 0 0 0 0 0 12 16 0 0 0 0 0 0 0 15 7 9 4 0 0 0 0 0 4 0 21 10 3 0 0 0 0 3 12 8 0 0 0 0 0 4 0 0 0"],
+  179|   [1804, 176, 89, ['jefferson', "DR", 162, null], ['pinckney', "F", 14, null], [], "",
+  180|     "- - - DR DR - - - - - - - DR DR - - - - - - DR DR DR F DR - - - - - DR - DR DR F - - - - DR DR DR - - - - - DR - - -",
+  181|     "0 0 0 6 7 0 0 0 0 0 0 0 19 19 0 0 0 0 0 0 3 20 8 9 4 0 0 0 0 0 8 0 24 11 3 0 0 0 0 5 14 10 0 0 0 0 0 6 0 0 0"],
+  182|   [1808, 175, 88, ['madison', "DR", 122, null], ['pinckney', "F", 47, null], [["George Clinton", "Clinton", "DR2", 6, null]], "",
+  183|     "- - - DR F - - - - - - - DR F - - - - - - DR DR DR F F - - - - - DR - DR DR F - - - - DR DR DR - - - - - DR - - -",
+  184|     "0 0 0 6 7 0 0 0 0 0 0 0 19 19 0 0 0 0 0 0 3 20 8 9 4 0 0 0 0 0 8 0 24 11 3 0 0 0 0 5 14 10 0 0 0 0 0 6 0 0 0"],
+  185|   [1812, 217, 109, ['madison', "DR", 128, null], ['clinton', "F", 89, null], [], "Clinton, a Democratic-Republican, ran with the Federalists against the war with Britain.",
+  186|     "- - - DR F - - - - - - - F F - - - - - - DR DR F F F - - - - - DR - DR DR F - - - - DR DR DR - - DR - - DR - - -",
+  187|     "0 0 0 8 8 0 0 0 0 0 0 0 29 22 0 0 0 0 0 0 8 25 8 9 4 0 0 0 0 0 12 0 25 11 4 0 0 0 0 8 15 11 0 0 3 0 0 8 0 0 0"],
+  188|   [1816, 217, 109, ['monroe', "DR", 183, null], ['king', "F", 34, null], [], "The Federalists’ last presidential campaign.",
+  189|     "- - - DR DR - - - - - - - DR F - - - - - DR DR DR DR F DR - - - - - DR - DR DR F - - - - DR DR DR - - DR - - DR - - -",
+  190|     "0 0 0 8 8 0 0 0 0 0 0 0 29 22 0 0 0 0 0 3 8 25 8 9 4 0 0 0 0 0 12 0 25 11 4 0 0 0 0 8 15 11 0 0 3 0 0 8 0 0 0"],
+  191|   [1820, 232, 117, ['monroe', "DR", 231, null], null, [], "Unopposed. One elector voted for John Quincy Adams instead.",
+  192|     "- DR - DR DR - - - - - DR - DR DR - - - - - DR DR DR DR DR DR - - - - DR DR - DR DR DR - - - - DR DR DR - - DR DR DR DR - - -",
+  193|     "0 3 0 8 8 0 0 0 0 0 3 0 29 22 0 0 0 0 0 3 8 25 8 9 4 0 0 0 0 3 12 0 25 11 4 0 0 0 0 8 15 11 0 0 3 3 3 8 0 0 0"],
+  194|   [1824, 261, 131, ['adams2', "Adams", 84, 30.9], ['jackson', "Jackson", 99, 41.4], [["William H. Crawford", "Crawford", "Crawford", 41, 11.2], ["Henry Clay", "Clay", "Clay", 37, 13.0]], "Jackson led but no one had a majority. The House chose Adams.",
+  195|     "- Adams - Adams Adams - - - - - Jackson - Adams Adams - - - - - Jackson Clay Jackson Jackson Adams Adams - - - - Jackson Clay - Crawford Jackson Crawford - - - - Jackson Jackson Jackson - - Jackson Jackson Jackson Crawford - - -",
+  196|     "0 9 0 7 8 0 0 0 0 0 3 0 36 15 0 0 0 0 0 5 16 28 8 8 4 0 0 0 0 3 14 0 24 11 3 0 0 0 0 11 15 11 0 0 5 3 5 9 0 0 0"],
+  197|   [1828, 261, 131, ['jackson', "D", 178, 56.0], ['adams2', "NR", 83, 43.6], [], "",
+  198|     "- NR - NR NR - - - - - D - D NR - - - - - D D D NR NR NR - - - - D D - D NR NR - - - - D D D - - D D D D - - -",
+  199|     "0 9 0 7 8 0 0 0 0 0 3 0 36 15 0 0 0 0 0 5 16 28 8 8 4 0 0 0 0 3 14 0 24 11 3 0 0 0 0 11 15 11 0 0 5 3 5 9 0 0 0"],
+  200|   [1832, 286, 144, ['jackson', "D", 219, 54.2], ['clay', "NR", 49, 37.4], [["John Floyd", "Floyd", "N", 11, null], ["William Wirt", "Wirt", "AM", 7, 7.8]], "",
+  201|     "- D - AM D - - - - - D - D NR - - - - - D D D D NR NR - - - - D NR - D NR NR - - - - D D N - - D D D D - - -",
+  202|     "0 10 0 7 7 0 0 0 0 0 5 0 42 14 0 0 0 0 0 9 21 30 8 8 4 0 0 0 0 4 15 0 23 10 3 0 0 0 0 15 15 11 0 0 5 4 7 11 0 0 0"],
+  203|   [1836, 294, 148, ['vanburen', "D", 170, 50.8], ['harrison', "W", 73, 36.6], [["Hugh Lawson White", "White", "W2", 26, 9.7], ["Daniel Webster", "Webster", "W3", 14, 2.7], ["Willie P. Mangum", "Mangum", "W4", 11, null]], "The Whigs ran four regional candidates, hoping to force the race into the House.",
+  204|     "- D - W D - - - - - D D D W - - - - - W W D W D D - - - - D W - D W W - - - D W D W - - D D D W - - -",
+  205|     "0 10 0 7 7 0 0 0 0 0 5 3 42 14 0 0 0 0 0 9 21 30 8 8 4 0 0 0 0 4 15 0 23 10 3 0 0 0 3 15 15 11 0 0 5 4 7 11 0 0 0"],
+  206|   [1840, 294, 148, ['harrison', "W", 234, 52.9], ['vanburen', "D", 60, 46.8], [], "",
+  207|     "- W - W D - - - - - D W W W - - - - - W W W W W W - - - - D W - D W W - - - D W W D - - W W D W - - -",
+  208|     "0 10 0 7 7 0 0 0 0 0 5 3 42 14 0 0 0 0 0 9 21 30 8 8 4 0 0 0 0 4 15 0 23 10 3 0 0 0 3 15 15 11 0 0 5 4 7 11 0 0 0"],
+  209|   [1844, 275, 138, ['polk', "D", 170, 49.5], ['clay', "W", 105, 48.1], [], "New York, and the election, turned on about 5,000 votes.",
+  210|     "- D - W D - - - - - D D D W - - - - - D W D W W W - - - - D W - D W W - - - D W W D - - D D D D - - -",
+  211|     "0 9 0 6 6 0 0 0 0 0 9 5 36 12 0 0 0 0 0 12 23 26 7 6 4 0 0 0 0 7 12 0 17 8 3 0 0 0 3 13 11 9 0 0 6 6 9 10 0 0 0"],
+  212|   [1848, 290, 146, ['taylor', "W", 163, 47.3], ['cass', "D", 127, 42.5], [["Martin Van Buren", "Van Buren", "FS", 0, 10.1]], "",
+  213|     "- D D W D - - - - - D D W W - - - - D D D W W W W - - - - D W - D W W - - - D W W D - - W D D W - D W",
+  214|     "0 9 4 6 6 0 0 0 0 0 9 5 36 12 0 0 0 0 4 12 23 26 7 6 4 0 0 0 0 7 12 0 17 8 3 0 0 0 3 13 11 9 0 0 6 6 9 10 0 4 3"],
+  215|   [1852, 296, 149, ['pierce', "D", 254, 50.8], ['scott', "W", 42, 43.9], [], "The Whigs’ last presidential campaign.",
+  216|     "- D D W D - - - - - D D D W - - - - D D D D D D D D - - - D W - D D D - - - D W D D - - D D D D - D D",
+  217|     "0 8 5 5 5 0 0 0 0 0 11 6 35 13 0 0 0 0 4 13 23 27 7 6 4 4 0 0 0 9 12 0 15 8 3 0 0 0 4 12 10 8 0 0 6 7 9 10 0 4 3"],
+  218|   [1856, 296, 149, ['buchanan', "D", 174, 45.3], ['frmont', "R", 114, 33.1], [["Millard Fillmore", "Fillmore", "KN", 8, 21.5]], "The new Republican Party’s first campaign.",
+  219|     "- R R R R - - - - - D R R R - - - - R D R D D R R D - - - D D - D KN D - - - D D D D - - D D D D - D D",
+  220|     "0 8 5 5 5 0 0 0 0 0 11 6 35 13 0 0 0 0 4 13 23 27 7 6 4 4 0 0 0 9 12 0 15 8 3 0 0 0 4 12 10 8 0 0 6 7 9 10 0 4 3"],
+  221|   [1860, 303, 152, ['lincoln', "R", 180, 39.8], ['breckinridge', "SD", 72, 18.1], [["John Bell", "Bell", "CU", 39, 12.6], ["Stephen A. Douglas", "Douglas", "ND", 12, 29.5]], "The Democrats split in two. Lincoln won without a single Southern electoral vote.",
+  222|     "- R R R R - - - - R R R R R R - - - R R R R R R R R - - - ND CU - CU SD SD - - - SD CU SD SD - - SD SD SD SD - SD SD",
+  223|     "0 8 5 5 5 0 0 0 0 4 11 6 35 13 3 0 0 0 4 13 23 27 7 6 4 4 0 0 0 9 12 0 15 8 3 0 0 0 4 12 10 8 0 0 6 7 9 10 0 4 3"],
+  224|   [1864, 233, 117, ['lincoln', "R", 212, 55.0], ['mcclellan', "D", 21, 45.0], [], "Held during the Civil War. The eleven Confederate states cast no votes.",
+  225|     "- R R R R - - - - R R R R R R R - - R R R R D R R R - - - R D R - R D - - R - - - - - - - - - - - - -",
+  226|     "0 7 8 5 5 0 0 0 0 4 16 8 33 12 3 3 0 0 8 13 21 26 7 6 4 5 0 0 0 11 11 5 0 7 3 0 0 3 0 0 0 0 0 0 0 0 0 0 0 0 0"],
+  227|   [1868, 294, 148, ['grant', "R", 214, 52.7], ['seymour', "D", 80, 47.3], [], "The first election with Black men voting across the South.",
+  228|     "- R R R R - - - - R R R D R D R - - R R R R D R R R - - R R D R - D D - - R R R R R - - D - R D - - R",
+  229|     "0 7 8 5 5 0 0 0 0 4 16 8 33 12 3 3 0 0 8 13 21 26 7 6 4 5 0 0 3 11 11 5 0 7 3 0 0 3 5 10 9 6 0 0 7 0 8 9 0 0 3"],
+  230|   [1872, 366, 184, ['grant', "R", 286, 55.6], ['greeley', "LR", 66, 43.8], [], "Greeley died three weeks after Election Day; his 66 electors voted for others.",
+  231|     "- R R R R - - - - R R R R R R R - - R R R R R R R R - - R LR LR R R LR R - - R R LR R R - - R R R LR - LR R",
+  232|     "0 7 10 5 5 0 0 0 0 5 21 11 35 13 3 3 0 0 11 15 22 29 9 6 4 6 0 0 3 15 12 5 11 8 3 0 0 5 6 12 10 7 0 0 8 8 10 11 0 8 4"],
+  233|   [1876, 369, 185, ['hayes', "R", 185, 47.9], ['tilden', "D", 184, 51.0], [], "Tilden won the popular vote. A commission gave all 20 disputed electoral votes to Hayes.",
+  234|     "- R R R R - - - - R R R D R R R - - R D R R D D R R - R R D D D D D D - - R D D D R - - R D D D - D R",
+  235|     "0 7 10 5 5 0 0 0 0 5 21 11 35 13 3 3 0 0 11 15 22 29 9 6 4 6 0 3 3 15 12 5 11 8 3 0 0 5 6 12 10 7 0 0 8 8 10 11 0 8 4"],
+  236|   [1880, 369, 185, ['garfield', "R", 214, 48.3], ['hancock', "D", 155, 48.2], [], "Decided by about 2,000 popular votes out of 9 million.",
+  237|     "- R R R R - - - - R R R R R R D - - R R R R D R R D - R R D D D D D D - - R D D D D - - D D D D - D D",
+  238|     "0 7 10 5 5 0 0 0 0 5 21 11 35 13 3 3 0 0 11 15 22 29 9 6 4 6 0 3 3 15 12 5 11 8 3 0 0 5 6 12 10 7 0 0 8 8 10 11 0 8 4"],
+  239|   [1884, 401, 201, ['cleveland', "D", 219, 48.9], ['blaine', "R", 182, 48.3], [], "New York went to Cleveland by 1,047 votes.",
+  240|     "- R R R R - - - - R R R D R R R - - R D R R D D R R - R R D D D D D D - - R D D D D - - D D D D - D D",
+  241|     "0 6 11 4 4 0 0 0 0 7 22 13 36 14 3 3 0 0 13 15 23 30 9 6 4 8 0 3 5 16 13 6 12 8 3 0 0 9 7 12 11 9 0 0 8 9 10 12 0 13 4"],
+  242|   [1888, 401, 201, ['harrison2', "R", 233, 47.8], ['cleveland', "D", 168, 48.6], [], "Cleveland won the popular vote.",
+  243|     "- R R R R - - - - R R R R R R R - - R R R R D D R R - R R D D D D D D - - R D D D D - - D D D D - D D",
+  244|     "0 6 11 4 4 0 0 0 0 7 22 13 36 14 3 3 0 0 13 15 23 30 9 6 4 8 0 3 5 16 13 6 12 8 3 0 0 9 7 12 11 9 0 0 8 9 10 12 0 13 4"],
+  245|   [1892, 444, 223, ['cleveland', "D", 277, 46.0], ['harrison2', "R", 145, 43.0], [["James B. Weaver", "Weaver", "PO", 22, 8.5]], "",
+  246|     "- R D R R R PO R SP R D R D R R PO R R R D R R D D R D - PO R D D D D D D - - PO D D D D - - D D D D - D D",
+  247|     "0 6 12 4 4 4 3 3 3 9 24 14 36 15 4 3 3 4 13 15 23 32 10 6 4 9 0 4 8 17 13 6 12 8 3 0 0 10 8 12 11 9 0 0 8 9 11 13 0 15 4"],
+  248|   [1896, 447, 224, ['mckinley', "R", 271, 51.0], ['bryan', "D", 176, 46.7], [], "Gold against silver, city against farm, three years into a depression.",
+  249|     "- R R R R D D D R R R R R R R D D D R R R R R R R R D D D D R R D R R - - D D D D D - - D D D D - D D",
+  250|     "0 6 12 4 4 4 3 3 3 9 24 14 36 15 4 3 3 4 13 15 23 32 10 6 4 9 3 4 8 17 13 6 12 8 3 0 0 10 8 12 11 9 0 0 8 9 11 13 0 15 4"],
+  251|   [1900, 447, 224, ['mckinley', "R", 292, 51.6], ['bryan', "D", 155, 45.5], [], "",
+  252|     "- R R R R R D D R R R R R R R D R R R R R R R R R R R D R D D R D R R - - R D D D D - - D D D D - D D",
+  253|     "0 6 12 4 4 4 3 3 3 9 24 14 36 15 4 3 3 4 13 15 23 32 10 6 4 9 3 4 8 17 13 6 12 8 3 0 0 10 8 12 11 9 0 0 8 9 11 13 0 15 4"],
+  254|   [1904, 476, 239, ['roosevelt', "R", 336, 56.4], ['parker', "D", 140, 37.6], [], "",
+  255|     "- R R R R R R R R R R R R R R R R R R R R R R R R R R R R R D R D D R - - R D D D D - - D D D D - D D",
+  256|     "0 6 13 4 4 5 3 3 4 11 27 14 39 16 4 3 3 4 13 15 23 34 12 7 4 10 3 5 8 18 13 7 12 8 3 0 0 10 9 12 12 9 0 0 9 10 11 13 0 18 5"],
+  257|   [1908, 483, 242, ['taft', "R", 321, 51.6], ['bryan', "D", 162, 43.0], [], "",
+  258|     "- R R R R R R R R R R R R R R D R R R R R R R R R R R D D R D R D D R - - R D D D D - D D D D D - D D",
+  259|     "0 6 13 4 4 5 3 3 4 11 27 14 39 16 4 3 3 4 13 15 23 34 12 7 4 10 3 5 8 18 13 7 12 8 3 0 0 10 9 12 12 9 0 7 9 10 11 13 0 18 5"],
+  260|   [1912, 531, 266, ['wilson', "D", 435, 41.8], ['roosevelt', "BM", 88, 27.4], [["William Howard Taft", "Taft", "R", 8, 23.2], ["Eugene V. Debs", "Debs", "S", 0, 6.0]], "Roosevelt split the Republicans, and Wilson won with 42% of the vote.",
+  261|     "- D D R D BM D D D BM D BM D D D D D BM D D D BM D D D BM R D D D D D D D D D D D D D D D - D D D D D - D D",
+  262|     "0 6 13 4 4 7 4 4 5 12 29 15 45 18 5 3 3 5 13 15 24 38 14 7 5 13 4 6 8 18 13 8 12 8 3 3 3 10 9 12 12 9 0 10 10 10 12 14 0 20 6"],
+  263|   [1916, 531, 266, ['wilson', "D", 277, 49.2], ['hughes', "R", 254, 46.1], [], "California, and the election, went to Wilson by 3,773 votes.",
+  264|     "- R R R D D D D D R R R R R R D D R R R D R R R R D D D D D D R D D R D D D D D D D - D D D D D - D D",
+  265|     "0 6 13 4 4 7 4 4 5 12 29 15 45 18 5 3 3 5 13 15 24 38 14 7 5 13 4 6 8 18 13 8 12 8 3 3 3 10 9 12 12 9 0 10 10 10 12 14 0 20 6"],
+  266|   [1920, 531, 266, ['harding', "R", 404, 60.3], ['cox', "D", 127, 34.1], [], "The first election after the 19th Amendment.",
+  267|     "- R R R R R R R R R R R R R R R R R R R R R R R R R R R R R D R D R R R R R D R D D - R D D D D - D D",
+  268|     "0 6 13 4 4 7 4 4 5 12 29 15 45 18 5 3 3 5 13 15 24 38 14 7 5 13 4 6 8 18 13 8 12 8 3 3 3 10 9 12 12 9 0 10 10 10 12 14 0 20 6"],
+  269|   [1924, 531, 266, ['coolidge', "R", 382, 54.0], ['davis', "D", 136, 28.8], [["Robert M. La Follette", "La Follette", "PR", 13, 16.6]], "",
+  270|     "- R PR R R R R R R R R R R R R R R R R R R R R R R R R R R R R R D R R R R R D D D D - D D D D D - D D",
+  271|     "0 6 13 4 4 7 4 4 5 12 29 15 45 18 5 3 3 5 13 15 24 38 14 7 5 13 4 6 8 18 13 8 12 8 3 3 3 10 9 12 12 9 0 10 10 10 12 14 0 20 6"],
+  272|   [1928, 531, 266, ['hoover', "R", 444, 58.2], ['smith', "D", 87, 40.8], [], "Smith, the first Catholic nominee, cracked the Solid South the wrong way.",
+  273|     "- R R R R R R R R R R R R D R R R R R R R R R R D R R R R R R R R R R R R R D R R D - R D D D D - R R",
+  274|     "0 6 13 4 4 7 4 4 5 12 29 15 45 18 5 3 3 5 13 15 24 38 14 7 5 13 4 6 8 18 13 8 12 8 3 3 3 10 9 12 12 9 0 10 10 10 12 14 0 20 6"],
+  275|   [1932, 531, 266, ['roosevelt2', "D", 472, 57.4], ['hoover', "R", 59, 39.7], [], "Three years into the Great Depression.",
+  276|     "- R D R R D D D D D D D D D D D D D D D D R D R D D D D D D D D D D R D D D D D D D - D D D D D - D D",
+  277|     "0 5 12 3 4 8 4 4 4 11 29 19 47 17 5 3 3 4 11 14 26 36 16 8 4 22 4 6 7 15 11 8 11 8 3 3 3 9 9 11 13 8 0 11 10 9 11 12 0 23 7"],
+  278|   [1936, 531, 266, ['roosevelt2', "D", 523, 60.8], ['landon', "R", 8, 36.5], [], "Landon carried Maine and Vermont.",
+  279|     "- R D R D D D D D D D D D D D D D D D D D D D D D D D D D D D D D D D D D D D D D D - D D D D D - D D",
+  280|     "0 5 12 3 4 8 4 4 4 11 29 19 47 17 5 3 3 4 11 14 26 36 16 8 4 22 4 6 7 15 11 8 11 8 3 3 3 9 9 11 13 8 0 11 10 9 11 12 0 23 7"],
+  281|   [1940, 531, 266, ['roosevelt2', "D", 449, 54.7], ['willkie', "R", 82, 44.8], [], "A third term, with war in Europe.",
+  282|     "- R D R D D D D R D D R D D D D D R R R D D D D D D D R R D D D D D D D D R D D D D - D D D D D - D D",
+  283|     "0 5 12 3 4 8 4 4 4 11 29 19 47 17 5 3 3 4 11 14 26 36 16 8 4 22 4 6 7 15 11 8 11 8 3 3 3 9 9 11 13 8 0 11 10 9 11 12 0 23 7"],
+  284|   [1944, 531, 266, ['roosevelt2', "D", 432, 53.4], ['dewey', "R", 99, 45.9], [], "",
+  285|     "- R R R D D D D R D D D D D D D R R R R R D D D D D D R R D D D D D D D D R D D D D - D D D D D - D D",
+  286|     "0 5 12 3 4 8 4 4 4 11 28 19 47 16 6 3 3 4 10 13 25 35 16 8 4 25 4 6 6 15 11 8 11 8 3 4 4 8 9 12 14 8 0 10 10 9 11 12 0 23 8"],
+  287|   [1948, 531, 266, ['truman', "D", 303, 49.6], ['dewey', "R", 189, 45.1], [["Strom Thurmond", "Thurmond", "SR", 39, 2.4], ["Henry A. Wallace", "Wallace", "PG", 0, 2.4]], "Every major poll had Dewey winning.",
+  288|     "- R D R R D D D R D D R R D R D D R D R D R R R D D D D R D D D D R R D D R D D D SR - D SR SR SR D - D D",
+  289|     "0 5 12 3 4 8 4 4 4 11 28 19 47 16 6 3 3 4 10 13 25 35 16 8 4 25 4 6 6 15 11 8 11 8 3 4 4 8 9 12 14 8 0 10 10 9 11 12 0 23 8"],
+  290|   [1952, 531, 266, ['eisenhower', "R", 442, 55.2], ['stevenson', "D", 89, 44.3], [], "",
+  291|     "- R R R R R R R R R R R R R R R R R R R R R R R R R R R R R D D R R R R R R D R D D - R D D D D - R R",
+  292|     "0 5 12 3 4 9 4 4 4 11 27 20 45 16 6 3 3 4 10 13 25 32 16 8 4 32 4 6 6 13 10 8 12 9 3 4 4 8 8 11 14 8 0 8 10 8 11 12 0 24 10"],
+  293|   [1956, 531, 266, ['eisenhower', "R", 457, 57.4], ['stevenson', "D", 73, 42.0], [], "",
+  294|     "- R R R R R R R R R R R R R R R R R R R R R R R R R R R R D R R R R R R R R D R D D - R R D D D - R R",
+  295|     "0 5 12 3 4 9 4 4 4 11 27 20 45 16 6 3 3 4 10 13 25 32 16 8 4 32 4 6 6 13 10 8 12 9 3 4 4 8 8 11 14 8 0 8 10 8 11 12 0 24 10"],
+  296|   [1960, 537, 269, ['kennedy', "D", 303, 49.7], ['nixon', "R", 219, 49.5], [["Harry F. Byrd", "Byrd", "I", 15, null]], "Kennedy won the popular vote by about 112,000 out of 69 million.",
+  297|     "R R R R R R R R R D D D D D R D R R R R R D D D D R R R R D R D R D D R D R D R D D - R D I I D D D R",
+  298|     "3 5 12 3 4 9 4 4 4 11 27 20 45 16 6 3 3 4 10 13 25 32 16 8 4 32 4 6 6 13 10 8 12 9 3 4 4 8 8 11 14 8 0 8 10 8 11 12 3 24 10"],
+  299|   [1964, 538, 270, ['johnson', "D", 486, 61.1], ['goldwater', "R", 52, 38.5], [], "",
+  300|     "D D D D D D D D D D D D D D D D D D D D D D D D D D D D D D D D D D D R D D D D D R D D R R R R D D D",
+  301|     "3 4 12 3 4 9 4 4 4 10 26 21 43 14 6 3 3 4 9 13 26 29 17 8 4 40 4 6 5 12 9 7 12 10 3 5 4 7 6 11 13 8 3 8 10 7 10 12 4 25 14"],
+  302|   [1968, 538, 270, ['nixon', "R", 301, 43.4], ['humphrey', "D", 191, 42.7], [["George Wallace", "Wallace", "AI", 46, 13.5]], "Wallace carried five Southern states.",
+  303|     "R D R R R D R R R D R D D D R R R R R R R D R D D R R R R R R D R D R R R R AI R R R D R AI AI AI AI D D R",
+  304|     "3 4 12 3 4 9 4 4 4 10 26 21 43 14 6 3 3 4 9 13 26 29 17 8 4 40 4 6 5 12 9 7 12 10 3 5 4 7 6 11 13 8 3 8 10 7 10 12 4 25 14"],
+  305|   [1972, 538, 270, ['nixon', "R", 520, 60.7], ['mcgovern', "D", 17, 37.5], [], "The first election with 18-year-olds voting everywhere.",
+  306|     "R R R R R R R R R R R R R D R R R R R R R R R R R R R R R R R R R R R R R R R R R R D R R R R R R R R",
+  307|     "3 4 11 3 4 9 4 4 3 10 26 21 41 14 6 3 3 4 8 13 25 27 17 8 4 45 4 7 5 12 9 6 12 10 3 6 4 7 6 10 13 8 3 8 10 7 9 12 4 26 17"],
+  308|   [1976, 538, 270, ['carter', "D", 297, 50.1], ['ford', "R", 240, 48.0], [], "",
+  309|     "R R D R R R R R R D R R D D R R R R R R D D R R D R R R R D D D R D D R R R D D D D D R D D D D D D D",
+  310|     "3 4 11 3 4 9 4 4 3 10 26 21 41 14 6 3 3 4 8 13 25 27 17 8 4 45 4 7 5 12 9 6 12 10 3 6 4 7 6 10 13 8 3 8 10 7 9 12 4 26 17"],
+  311|   [1980, 538, 270, ['reagan', "R", 489, 50.7], ['carter', "D", 49, 41.0], [["John B. Anderson", "Anderson", "IA", 0, 6.6]], "",
+  312|     "R R R R R R R R R D R R R R R R R R R R R R R R D R R R R R R D R D R R R R R R R R D R R R R D D R R",
+  313|     "3 4 11 3 4 9 4 4 3 10 26 21 41 14 6 3 3 4 8 13 25 27 17 8 4 45 4 7 5 12 9 6 12 10 3 6 4 7 6 10 13 8 3 8 10 7 9 12 4 26 17"],
+  314|   [1984, 538, 270, ['reagan', "R", 525, 58.8], ['mondale', "D", 13, 40.6], [], "Mondale carried Minnesota and D.C.",
+  315|     "R R R R R R R R R D R R R R R R R R R R R R R R R R R R R R R R R R R R R R R R R R D R R R R R R R R",
+  316|     "3 4 11 3 4 10 4 4 3 10 24 20 36 13 7 4 3 3 8 12 23 25 16 8 4 47 5 8 5 11 9 6 12 10 3 7 5 7 6 11 13 8 3 8 10 7 9 12 4 29 21"],
+  317|   [1988, 538, 270, ['bush', "R", 426, 53.4], ['dukakis', "D", 111, 45.6], [], "",
+  318|     "R R D R R D R R R D R R D D D R R R D R R R R R D R R R R R R D R R R R R R R R R R D R R R R R D R R",
+  319|     "3 4 11 3 4 10 4 4 3 10 24 20 36 13 7 4 3 3 8 12 23 25 16 8 4 47 5 8 5 11 9 6 12 10 3 7 5 7 6 11 13 8 3 8 10 7 9 12 4 29 21"],
+  320|   [1992, 538, 270, ['clinton2', "D", 370, 43.0], ['bush', "R", 168, 37.4], [["Ross Perot", "Perot", "IP", 0, 18.9]], "",
+  321|     "R D D D D D R D R D D D D D D D R R D R D D D D D D R D R D D D R D D R D R D D R R D R D R R D D R R",
+  322|     "3 4 11 3 4 11 4 3 3 10 22 18 33 12 7 4 3 3 7 12 21 23 15 8 4 54 5 8 5 11 8 5 13 10 3 8 5 6 6 11 14 8 3 8 9 7 9 13 4 32 25"],
+  323|   [1996, 538, 270, ['clinton2', "D", 379, 49.2], ['dole', "R", 159, 40.7], [["Ross Perot", "Perot", "RF", 0, 8.4]], "",
+  324|     "R D D D D D R R R D D D D D D D R R D R D D D D D D R R R D D D R D D D D R D D R R D R D R R R D R D",
+  325|     "3 4 11 3 4 11 4 3 3 10 22 18 33 12 7 4 3 3 7 12 21 23 15 8 4 54 5 8 5 11 8 5 13 10 3 8 5 6 6 11 14 8 3 8 9 7 9 13 4 32 25"],
+  326|   [2000, 538, 270, ['bush2', "R", 271, 47.9], ['gore', "D", 266, 48.4], [], "Gore won the popular vote. Florida was decided by 537 votes.",
+  327|     "R D D D R D R R R D D D D D D R R R D R R D D D D D R R R R R R R D D R D R R R R R D R R R R R D R R",
+  328|     "3 4 11 3 4 11 4 3 3 10 22 18 33 12 7 4 3 3 7 12 21 23 15 8 4 54 5 8 5 11 8 5 13 10 3 8 5 6 6 11 14 8 3 8 9 7 9 13 4 32 25"],
+  329|   [2004, 538, 270, ['bush2', "R", 286, 50.7], ['kerry', "D", 251, 48.3], [], "",
+  330|     "R D D D D D R R R D D D D D D R R R R R R D D D D D R R R R R R R D D R R R R R R R D R R R R R D R R",
+  331|     "3 4 10 3 4 11 4 3 3 10 21 17 31 12 7 5 3 3 7 11 20 21 15 7 4 55 5 9 5 11 8 5 13 10 3 10 5 6 6 11 15 8 3 7 9 6 9 15 4 34 27"],
+  332|   [2008, 538, 270, ['obama', "D", 365, 52.9], ['mccain', "R", 173, 45.7], [], "",
+  333|     "R D D D D D R R R D D D D D D D R R D D D D D D D D R D R R R R D D D R D R R R D R D R R R R R D R D",
+  334|     "3 4 10 3 4 11 4 3 3 10 21 17 31 12 7 5 3 3 7 11 20 21 15 7 4 55 5 9 5 11 8 5 13 10 3 10 5 6 6 11 15 8 3 7 9 6 9 15 4 34 27"],
+  335|   [2012, 538, 270, ['obama', "D", 332, 51.1], ['romney', "R", 206, 47.2], [], "",
+  336|     "R D D D D D R R R D D D D D D D R R D R D D D D D D R D R R R R D D D R D R R R R R D R R R R R D R D",
+  337|     "3 4 10 3 4 12 4 3 3 10 20 16 29 11 7 6 3 3 6 11 18 20 14 7 4 55 6 9 5 10 8 5 13 10 3 11 5 6 6 11 15 9 3 7 8 6 9 16 4 38 29"],
+  338|   [2016, 538, 270, ['trump', "R", 304, 46.1], ['clinton3', "D", 227, 48.2], [], "Clinton won the popular vote. Seven electors broke ranks.",
+  339|     "R D R D D D R R R D D R D D D D R R R R R R D D D D R D R R R R D D D R D R R R R R D R R R R R D R R",
+  340|     "3 4 10 3 4 12 4 3 3 10 20 16 29 11 7 6 3 3 6 11 18 20 14 7 4 55 6 9 5 10 8 5 13 10 3 11 5 6 6 11 15 9 3 7 8 6 9 16 4 38 29"],
+  341|   [2020, 538, 270, ['biden', "D", 306, 51.3], ['trump', "R", 232, 46.8], [], "",
+  342|     "R D D D D D R R R D D D D D D D R R R R R D D D D D R D R R R R D D D D D R R R R R D R R R R D D R R",
+  343|     "3 4 10 3 4 12 4 3 3 10 20 16 29 11 7 6 3 3 6 11 18 20 14 7 4 55 6 9 5 10 8 5 13 10 3 11 5 6 6 11 15 9 3 7 8 6 9 16 4 38 29"],
+  344|   [2024, 538, 270, ['trump', "R", 312, 49.8], ['harris', "D", 226, 48.3], [], "",
+  345|     "R D R D D D R R R D D R D D D R R R R R R R D D D D R D R R R R D D D R D R R R R R D R R R R R D R R",
+  346|     "3 4 10 3 4 12 4 4 3 10 19 15 28 11 8 6 3 3 6 11 17 19 14 7 4 54 6 10 5 10 8 4 13 10 3 11 5 6 6 11 16 9 3 7 8 6 9 16 4 40 30"],
+  347| ];
+  348| 
+  349| /** One candidate: A the winner, B the runner-up, C, D, … everyone else. */
+  350| export interface Candidate {
+  351|   readonly key: string;
+  352|   /** PEOPLE's id, for the winner and runner-up; null for the others. */
+  353|   readonly id: PersonId | null;
+  354|   readonly name: string;
+  355|   readonly short: string;
+  356|   readonly party: string;
+  357|   readonly partyLabel: string;
+  358|   readonly family: Family | null;
+  359|   readonly ev: number;
+  360|   readonly popular: number | null;
+  361|   readonly portrait: string | null;
+  362|   /** Their Wikipedia article. */
+  363|   readonly wiki: string;
+  364| }
+  365| 
+  366| /** A state that cast electoral votes, and who carried it ('O': a split delegation). */
+  367| export interface ElectionState {
+  368|   readonly code: string;
+  369|   readonly ev: number;
+  370|   readonly party: string;
+  371|   readonly won: string;
+  372| }
+  373| 
+  374| export interface Election {
+  375|   readonly year: number;
+  376|   readonly total: number;
+  377|   readonly majority: number;
+  378|   readonly note: string;
+  379|   readonly candidates: readonly [Candidate, ...Candidate[]];
+  380|   readonly winner: 'A';
+  381|   readonly unopposed: boolean;
+  382|   readonly states: readonly ElectionState[];
+  383| }
+  384| 
+  385| // The geo.ts tile order the per-state strings above follow.
+  386| const ORDER = STATES.map((s) => s.code);
+  387| 
+  388| const party = (code: string): Pick<Candidate, 'party' | 'partyLabel' | 'family'> => {
+  389|   const [label, family] = PARTY_BY_CODE.get(code) ?? [code, null];
+  390|   return { party: code, partyLabel: label, family };
+  391| };
+  392| 
+  393| const person = ([id, code, ev, popular]: Ran, key: string): Candidate => {
+  394|   const [name, short] = PEOPLE[id];
+  395|   return { key, id, name, short, ...party(code), ev, popular, portrait: assetUrl(`portraits/${id}.jpg`), wiki: wikiUrl(id, name) };
+  396| };
+  397| 
+  398| const cache = new Map<number, Election>();
+  399| 
+  400| /**
+  401|  * One election as it happened, or null for a year with none.
+  402|  * candidates: the winner (key A), the runner-up (B, absent when unopposed),
+  403|  * then anyone else who won electoral votes or a real share of the vote
+  404|  * (C, D, …). states: each state that cast electoral votes, with the
+  405|  * candidate key that carried it ('O' for a split delegation).
+  406|  */
+  407| export function electionOf(year: number): Election | null {
+  408|   const hit = cache.get(year);
+  409|   if (hit) return hit;
+  410|   const row = RESULTS.find((r) => r[0] === year);
+  411|   if (!row) return null;
+  412|   const [y, total, majority, a, b, others, note, codes, evs] = row;
+  413|   const candidates: [Candidate, ...Candidate[]] = [person(a, 'A')];
+  414|   if (b) candidates.push(person(b, 'B'));
+  415|   others.forEach(([name, short, code, ev, popular], i) => {
+  416|     candidates.push({ key: String.fromCharCode(67 + i), id: null, name, short, ...party(code), ev, popular, portrait: null, wiki: wikiUrl(null, name) });
+  417|   });
+  418|   const byParty = new Map<string, string>();
+  419|   for (const c of candidates) if (!byParty.has(c.party)) byParty.set(c.party, c.key);
+  420|   const code = codes.split(' ');
+  421|   const ev = evs.split(' ').map(Number);
+  422|   const states = ORDER.map((s, i) => {
+  423|     const p = code[i] ?? '-';
+  424|     return { code: s, ev: ev[i] ?? 0, party: p, won: byParty.get(p) ?? 'O' };
+  425|   }).filter((s) => s.party !== '-');
+  426|   const e: Election = { year: y, total, majority, note, candidates, winner: 'A', unopposed: !b, states };
+  427|   cache.set(year, e);
+  428|   return e;
+  429| }
+  430| 
+  431| /** The years with a rich sample story: where a random start lands. */
+  432| export const FEATURED: readonly number[] = [1800, 1860, 1876, 1896, 1912, 1948, 1960, 1968, 2000, 2016];
+```
+
+## `src/lib/simulacra/narrator.test.ts`
+
+```ts
+    1| import { readFileSync } from 'node:fs';
+    2| import { join } from 'node:path';
+    3| import { fileURLToPath } from 'node:url';
+    4| import { describe, expect, test } from 'vitest';
+    5| import { LIMITED_MESSAGE } from './api';
+    6| import { type SayInput, say, sourcesOf, traceOf } from './narrator';
+    7| import { type Bundle, BundleSchema, type RunResult } from './schemas';
+    8| import { electionFor, type ShownRun } from './state';
+    9| 
+   10| const ROOT = fileURLToPath(new URL('../../..', import.meta.url));
+   11| const bundle = BundleSchema.parse(JSON.parse(readFileSync(join(ROOT, 'tests', 'fixtures', 'bundle.example.json'), 'utf8')));
+   12| 
+   13| /** A run as the server answers it (serve/simulacra.ts compute): the bundle's run plus the briefs behind it. */
+   14| function served(b: Bundle, keys: readonly string[]): RunResult {
+   15|   const base = b.runs[[...keys].sort().join('+')];
+   16|   if (!base) throw new Error(`no run for ${keys.join('+')}`);
+   17|   const told = Object.fromEntries(keys.flatMap((k) => (b.told?.[k] ? [[k, b.told[k]]] : [])));
+   18|   return { ...base, told, ...(b.pre ? { pre: b.pre } : {}) };
+   19| }
+   20| 
+   21| describe('traceOf', () => {
+   22|   test('two chosen what-ifs: applied, what changed, the brief, what voters were told, the interviews, the research, the count', () => {
+   23|     const res = served(bundle, ['league', 'no-19th']);
+   24|     expect(traceOf(res, '', ['league', 'no-19th'], 1920)).toEqual([
+   25|       'Applied: The Senate Ratifies the League, The 19th Amendment Fails.',
+   26|       'What changed: The Senate ratifies the peace treaty with its reservations in March 1920, and the League is no longer a campaign issue.',
+   27|       'What changed: Tennessee votes the suffrage amendment down, so women can vote for president only where their own state already let them.',
+   28|       'Briefed: Each voter got a life, a home state and the ballot, dated November 1, 1920. Each read 3 real newspaper items from that year. Candidates appeared as neutral letters, not names.',
+   29|       'Pre-interviewed: 12 synthetic voters, in 1920 as it was. This set the baseline.',
+   30|       'Told the voters: The Senate Ratifies the League. “In March 1920 the Senate ratified the peace treaty with its reservations, and the United States took its seat in the League of Nations this spring. The treaty is settled, and neither party proposes to reopen it.” Taken off the platforms: League of Nations.',
+   31|       'Told the voters: The 19th Amendment Fails. “In August the Tennessee legislature voted the woman suffrage amendment down, and it has not been ratified.”',
+   32|       'Asked again: 4 people in 2 groups, now with the change. Each heard one of 3 wordings of the question.',
+   33|       'Measured: Each person’s answer with the change, minus their answer without it.',
+   34|       "What historians found (9 findings, strong evidence): No source measures the League's effect on 1920 voting. Sources give qualitative accounts: the League and Wilson hurt Cox, Irish and German Americans left the Democrats (partly over wartime grievances), and Harding won 60.3% to 34.1% on low turnout. No group-level numbers.",
+   35|       'Against history: On the Republican two-party share, the sources point the same way as the interviews (-0.1 points), without numbers.',
+   36|       'The numbers: the 1920 census voting-age tables and certified returns; every draw reproduces 1920 exactly before the change.',
+   37|       'How sure: I reran it 100 times with different population and parameter draws.',
+   38|       "Low confidence: The interviews' answer changes sign with the question's wording, though the record points the same way.",
+   39|       'Counted: 4 states.',
+   40|     ]);
+   41|   });
+   42| 
+   43|   test('typed words: how they were read, no Applied line, and one what-if told without a lead', () => {
+   44|     const lines = traceOf(served(bundle, ['league']), 'what if the league passed', [], 1920);
+   45|     expect(lines[0]).toBe('Read: “what if the league passed” as The Senate Ratifies the League.');
+   46|     expect(lines.some((l) => l.startsWith('Applied:'))).toBe(false);
+   47|     expect(lines.find((l) => l.startsWith('Told the voters:'))).toMatch(/^Told the voters: “In March 1920/);
+   48|   });
+   49| 
+   50|   test('a staged what-if: the real items it takes out and the news from its world', () => {
+   51|     const told = (removed: number) => ({
+   52|       league: { facts: ['The treaty is settled.'], removed, items: [{ date: '1920-10-01', text: 'Geneva cheers.' }, { date: '1920-10-02', text: 'Delegates sail.' }] },
+   53|     });
+   54|     const line = (removed: number) =>
+   55|       traceOf({ ...served(bundle, ['league']), told: told(removed) }, '', ['league'], 1920).find((l) => l.startsWith('Told the voters:'));
+   56|     expect(line(2)).toBe(
+   57|       'Told the voters: “The treaty is settled.” Took out 2 newspaper items the change makes false. Their newspapers also carried: “Geneva cheers.” “Delegates sail.”',
+   58|     );
+   59|     expect(line(1)).toContain(' Took out 1 newspaper item the change makes false.');
+   60|     expect(line(0)).not.toContain('Took out');
+   61|   });
+   62| 
+   63|   test('a reinterpreted change leads its explanation, with what changed', () => {
+   64|     const base = served(bundle, ['league']);
+   65|     const reread = 'Not quite what you asked: the League passing reads as the Senate ratifying the treaty.';
+   66|     const lines = traceOf({ ...base, howIGotThis: [...(base.howIGotThis ?? []), reread] }, 'what if the league passed', [], 1920);
+   67|     const at = lines.indexOf(reread);
+   68|     expect(at).toBeGreaterThan(0);
+   69|     expect(at).toBeLessThan(lines.findIndex((l) => l.startsWith('Briefed:')));
+   70|     expect(lines.filter((l) => l === reread)).toHaveLength(1);
+   71|   });
+   72| 
+   73|   test('no interviews: no brief and no pre-interview', () => {
+   74|     const res = { ...served(bundle, ['no-19th']), cohortEffects: [] };
+   75|     const lines = traceOf(res, '', ['no-19th'], 1920);
+   76|     expect(lines.some((l) => l.startsWith('Briefed:') || l.startsWith('Pre-interviewed:') || l.startsWith('Asked again:'))).toBe(false);
+   77|   });
+   78| 
+   79|   test('sources: the research behind the applied what-ifs, and the data not already cited', () => {
+   80|     const s = sourcesOf(served(bundle, ['league']));
+   81|     expect(s?.research.length).toBeGreaterThan(0);
+   82|     expect(s?.research.every((r) => typeof r.text === 'string' && r.text.length > 0)).toBe(true);
+   83|   });
+   84| });
+   85| 
+   86| const ELECTION = electionFor(1920);
+   87| const NAMES = { A: 'Harding', B: 'Cox', O: 'Others' };
+   88| const BASE: SayInput = {
+   89|   server: 'online',
+   90|   year: 1920,
+   91|   election: ELECTION,
+   92|   run: null,
+   93|   running: false,
+   94|   runError: null,
+   95|   simFailed: null,
+   96|   sim: { slices: bundle.election.slices, whatIfs: bundle.election.whatIfs },
+   97|   toggled: null,
+   98|   whatIfs: bundle.election.whatIfs,
+   99|   slice: null,
+  100|   showing: 'history',
+  101|   result: null,
+  102|   names: NAMES,
+  103|   person: null,
+  104|   finding: false,
+  105|   draft: '',
+  106|   shown: Infinity,
+  107|   sample: false,
+  108| };
+  109| 
+  110| describe('say', () => {
+  111|   test('the server first: connecting, no service, too many requests', () => {
+  112|     expect(say({ ...BASE, server: 'connecting' })).toEqual({ text: 'Getting 1920’s voters ready.', busy: true });
+  113|     const none = say({ ...BASE, server: 'unsupported' });
+  114|     expect(none.text).toBe('This server has no simulation service yet, so I can’t rerun elections here.');
+  115|     expect(none.actions?.map((a) => a.key)).toEqual(['sample', 'retry']);
+  116|     const limited = say({ ...BASE, server: 'limited' });
+  117|     expect(limited.text).toBe(LIMITED_MESSAGE);
+  118|     expect(limited.actions?.map((a) => a.key)).toEqual(['retry']);
+  119|   });
+  120| 
+  121|   test('the greeting, a tapped suggestion, then a rerun coming out step by step', () => {
+  122|     expect(say(BASE).text).toBe('Change one thing about 1920 and I’ll rerun it.');
+  123|     expect(say(BASE).detail).toBe('Pick a counterfactual or type your own.\nTap a group to meet someone in it.');
+  124|     expect(say({ ...BASE, toggled: 'league' }).detail).toBe('What people care about, low confidence. Press Rerun to see what happens.');
+  125|     const res = served(bundle, ['league']);
+  126|     const trace = traceOf(res, '', ['league'], 1920);
+  127|     const shown: ShownRun = { ...res, runId: 'r1', keys: ['league'], text: '', trace, ask: '', ran: ['league'] };
+  128|     const working = say({ ...BASE, result: shown, showing: 'whatif', shown: 1 });
+  129|     expect(working.busy).toBe(true);
+  130|     expect(working.steps?.map((s) => s.state)).toEqual(['done', 'doing']);
+  131|     const verdict = say({ ...BASE, result: shown, showing: 'whatif' });
+  132|     expect(verdict.text).toBe(res.summary.replaceAll('the voters I interviewed', 'the voters'));
+  133|     expect(verdict.text).toContain('the voters lean');
+  134|     expect(verdict.steps).toHaveLength(trace.length);
+  135|     expect(say({ ...BASE, result: shown }).text).toBe('This is 1920 as it happened. Switch to Rerun to see yours.');
+  136|   });
+  137| });
+```
+
+## `src/lib/simulacra/narrator.ts`
+
+```ts
+    1| // What the robot says (the Narrator's pure parts): a finished rerun's steps
+    2| // (traceOf), what it drew on (sourcesOf), and the one line for the page's
+    3| // state right now (say). say() checks, first match wins: the simulation
+    4| // service, an unopposed year, a rerun working or failed, the year's voters
+    5| // failed or loading, a tapped suggestion, a picked group, typed words, a rerun's steps
+    6| // coming out, then its verdict, history, or the greeting.
+    7| import { LIMITED_MESSAGE } from './api';
+    8| import type { Election } from './history';
+    9| import type { ActiveRun } from './runs';
+   10| import type { Choice, Kind, RunResult, Slice, Step, Voter, WhatIf } from './schemas';
+   11| import type { Server, ShownRun, Sim } from './state';
+   12| import type { Names } from './types';
+   13| import type { BubbleSources, Message } from './whatif';
+   14| 
+   15| /** A finished rerun's steps come out one at a time, this far apart, ms. */
+   16| export const STEP_MS = 420;
+   17| 
+   18| export const CONFIDENCE: Readonly<Record<'high' | 'medium' | 'low', string>> = {
+   19|   high: 'High confidence: who could vote is arithmetic on census counts.',
+   20|   medium: 'Medium confidence: where people lived is on record; how they’d have voted there is inferred.',
+   21|   low: 'Low confidence: what people cared about is the hardest thing to change and know.',
+   22| };
+   23| 
+   24| export const KIND_NOTE: Readonly<Record<Kind, string>> = {
+   25|   franchise: 'Who can vote, high confidence.',
+   26|   population: 'Who lives where, medium confidence.',
+   27|   issue: 'What people care about, low confidence.',
+   28|   candidate: 'Who is on the ballot, low confidence.',
+   29| };
+   30| 
+   31| const pct = (r: number) => `${Math.round(r * 100)}%`;
+   32| 
+   33| /**
+   34|  * A rerun's steps, from what the server did: how your words were read, what
+   35|  * changed, who was asked again, what it counted, and how sure it is. Each
+   36|  * line is "Label: text", like the server's, so the bubble sets it as a row.
+   37|  */
+   38| export function traceOf(res: RunResult, text: string, keys: readonly string[], y: number): string[] {
+   39|   const out: string[] = [];
+   40|   const typedRead = res.applied.filter((a) => !keys.includes(a.key));
+   41|   if (text) {
+   42|     out.push(typedRead.length ? `Read: “${text}” as ${typedRead.map((a) => a.label).join(', ')}.` : `Read: “${text}”.`);
+   43|   }
+   44|   if (res.unknown) out.push(`Left out: “${res.unknown}”. I couldn’t model it.`);
+   45|   const chosenLabels = res.applied.filter((a) => keys.includes(a.key)).map((a) => a.label);
+   46|   if (chosenLabels.length) out.push(`Applied: ${chosenLabels.join(', ')}.`);
+   47|   // The server's lines: what changed (and whose behaviour new voters
+   48|   // borrow) first; the research, the numbers and how sure after the
+   49|   // interviews.
+   50|   const how = res.howIGotThis ?? [];
+   51|   // A typed change the server reinterpreted ("Not quite what you asked") leads.
+   52|   const isChange = (l: string) => /^(Not quite what you asked|What changed|New voters borrow)/.test(l);
+   53|   out.push(...how.filter(isChange));
+   54|   const applied = res.applied.map((a) => a.key);
+   55|   const labelOf = (k: string) => res.applied.find((a) => a.key === k)?.label || k;
+   56|   const asked = (res.cohortEffects ?? []).filter((c) => applied.includes(c.whatIf));
+   57|   const interviewed = asked.length > 0 || !!res.interview?.byWhatIf.length;
+   58|   const pre = res.pre;
+   59|   if (pre?.voters && interviewed) {
+   60|     // Each voter's brief, then the interview before any change: the
+   61|     // baseline, and the leakage tests when the run had them.
+   62|     const n = `${pre.voters} synthetic voters${pre.interviews > pre.voters ? ` (${pre.interviews} interviews)` : ''}`;
+   63|     const leak: string[] = [];
+   64|     if (pre.recall) leak.push(`In ${pre.recall.n} recall probes the model named the real winner ${pct(pre.recall.winnerRate)} of the time.`);
+   65|     if (pre.swap) leak.push(`With party labels swapped, answers followed the platforms ${pct(pre.swap.platformRate)} of the time.`);
+   66|     const asOf = pre.asOf
+   67|       ? new Date(`${pre.asOf}T12:00:00`).toLocaleDateString('en-US', { day: 'numeric', month: 'long', year: 'numeric' })
+   68|       : '';
+   69|     const [lo, hi] = pre.items ?? [];
+   70|     let items = '';
+   71|     if (hi) items = lo === hi ? `${lo}` : `${lo}–${hi}`;
+   72|     out.push(
+   73|       `Briefed: Each voter got a life, a home state and the ballot${asOf ? `, dated ${asOf}` : ''}. ` +
+   74|         (items ? `Each read ${items} real newspaper items from that year. ` : `No period newspapers were available for ${y}. `) +
+   75|         'Candidates appeared as neutral letters, not names.',
+   76|     );
+   77|     out.push(
+   78|       `Pre-interviewed: ${n}, in ${y} as it was. This set the baseline${leak.length ? ' and tested for leakage' : ''}.${leak.length ? ` ${leak.join(' ')}` : ''}`,
+   79|     );
+   80|   }
+   81|   // The exact words that put each change into the voters' world: settled
+   82|   // facts, or news printed on the nominee's own ballot line.
+   83|   const told = applied.filter((k) => res.told?.[k]);
+   84|   for (const k of told) {
+   85|     const t = res.told?.[k];
+   86|     if (!t) continue;
+   87|     const lead = told.length > 1 ? `${labelOf(k)}. ` : '';
+   88|     const said = [...(t.facts ?? []), ...(t.news ?? [])].map((s) => `“${s}”`).join(' ');
+   89|     const where = t.news?.length && !t.facts?.length ? ' Printed as recent news on the nominee’s ballot line.' : '';
+   90|     const planks = [
+   91|       t.added?.length ? ` Added to the platforms: ${t.added.map((p) => p.replace(/\.$/, '')).join('; ')}.` : '',
+   92|       t.dropped?.length ? ` Taken off the platforms: ${t.dropped.join(', ')}.` : '',
+   93|       // Staged: real items the change makes false come out; news from the changed world goes in.
+   94|       t.removed ? ` Took out ${t.removed} newspaper item${t.removed === 1 ? '' : 's'} the change makes false.` : '',
+   95|       t.items?.length ? ` Their newspapers also carried: ${t.items.map((i) => `“${i.text}”`).join(' ')}` : '',
+   96|     ].join('');
+   97|     out.push(`Told the voters: ${lead}${said}${where}${planks}`);
+   98|   }
+   99|   if (asked.length) {
+  100|     const people = Math.max(
+  101|       ...applied.map((k) => asked.filter((c) => c.whatIf === k).reduce((sum, c) => sum + (c.n || 0), 0)),
+  102|     );
+  103|     const wordings = (pre?.wordings ?? 0) > 1 ? ` Each heard one of ${pre?.wordings} wordings of the question.` : '';
+  104|     out.push(`Asked again: ${people} people in ${new Set(asked.map((c) => c.cohort)).size} groups, now with the change.${wordings}`);
+  105|     out.push('Measured: Each person’s answer with the change, minus their answer without it.');
+  106|   }
+  107|   // After the research, how the interviews compare with the closest real cases.
+  108|   const rest = how.filter((l) => !isChange(l));
+  109|   const lastFound = rest.map((l) => l.startsWith('What historians found')).lastIndexOf(true);
+  110|   const against = (res.evidence ?? [])
+  111|     .filter((e) => applied.includes(e.whatIf) && e.agreementDetail)
+  112|     .map((e) => `Against history: ${e.agreementDetail}`);
+  113|   rest.splice(lastFound + 1, 0, ...against);
+  114|   out.push(...rest);
+  115|   if (res.states.length) out.push(`Counted: ${res.states.length} states.`);
+  116|   return out;
+  117| }
+  118| 
+  119| /**
+  120|  * What a rerun drew on, for the bubble's Sources: the dated newspapers in
+  121|  * the voters' briefs, the research behind each applied what-if, and the data.
+  122|  */
+  123| export function sourcesOf(res: RunResult): BubbleSources | null {
+  124|   const applied = res.applied.map((a) => a.key);
+  125|   const ev = (res.evidence ?? []).filter((e) => applied.includes(e.whatIf));
+  126|   const research = ev.flatMap((e) => e.findings.map((f) => ({ when: f.when || '', text: f.claim })));
+  127|   const cited = new Set(ev.flatMap((e) => e.findings.flatMap((f) => f.sources.map((s) => s.title))));
+  128|   const reading = res.reading ?? [];
+  129|   const data = (res.sources ?? [])
+  130|     .map((s) => s.title)
+  131|     .filter((t) => !cited.has(t) && !(reading.length && /Chronicling America/.test(t)));
+  132|   return reading.length || research.length || data.length ? { reading, research, data } : null;
+  133| }
+  134| 
+  135| const lower = (label: string) =>
+  136|   /^(Black|White|Latino|Southern|Northern|Irish|Catholic|Plains|New|Progressive|Loyal|Socialist|Northerners|\d)/.test(label)
+  137|     ? label
+  138|     : label.charAt(0).toLowerCase() + label.slice(1);
+  139| 
+  140| /** One line about a group: who couldn't vote, stayed home, or how those who voted chose. */
+  141| export function aboutGroup(s: Slice, y: number, nm: Names): string {
+  142|   const voted = s.A + s.B + s.O;
+  143|   if (s.barred >= 0.95) return `${s.label} couldn’t vote in ${y}.`;
+  144|   if (s.barred >= 0.5) return `${Math.round(s.barred * 10)} in 10 ${lower(s.label)} couldn’t vote in ${y}.`;
+  145|   if (voted < 0.02) return `Most ${lower(s.label)} stayed home in ${y}.`;
+  146|   let k: 'A' | 'B' | 'O' = 'O';
+  147|   if (s.A >= s.B && s.A >= s.O) k = 'A';
+  148|   else if (s.B >= s.O) k = 'B';
+  149|   return `${Math.round((s[k] / voted) * 100)}% of ${lower(s.label)} who voted chose ${nm[k] ?? ''}.`;
+  150| }
+  151| 
+  152| const did = (k: Choice, nm: Names): string => {
+  153|   switch (k) {
+  154|     case 'A':
+  155|       return `voted for ${nm.A}`;
+  156|     case 'B':
+  157|       return `voted for ${nm.B ?? ''}`;
+  158|     case 'O':
+  159|       return `voted for ${nm.O === 'Others' ? 'a third party' : nm.O}`;
+  160|     case 'home':
+  161|       return 'stayed home';
+  162|     case 'barred':
+  163|       return 'couldn’t vote';
+  164|     default:
+  165|       return k satisfies never;
+  166|   }
+  167| };
+  168| 
+  169| /** Everything say() reads. */
+  170| export interface SayInput {
+  171|   readonly server: Server;
+  172|   readonly year: number;
+  173|   readonly election: Election;
+  174|   readonly run: ActiveRun | null;
+  175|   /** The run is this year's. */
+  176|   readonly running: boolean;
+  177|   readonly runError: string | null;
+  178|   /** Why the year's groups didn't load. */
+  179|   readonly simFailed: string | null;
+  180|   readonly sim: Sim | null;
+  181|   /** A just-tapped suggestion. */
+  182|   readonly toggled: string | null;
+  183|   readonly whatIfs: readonly WhatIf[];
+  184|   /** The picked group. */
+  185|   readonly slice: string | null;
+  186|   readonly showing: 'history' | 'whatif';
+  187|   readonly result: ShownRun | null;
+  188|   readonly names: Names;
+  189|   /** Someone from the picked group, once fetched. */
+  190|   readonly person: Voter | null;
+  191|   /** That person is being fetched. */
+  192|   readonly finding: boolean;
+  193|   /** The typed words. */
+  194|   readonly draft: string;
+  195|   /** How many of the rerun's steps are out (Infinity: all of them). */
+  196|   readonly shown: number;
+  197|   /** The sample stand-in is on. */
+  198|   readonly sample: boolean;
+  199| }
+  200| 
+  201| function running(y: number, r: ActiveRun): Message {
+  202|   const steps: Step[] = [];
+  203|   if (r.text) steps.push({ text: `Reading “${r.text}”.`, state: 'done' });
+  204|   if (r.labels.length) steps.push({ text: `Applying ${r.labels.join(', ')}.`, state: 'done' });
+  205|   if (r.steps?.length) {
+  206|     return {
+  207|       text: 'That’s new to me, so I’m modelling it. This will take a minute.',
+  208|       steps: [...steps.slice(r.text ? 1 : 0), ...r.steps],
+  209|       busy: true,
+  210|     };
+  211|   }
+  212|   steps.push({ text: r.total ? `Rerunning ${y}: ${r.done} of ${r.total} states counted.` : `Rerunning ${y}.`, state: 'doing' });
+  213|   return { text: `Rerunning ${y}…`, steps, busy: true };
+  214| }
+  215| 
+  216| function verdict(res: ShownRun, sample: boolean): Message {
+  217|   if (!res.applied.length && res.unknown) {
+  218|     return {
+  219|       text: `I couldn’t turn “${res.unknown}” into a change I can model${sample ? ' with sample data' : ''}.${res.unknownWhy ? ` ${res.unknownWhy}` : ''} Try one of the what-ifs below.`,
+  220|     };
+  221|   }
+  222|   // Typed words the rerun understood: say how they were read.
+  223|   const read = res.text ? res.applied.find((a) => !res.keys.includes(a.key)) : undefined;
+  224|   // "the voters I interviewed" is "the voters" (publish.py says that now;
+  225|   // bundles published before then still carry the old words).
+  226|   const summary = res.summary.replaceAll('the voters I interviewed', 'the voters');
+  227|   return {
+  228|     steps: res.trace.map((t) => ({ text: t, state: 'done' })),
+  229|     interview: res.interview ?? null, // shown when the bubble is opened (More)
+  230|     sources: sourcesOf(res), // …and what it drew on
+  231|     // The steps already say how the words were read.
+  232|     text: `${read && !res.trace.length ? `I read “${res.text}” as ${read.label}. ` : ''}${summary}${res.unknown ? ` I left out “${res.unknown}”; I couldn’t model it.` : ''}`,
+  233|     // The summary already names the tier when the server flags it (a built or very-low what-if).
+  234|     detail:
+  235|       res.confidence && !(res.confidenceLabel && res.summary.includes(res.confidenceLabel)) ? CONFIDENCE[res.confidence] : '',
+  236|   };
+  237| }
+  238| 
+  239| /** What the robot says about the simulation service, or null once it's answering. */
+  240| function aboutServer(server: Server, y: number): Message | null {
+  241|   const noService = (text: string): Message => ({
+  242|     text,
+  243|     detail: 'The elections themselves are all here. Sample data shows how a rerun works.',
+  244|     actions: [
+  245|       { key: 'sample', label: 'Use Sample Data', primary: true },
+  246|       { key: 'retry', label: 'Try Again' },
+  247|     ],
+  248|   });
+  249|   switch (server) {
+  250|     case 'connecting':
+  251|       return { text: `Getting ${y}’s voters ready.`, busy: true };
+  252|     case 'unsupported':
+  253|       return noService('This server has no simulation service yet, so I can’t rerun elections here.');
+  254|     case 'offline':
+  255|       return noService('I can’t reach the simulation server, so I can’t rerun elections yet.');
+  256|     case 'limited':
+  257|       return { text: LIMITED_MESSAGE, actions: [{ key: 'retry', label: 'Try Again' }] };
+  258|     case 'online':
+  259|       return null;
+  260|     default:
+  261|       return server satisfies never;
+  262|   }
+  263| }
+  264| 
+  265| /** What the robot says now. */
+  266| export function say(i: SayInput): Message {
+  267|   const { year: y, sim: s, result: res, showing: show, names: nm } = i;
+  268|   const server = aboutServer(i.server, y);
+  269|   if (server) return server;
+  270|   if (i.election.unopposed) {
+  271|     return {
+  272|       text: `${i.election.candidates[0].name} ran unopposed in ${y}, so there’s nothing to rerun.`,
+  273|       actions: [{ key: 'shuffle', label: 'Another Election', primary: true }],
+  274|     };
+  275|   }
+  276|   if (i.running && i.run) return running(y, i.run);
+  277|   if (i.runError) return { text: i.runError, actions: [{ key: 'rerun', label: 'Try Again', primary: true }] };
+  278|   if (i.simFailed && !s) return { text: i.simFailed, actions: [{ key: 'retry', label: 'Try Again' }] };
+  279|   if (!s) return { text: `Getting ${y}’s voters ready.`, busy: true };
+  280|   const w = i.toggled ? i.whatIfs.find((x) => x.key === i.toggled) : undefined;
+  281|   if (w) return { text: w.detail, detail: `${KIND_NOTE[w.kind]} Press Rerun to see what happens.` };
+  282|   // A group picked: someone from it, in their own words, and what could
+  283|   // change their fate.
+  284|   const slice = i.slice;
+  285|   if (slice) {
+  286|     const g = (show === 'whatif' && res ? res.slices : s.slices).find((x) => x.key === slice);
+  287|     const reach = i.whatIfs.filter((x) => x.slices.includes(slice)).map((x) => x.label);
+  288|     const could = reach.length ? `What could change that: ${reach.join(', ')}.` : '';
+  289|     const person = i.person;
+  290|     if (person) {
+  291|       const now = show === 'whatif' && person.now && person.now !== person.history ? ` In your ${y}, ${did(person.now, nm)}.` : '';
+  292|       const fate = `In ${y}, ${did(person.history, nm)}.${now}`;
+  293|       return {
+  294|         quote: person.quote,
+  295|         by: [person.name, person.line].filter(Boolean).join(', '),
+  296|         text: `${fate}${could && show !== 'whatif' ? ` ${could}` : ''}`,
+  297|       };
+  298|     }
+  299|     if (g) return { text: aboutGroup(g, y, nm), detail: i.finding ? 'Finding someone from this group…' : could };
+  300|   }
+  301|   // Typing: say what will happen to the words.
+  302|   if (i.draft.trim() && !slice) {
+  303|     return {
+  304|       text: 'I’ll read that and turn it into a change I can model.',
+  305|       steps: [{ text: `Reading “${i.draft.trim()}”…`, state: 'doing' }],
+  306|       detail: 'Press Rerun to run it.',
+  307|     };
+  308|   }
+  309|   if (res && show === 'whatif' && res.trace.length && i.shown < res.trace.length) {
+  310|     return {
+  311|       text: 'Working it through…',
+  312|       steps: res.trace.slice(0, i.shown + 1).map((t, n) => ({ text: t, state: n < i.shown ? 'done' : 'doing' })),
+  313|       busy: true,
+  314|     };
+  315|   }
+  316|   if (res && show === 'whatif') return verdict(res, i.sample);
+  317|   if (res) return { text: `This is ${y} as it happened. Switch to Rerun to see yours.` };
+  318|   return {
+  319|     opening: true,
+  320|     text: `Change one thing about ${y} and I’ll rerun it.`,
+  321|     // The newline breaks on a narrow window only (WhatIf .aside); a wide one reads it as a space.
+  322|     detail: 'Pick a counterfactual or type your own.\nTap a group to meet someone in it.',
+  323|   };
+  324| }
+```
+
+## `src/lib/simulacra/palette.test.ts`
+
+```ts
+    1| import { describe, expect, test } from 'vitest';
+    2| import { electionOf } from './history';
+    3| import { candidateHues, onPaint, paint } from './palette';
+    4| 
+    5| describe('candidateHues', () => {
+    6|   test('parties keep their colour; the 4th candidate and beyond fold into Other', () => {
+    7|     // 1860: Lincoln (R), Breckinridge (Southern Democrat), Bell, Douglas.
+    8|     const e = electionOf(1860);
+    9|     expect(e).not.toBeNull();
+   10|     if (!e) return;
+   11|     const hues = candidateHues(
+   12|       e.candidates.map((c) => ({ key: c.key, party: c.family })),
+   13|       Object.fromEntries(e.candidates.map((c) => [c.key, c.ev])),
+   14|     );
+   15|     expect(hues.get('A')).toBe('red');
+   16|     expect(hues.get('B')).toBe('blue');
+   17|     // Bell (39 EV) takes the era's free hue; Douglas (12 EV), fourth, is Other.
+   18|     expect(hues.get('C')).toBe('green');
+   19|     expect(hues.get('D')).toBe('other');
+   20|   });
+   21| 
+   22|   test('a party already holding its hue doesn’t take it twice', () => {
+   23|     const hues = candidateHues([
+   24|       { key: 'A', party: 'democratic' },
+   25|       { key: 'B', party: 'democratic' },
+   26|       { key: 'C', party: 'whig' },
+   27|     ]);
+   28|     expect(hues.get('A')).toBe('blue');
+   29|     expect(hues.get('C')).toBe('orange');
+   30|     expect(hues.get('B')).toBe('aqua');
+   31|   });
+   32| 
+   33|   test('the founding era: Democratic-Republicans aqua, Federalists violet', () => {
+   34|     const hues = candidateHues([
+   35|       { key: 'A', party: 'democratic-republican' },
+   36|       { key: 'B', party: 'federalist' },
+   37|     ]);
+   38|     expect([hues.get('A'), hues.get('B')]).toEqual(['aqua', 'violet']);
+   39|   });
+   40| });
+   41| 
+   42| describe('paint and onPaint', () => {
+   43|   test('light and dark steps differ; no hue is Other', () => {
+   44|     expect(paint('blue', true)).toBe('#2a78d6');
+   45|     expect(paint('blue', false)).toBe('#5488c7');
+   46|     expect(paint(undefined, true)).toBe(paint('other', true));
+   47|   });
+   48| 
+   49|   test('label ink inverts with the mode', () => {
+   50|     // Violet: white on screen in light mode, black on screen (authored white) in dark.
+   51|     expect(onPaint('violet', true)).toBe('#ffffff');
+   52|     expect(onPaint('violet', false)).toBe('#ffffff');
+   53|     // Blue: black on screen in both, so authored black in light and white in dark.
+   54|     expect(onPaint('blue', true)).toBe('#000000');
+   55|     expect(onPaint('blue', false)).toBe('#ffffff');
+   56|   });
+   57| });
+```
+
+## `src/lib/simulacra/palette.ts`
+
+```ts
+    1| // Chart colour for Simulacra Americana.
+    2| //
+    3| // The host app's dark mode is a filter over the whole page (invert(1)
+    4| // hue-rotate(180deg) saturate(1.5)), and light mode drops it. So a chart
+    5| // colour is authored twice: light mode uses the palette's light step as-is;
+    6| // dark mode uses the value that filter turns into the palette's dark step
+    7| // (solved for, and checked against Chrome's rendered pixels). Everything
+    8| // neutral — ink, hairlines, washes — is authored once in light values and
+    9| // inverts on its own, like the rest of the page.
+   10| //
+   11| // Steps are the dataviz reference palette. The page colours the winner and
+   12| // the runner-up and folds everyone else into "Other": every era's pair is
+   13| // validated (CVD and normal-vision separation, both modes, on this page's
+   14| // surfaces), and a third or fourth candidate never needs its own hue.
+   15| 
+   16| export type Hue =
+   17|   | 'blue'
+   18|   | 'orange'
+   19|   | 'aqua'
+   20|   | 'violet'
+   21|   | 'green'
+   22|   | 'red'
+   23|   | 'other'
+   24|   | 'good'
+   25|   | 'warning'
+   26|   | 'critical';
+   27| 
+   28| /** 'k' = black text on screen, 'w' = white. */
+   29| type Ink = 'k' | 'w';
+   30| 
+   31| // hue: [light step, dark-mode authored, label ink on the fill: light, dark],
+   32| // the ink by contrast with the fill.
+   33| const HUES: Readonly<Record<Hue, readonly [string, string, Ink, Ink]>> = {
+   34|   blue: ['#2a78d6', '#5488c7', 'k', 'k'],
+   35|   orange: ['#eb6834', '#d47f5d', 'k', 'k'],
+   36|   aqua: ['#1baf7a', '#3d9677', 'k', 'k'],
+   37|   violet: ['#4a3aa7', '#716aad', 'w', 'k'],
+   38|   green: ['#008300', '#63ba63', 'w', 'w'],
+   39|   red: ['#e34948', '#c06b6b', 'k', 'k'],
+   40|   // A neutral, authored once and left to invert: charcoal on the light page,
+   41|   // a light grey on the dark one — apart from every hue in lightness, so it
+   42|   // survives colour blindness beside red and aqua.
+   43|   other: ['#4d4c48', '#4d4c48', 'w', 'k'],
+   44|   // Status (fixed meaning; always with an icon and a label).
+   45|   good: ['#0ca30c', '#3fa43f', 'w', 'w'],
+   46|   warning: ['#fab219', '#764600', 'k', 'k'],
+   47|   critical: ['#d03b3b', '#f28f8f', 'w', 'w'],
+   48| };
+   49| 
+   50| /** The colour to author for `hue` in the current mode; no hue → "other". */
+   51| export const paint = (hue: Hue | undefined, light: boolean): string => {
+   52|   const h = HUES[hue ?? 'other'];
+   53|   return light ? h[0] : h[1];
+   54| };
+   55| 
+   56| /** Label ink to author on a `hue` fill: white or black on screen, whichever reads. */
+   57| export function onPaint(hue: Hue | undefined, light: boolean): string {
+   58|   const h = HUES[hue ?? 'other'];
+   59|   const black = (light ? h[2] : h[3]) === 'k';
+   60|   // Dark mode inverts what's authored: black on screen is authored white.
+   61|   return black === light ? '#000000' : '#ffffff';
+   62| }
+   63| 
+   64| /** The party families that own a hue somewhere on the timeline (history.ts). */
+   65| export type Family =
+   66|   | 'federalist'
+   67|   | 'democratic-republican'
+   68|   | 'democratic'
+   69|   | 'national-republican'
+   70|   | 'whig'
+   71|   | 'republican';
+   72| 
+   73| interface Era {
+   74|   readonly when: (parties: ReadonlySet<Family | null | undefined>) => boolean;
+   75|   readonly hues: readonly Hue[];
+   76|   readonly own: Readonly<Partial<Record<Family, Hue>>>;
+   77| }
+   78| 
+   79| // The earliest era: everything before the Democrats, and the fallback.
+   80| const FOUNDING: Era = {
+   81|   when: () => true,
+   82|   hues: ['aqua', 'violet', 'orange'],
+   83|   own: { 'democratic-republican': 'aqua', federalist: 'violet' },
+   84| };
+   85| 
+   86| // Each era's validated triple and the parties that own a hue in it.
+   87| const ERAS: readonly Era[] = [
+   88|   { when: (p) => p.has('republican'), hues: ['red', 'blue', 'green'], own: { republican: 'red', democratic: 'blue' } },
+   89|   {
+   90|     when: (p) => p.has('democratic') || p.has('whig') || p.has('national-republican'),
+   91|     hues: ['blue', 'orange', 'aqua'],
+   92|     own: { democratic: 'blue', whig: 'orange', 'national-republican': 'orange' },
+   93|   },
+   94|   FOUNDING,
+   95| ];
+   96| 
+   97| export interface HueCandidate {
+   98|   readonly key: string;
+   99|   readonly party?: Family | null | undefined;
+  100| }
+  101| 
+  102| /**
+  103|  * Hue per candidate key for one election. Parties keep their colour across
+  104|  * the timeline (Democrats blue, Republicans red); anyone else takes the era's
+  105|  * free hue, largest share first; past three, "other".
+  106|  * @param weight e.g. electoral votes by key
+  107|  */
+  108| export function candidateHues(
+  109|   candidates: readonly HueCandidate[] = [],
+  110|   weight: Readonly<Record<string, number>> = {},
+  111| ): Map<string, Hue> {
+  112|   const parties = new Set(candidates.map((c) => c.party));
+  113|   const era = ERAS.find((e) => e.when(parties)) ?? FOUNDING;
+  114|   const order = [...candidates].sort(
+  115|     (a, b) => (weight[b.key] ?? 0) - (weight[a.key] ?? 0) || a.key.localeCompare(b.key),
+  116|   );
+  117|   const out = new Map<string, Hue>();
+  118|   const used = new Set<Hue>();
+  119|   for (const c of order) {
+  120|     const h = c.party ? era.own[c.party] : undefined;
+  121|     if (h && !used.has(h)) {
+  122|       out.set(c.key, h);
+  123|       used.add(h);
+  124|     }
+  125|   }
+  126|   for (const c of order) {
+  127|     if (out.has(c.key)) continue;
+  128|     const h = era.hues.find((x) => !used.has(x));
+  129|     if (h) {
+  130|       out.set(c.key, h);
+  131|       used.add(h);
+  132|     } else out.set(c.key, 'other');
+  133|   }
+  134|   return out;
+  135| }
+```
+
+## `src/lib/simulacra/places.ts`
+
+```ts
+    1| // Places named in the page's words — a state, a region, the colonies — found
+    2| // by quick pattern matching, so pointing at the word can light its tiles on
+    3| // the map (MiniMap's `highlight`). Regions are the harness's own
+    4| // (simharness/geo.py), so "midwest" means the voters' midwest.
+    5| import { writable } from 'svelte/store';
+    6| import { STATES } from './geo';
+    7| 
+    8| const SOUTH = ['VA', 'NC', 'SC', 'GA', 'FL', 'AL', 'MS', 'LA', 'TX', 'AR', 'TN'];
+    9| const BORDER = ['KY', 'MD', 'DE', 'MO', 'WV', 'OK'];
+   10| const NORTHEAST = ['ME', 'NH', 'VT', 'MA', 'RI', 'CT', 'NY', 'NJ', 'PA'];
+   11| const NEW_ENGLAND = ['ME', 'NH', 'VT', 'MA', 'RI', 'CT'];
+   12| const MIDWEST = ['OH', 'IN', 'IL', 'MI', 'WI', 'MN', 'IA', 'ND', 'SD', 'NE', 'KS'];
+   13| const WEST = ['MT', 'ID', 'WY', 'CO', 'NM', 'AZ', 'UT', 'NV', 'WA', 'OR', 'CA'];
+   14| const COLONIES = ['NH', 'MA', 'RI', 'CT', 'NY', 'NJ', 'PA', 'DE', 'MD', 'VA', 'NC', 'SC', 'GA'];
+   15| 
+   16| // "George Washington" is a man, not a state.
+   17| const statePattern = (code: string, name: string): string =>
+   18|   code === 'WA' ? '(?<!George )Washington(?! D\\.C\\.)' : name.replace(/ /g, '\\s');
+   19| 
+   20| // [pattern, codes]. Order matters where one name contains another: the
+   21| // regex tries these left to right at each position, so longer names come first.
+   22| const RULES: readonly (readonly [string, readonly string[]])[] = [
+   23|   ['District of Columbia|Washington,? D\\.C\\.', ['DC']],
+   24|   ...STATES.filter((s) => s.code !== 'DC')
+   25|     .sort((a, b) => b.name.length - a.name.length)
+   26|     .map((s) => [statePattern(s.code, s.name), [s.code]] as const),
+   27|   ['(?:the\\s)?(?:thirteen|13|original)\\s(?:colonies|states)', COLONIES],
+   28|   ['New\\sEngland(?:ers?)?', NEW_ENGLAND],
+   29|   // Lowercase "south" only as a region ("the south", a group's ", south"), not "went south".
+   30|   ['(?:Deep\\s)?South(?:erners?|ern)?|(?<=(?:the|,)\\s)south(?:ern)?|[Dd]ixie', SOUTH],
+   31|   ['[Mm]id-?[Ww]est(?:erners?|ern)?|Middle\\sWest', MIDWEST],
+   32|   ['[Nn]orth-?[Ee]ast(?:erners?|ern)?', NORTHEAST],
+   33|   ['[Bb]order\\sstates?', BORDER],
+   34|   ['(?:the\\s|Far\\s)West|Westerners?', WEST],
+   35| ];
+   36| const RE = new RegExp(`\\b(?:${RULES.map(([p], i) => `(?<r${i}>${p})`).join('|')})\\b`, 'g');
+   37| 
+   38| /** A run of text: plain, or a place with the state codes it names. */
+   39| export interface Segment {
+   40|   readonly t: string;
+   41|   readonly codes?: readonly string[];
+   42| }
+   43| 
+   44| /** text → plain runs, and the places in it with their state codes. */
+   45| export function segments(text = ''): Segment[] {
+   46|   const out: Segment[] = [];
+   47|   let at = 0;
+   48|   for (const m of text.matchAll(RE)) {
+   49|     const groups = m.groups ?? {};
+   50|     const i = Object.keys(groups).findIndex((k) => groups[k] !== undefined);
+   51|     if (m.index > at) out.push({ t: text.slice(at, m.index) });
+   52|     out.push({ t: m[0], codes: RULES[i]?.[1] ?? [] });
+   53|     at = m.index + m[0].length;
+   54|   }
+   55|   if (at < text.length) out.push({ t: text.slice(at) });
+   56|   return out;
+   57| }
+   58| 
+   59| /** The codes of the place under the pointer, for the map to light. */
+   60| export const hoverPlaces = writable<readonly string[]>([]);
 ```

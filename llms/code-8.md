@@ -1,7 +1,1761 @@
-# synthetic-electorate-toy: source and docs, part 8 of 16
+# synthetic-electorate-toy: source and docs, part 8 of 17
 
-Generated from commit `5fc0a9e54bc9` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
-Files `simharness/evaluate.py` to `simharness/paired.py`. Lines are numbered as in the repository.
+Generated from commit `4a07108d3ae4` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Files `simharness/backbone.py` to `simharness/evaluate.py`. Lines are numbered as in the repository.
+
+## `simharness/backbone.py`
+
+```python
+    1| """The statistical backbone: turnout and choice by cell, calibrated exactly.
+    2| 
+    3| 1920 has no survey, so the backbone is hierarchical ecological inference on
+    4| state returns against census makeup, identified by the 1916 → 1920 suffrage
+    5| natural experiment. Every step has a posterior draw; every draw is calibrated
+    6| so that the unchanged world reproduces each state's certified R, D and other
+    7| votes exactly (product promise 1).
+    8| 
+    9| Turnout, per draw d:
+   10|   T1  κ: the change in logit turnout per eligible adult from 1916 to 1920 in
+   11|       the "old" states, where women could already vote for president in 1916
+   12|       and the legal electorate's makeup didn't change. Drawn from the
+   13|       predictive distribution across those states (mean and between-state
+   14|       spread).
+   15|   T2  In the "new" states, men's 1920 turnout = expit(logit(1916 turnout) + κ);
+   16|       women's votes are the residual, W = T20 − m20·M20, and women's turnout
+   17|       w = W / F20. Georgia and Mississippi, where women couldn't register in
+   18|       time, are a placebo: W there should be about 0.
+   19|   T3  In the old states, men and women are split with the ratio w/m drawn
+   20|       from the new states outside the South (no within-state evidence).
+   21|   T4  Within a state and sex, groups differ by a logit offset. Black
+   22|       Southerners' turnout comes from a Goodman regression of 1916 men's
+   23|       turnout on the Black share of eligible men across the eleven Southern
+   24|       states; elsewhere groups share the state-sex rate (an assumption, named).
+   25|       Black Southerners' shortfall against white turnout in their own state and
+   26|       sex is counted as exclusion (reason: extralegal_exclusion), not choice.
+   27|   T5  Calibration: a logit shift per state and sex so the state's total votes
+   28|       match exactly.
+   29| 
+   30| Choice, per draw d:
+   31|   C1  δ, women's logit tilt toward R: regression across states of the 1916 →
+   32|       1920 change in logit two-party R share on f, the share of 1920 votes cast
+   33|       by newly enfranchised women (0 in old states), with South/non-South
+   34|       intercepts. Re-fitted per draw because f depends on the turnout draw.
+   35|   C2  β_B, Black voters' logit shift toward R relative to white voters of the
+   36|       same state: prior N(1.5, 1.0) [I], updated by a Goodman regression across
+   37|       non-Southern states. The prior encodes the documented loyalty of Black
+   38|       voters to the Republican party before 1932; its size is an assumption.
+   39|   C3  Calibration: per state, intercepts for R and for other are solved by
+   40|       iterative scaling so R, D and other match the certified votes exactly.
+   41| """
+   42| from __future__ import annotations
+   43| 
+   44| from dataclasses import dataclass, field
+   45| 
+   46| import numpy as np
+   47| import pandas as pd
+   48| 
+   49| from .aggregate import World
+   50| from .geo import REGION_OF, SOUTH
+   51| from .stats import bayes_ols, expit, logit
+   52| 
+   53| GROUPS = ['native_white', 'foreign_white_naturalized', 'foreign_white_alien', 'black', 'other']
+   54| 
+   55| 
+   56| @dataclass
+   57| class Inputs:
+   58|     cells: pd.DataFrame      # state, sex, group, adults20, adults16
+   59|     returns: pd.DataFrame    # index state; R16 D16 O16 T16 R20 D20 O20 T20
+   60|     women16: set             # states where women could vote for president in Nov 1916
+   61|     women_pre19: set         # states where women could vote for president in Nov 1920 without the 19th
+   62|     closed_1920: set         # states where women couldn't register in time for Nov 1920
+   63|     alien_voting: set        # states where declarant aliens could vote in 1920
+   64|     ev: pd.Series            # 1920 electoral votes by state
+   65|     other_citizen: dict = field(default_factory=dict)  # state → citizen share of 'other' adults
+   66|     # General years (general_fit): the election year, the states where women could
+   67|     # vote for president at that election, and the voting age (21; 18 from 1972).
+   68|     year: int = 1920
+   69|     women_vote: set = field(default_factory=set)
+   70|     voting_age: int = 21
+   71|     # state → fraction of that state's Black / white adults legally able to vote
+   72|     # (slavery, free-Black exclusion, property and taxpaying tests; empty = 1).
+   73|     black_can: dict = field(default_factory=dict)
+   74|     white_can: dict = field(default_factory=dict)
+   75|     # States whose electors the legislature chose (no popular vote that year).
+   76|     no_popular: set = field(default_factory=set)
+   77| 
+   78| 
+   79| @dataclass
+   80| class Fit:
+   81|     world: World             # the calibrated unchanged world, all draws
+   82|     cells: pd.DataFrame
+   83|     params: dict             # per-draw parameter arrays
+   84|     diagnostics: dict
+   85| 
+   86| 
+   87| def _solve(v, shift, tR, tO, iters=300):
+   88|     """Intercepts for R and other so a group of cells casts exactly tR and tO
+   89|     of its votes v (iterative scaling on a multinomial logit, D as base)."""
+   90|     aR, aO = 0.0, 0.0
+   91|     total = v.sum()
+   92|     for _ in range(iters):
+   93|         eR = np.exp(aR + shift)
+   94|         eO = np.exp(aO) * np.ones_like(eR)
+   95|         den = 1 + eR + eO
+   96|         pR, pO = eR / den, eO / den
+   97|         curR, curO = (v * pR).sum(), (v * pO).sum()
+   98|         if abs(curR - tR) < 1e-7 * total and abs(curO - tO) < 1e-7 * total + 1e-9:
+   99|             break
+  100|         aR += np.log(max(tR, 1e-12) / max(curR, 1e-12))
+  101|         aO += np.log(max(tO, 1e-12) / max(curO, 1e-12)) if tO > 0 else -50
+  102|     return pR, pO
+  103| 
+  104| 
+  105| def _black_south_bound(D, S, sidx, south_state, black, south_cell, female, votes_cell, share, can_eff, t, R, Dm, O, T, shift_R,
+  106|                        solver=None):
+  107|     """C3b (in place): Black Southern voters split like Black voters outside the
+  108|     South, bounded by the state's certified ledger; the rest of the state is
+  109|     re-calibrated. Returns how many draws hit the bound, per state.
+  110|     solver: (v, shift, tR, tO) → (pR, pO); _solve by default (fit, carry_forward)."""
+  111|     solver = solver or _solve
+  112|     nsb, bsc = black & ~south_cell, black & south_cell
+  113|     bound_hits = np.zeros(S)
+  114|     for d in range(D):
+  115|         vn = votes_cell[d, nsb]
+  116|         nb_nat = (vn[:, None] * share[d, nsb, :]).sum(axis=0) / max(vn.sum(), 1e-9)
+  117|         for s in np.where(south_state)[0]:
+  118|             nb = nb_nat
+  119|             idx = np.where(sidx == s)[0]
+  120|             b_idx, o_idx = idx[bsc[idx]], idx[~bsc[idx]]
+  121|             vb = votes_cell[d, b_idx]
+  122|             if vb.sum() <= 0:
+  123|                 continue
+  124|             # Only parties on the state's certified ledger; minor-party share
+  125|             # capped at 80% of the state's minor-party vote.
+  126|             nb_s = nb.copy()
+  127|             if R[s] <= 0 or Dm[s] <= 0:
+  128|                 # A major party off the state's ballot (general years only).
+  129|                 nb_s[0] *= R[s] > 0
+  130|                 nb_s[1] *= Dm[s] > 0
+  131|                 nb_s = nb_s / nb_s.sum() if nb_s.sum() > 0 else np.array([0.0, 0.0, 1.0])
+  132|             o_cap = 0.8 * O[s] / max(vb.sum(), 1e-9)
+  133|             if nb_s[2] > o_cap:
+  134|                 nb_s[:2] *= (1 - o_cap) / max(nb_s[0] + nb_s[1], 1e-9)
+  135|                 nb_s[2] = o_cap
+  136|             nb = nb_s
+  137|             scale = min(1.0, 0.8 * R[s] / max(vb.sum() * nb[0], 1e-9), 0.8 * Dm[s] / max(vb.sum() * nb[1], 1e-9))
+  138|             if scale < 1.0:
+  139|                 bound_hits[s] += 1
+  140|                 for sex_m in (female, ~female):
+  141|                     bi = b_idx[sex_m[b_idx]]
+  142|                     oi = o_idx[sex_m[o_idx]]
+  143|                     lost = votes_cell[d, bi].sum() * (1 - scale)
+  144|                     can_eff[d, bi] *= scale
+  145|                     votes_cell[d, bi] *= scale
+  146|                     vo = votes_cell[d, oi].sum()
+  147|                     if vo > 0:
+  148|                         t[d, oi] *= 1 + lost / vo
+  149|                         votes_cell[d, oi] *= 1 + lost / vo
+  150|                 vb = votes_cell[d, b_idx]
+  151|             share[d, b_idx, :] = nb
+  152|             v = votes_cell[d, o_idx]
+  153|             tR = R[s] / T[s] * votes_cell[d, idx].sum() - vb.sum() * nb[0]
+  154|             tO = O[s] / T[s] * votes_cell[d, idx].sum() - vb.sum() * nb[2]
+  155|             pR, pO = solver(v, shift_R[d, o_idx], tR, max(tO, 0.0))
+  156|             share[d, o_idx, 0], share[d, o_idx, 2], share[d, o_idx, 1] = pR, pO, 1 - pR - pO
+  157|     return bound_hits
+  158| 
+  159| 
+  160| WHITE_GROUPS = ('native_white', 'foreign_white_naturalized', 'foreign_white_alien')
+  161| 
+  162| 
+  163| def legal_can(inp: Inputs, year: int) -> tuple[np.ndarray, list]:
+  164|     """Fraction of each cell legally able to vote, and the reason for the rest.
+  165| 
+  166|     Any year: aliens only where inp.alien_voting; 'other' × inp.other_citizen;
+  167|     Black adults × inp.black_can[state] (slavery, free-Black exclusion); white
+  168|     adults × inp.white_can[state] (property and taxpaying tests). Women: 1916
+  169|     by women16, 1920 barred only where registration closed (closed_1920);
+  170|     any other year only in inp.women_vote — except that after 1920 an empty
+  171|     women_vote means the 19th Amendment everywhere (so 1916/1920/1924 calls
+  172|     return exactly what they did before general years existed)."""
+  173|     c = inp.cells
+  174|     can = np.ones(len(c))
+  175|     reason = [''] * len(c)
+  176|     women_rule = year not in (1916, 1920) and (year < 1920 or bool(inp.women_vote))
+  177|     for i, r in enumerate(c.itertuples()):
+  178|         if r.group == 'foreign_white_alien' and r.state not in inp.alien_voting:
+  179|             can[i], reason[i] = 0.0, 'noncitizen'
+  180|         elif r.group == 'other':
+  181|             can[i] = inp.other_citizen.get(r.state, 1.0)
+  182|             reason[i] = 'native_status' if can[i] < 1 else ''
+  183|         f = inp.black_can.get(r.state, 1.0) if r.group == 'black' else (
+  184|             inp.white_can.get(r.state, 1.0) if r.group in WHITE_GROUPS else 1.0)
+  185|         if f != 1.0:
+  186|             can[i] *= f
+  187|             reason[i] = reason[i] or ('race_law' if r.group == 'black' else 'property_tax')
+  188|         if r.sex == 'F':
+  189|             if year == 1916 and r.state not in inp.women16:
+  190|                 can[i], reason[i] = 0.0, 'sex'
+  191|             if year == 1920 and r.state in inp.closed_1920:
+  192|                 can[i], reason[i] = 0.0, 'registration_closed'
+  193|             if women_rule and r.state not in inp.women_vote:
+  194|                 can[i], reason[i] = 0.0, 'sex'
+  195|     return can, reason
+  196| 
+  197| 
+  198| def fit(inp: Inputs, draws: int, seed: int, pop_cv: dict | None = None, beta_b_prior_only: bool = False) -> Fit:
+  199|     rng = np.random.default_rng(seed)
+  200|     c = inp.cells.reset_index(drop=True)
+  201|     states = sorted(inp.returns.index)
+  202|     S, C, D = len(states), len(c), draws
+  203|     sidx = np.array([states.index(s) for s in c.state])
+  204|     female = (c.sex == 'F').to_numpy()
+  205|     south_state = np.array([s in SOUTH for s in states])
+  206|     south_cell = south_state[sidx]
+  207|     black = (c.group == 'black').to_numpy()
+  208|     ret = inp.returns.loc[states]
+  209| 
+  210|     # ── Population draws: census undercount and interpolation error [I] ──
+  211|     cv = pop_cv or {'native_white': 0.02, 'foreign_white_naturalized': 0.04, 'foreign_white_alien': 0.05,
+  212|                     'black': 0.05, 'other': 0.08}
+  213|     cv_c = c.group.map(cv).to_numpy()
+  214|     noise = np.exp(rng.normal(0, 1, (D, C)) * cv_c - cv_c ** 2 / 2)
+  215|     a20 = c.adults20.to_numpy()[None, :] * noise
+  216|     a16 = c.adults16.to_numpy()[None, :] * noise * np.exp(rng.normal(0, 0.02, (D, C)))
+  217| 
+  218|     can16, _ = legal_can(inp, 1916)
+  219|     can20, reason20 = legal_can(inp, 1920)
+  220| 
+  221|     def per_state(x, mask=None):
+  222|         """Sum [D, C] over cells into [D, S]."""
+  223|         m = np.ones(C, bool) if mask is None else mask
+  224|         out = np.zeros((x.shape[0], S))
+  225|         np.add.at(out, (slice(None), sidx[m]), x[:, m])
+  226|         return out
+  227| 
+  228|     E16 = per_state(a16 * can16)
+  229|     E20 = per_state(a20 * can20)
+  230|     M16 = per_state(a16 * can16, ~female)
+  231|     M20 = per_state(a20 * can20, ~female)
+  232|     F20 = per_state(a20 * can20, female)
+  233|     T16 = ret.T16.to_numpy()[None, :]
+  234|     T20 = ret.T20.to_numpy()[None, :]
+  235| 
+  236|     old = np.array([s in inp.women16 for s in states])
+  237|     new = ~old
+  238|     closed = np.array([s in inp.closed_1920 for s in states])
+  239| 
+  240|     # T1: κ from the old states, predictive draw per state
+  241|     k_old = logit(T20 / E20)[:, old] - logit(T16 / E16)[:, old]           # [D, n_old]
+  242|     k_mean = k_old.mean(axis=1)
+  243|     k_sd = k_old.std(axis=1, ddof=1)
+  244|     n_old = old.sum()
+  245|     kappa_mean = k_mean + rng.standard_t(max(n_old - 1, 1), D) * k_sd / np.sqrt(n_old)
+  246|     kappa = kappa_mean[:, None] + rng.normal(0, 1, (D, S)) * k_sd[:, None]   # state-level predictive
+  247| 
+  248|     # T2: men's and women's turnout in new states
+  249|     m16 = T16 / np.maximum(M16, 1)
+  250|     m20_pred = expit(logit(m16) + kappa)
+  251|     W = T20 - m20_pred * M20
+  252|     w_raw = W / np.maximum(F20, 1)
+  253|     women_resid = w_raw.copy()                                               # kept for N1/N2
+  254|     # ρ = w/m, used for the old states (T3) from new non-Southern states
+  255|     ref = new & ~south_state & ~closed
+  256|     rho_new = np.clip(w_raw[:, ref] / m20_pred[:, ref], 0.05, 1.5)
+  257|     rho_draw = rho_new[np.arange(D), rng.integers(0, ref.sum(), D)]
+  258| 
+  259|     # State-sex turnout targets (votes cast by men, by women)
+  260|     votes_M = np.where(new, np.clip(m20_pred * M20, 0, T20), 0.0)
+  261|     votes_M = np.where(closed[None, :], T20, votes_M)
+  262|     # Old states: split with the drawn ratio
+  263|     m_old = T20 / np.maximum(M20 + rho_draw[:, None] * F20, 1)
+  264|     votes_M = np.where(old[None, :], m_old * M20, votes_M)
+  265|     # Neither sex may exceed 98% turnout of its eligible adults; any excess
+  266|     # (a draw of the old-state ratio that doesn't fit a high-turnout state)
+  267|     # moves to the other sex, so the state total stays exact.
+  268|     cap_M, cap_F = 0.98 * M20, 0.98 * F20
+  269|     votes_M = np.minimum(votes_M, cap_M)
+  270|     votes_M = np.maximum(votes_M, T20 - cap_F)
+  271|     votes_F = T20 - votes_M
+  272|     clipped = ((W < 0) & new[None, :] & ~closed[None, :]).mean(axis=0)
+  273| 
+  274|     # T4: Black Southern turnout (Goodman on 1916 men, 11 Southern states),
+  275|     # drawn from the regression posterior truncated to its logical bounds
+  276|     # [0, white rate] (Goodman with Duncan–Davis bounds).
+  277|     from scipy.stats import truncnorm
+  278|     blk_men16 = per_state(a16 * can16, ~female & black) / np.maximum(M16, 1)
+  279|     t_bs = np.empty(D)
+  280|     goodman_south = {}
+  281|     for d in range(D):
+  282|         X = np.column_stack([np.ones(south_state.sum()), blk_men16[d, south_state]])
+  283|         y = m16[d, south_state]
+  284|         _, _, info = bayes_ols(X, y, 1, rng)
+  285|         b0, b1 = info['beta_hat']
+  286|         cov = info['resid_sd'] ** 2 * np.linalg.inv(X.T @ X)
+  287|         white = max(b0, 1e-3)
+  288|         mu, sd = b0 + b1, float(np.sqrt(cov[0, 0] + cov[1, 1] + 2 * cov[0, 1]))
+  289|         a_, b_ = (0 - mu) / sd, (white - mu) / sd
+  290|         black_rate = float(truncnorm.rvs(a_, b_, loc=mu, scale=sd, random_state=rng))
+  291|         t_bs[d] = black_rate / white
+  292|         if d == 0:
+  293|             goodman_south = {'white_rate': float(b0), 'black_rate_unbounded': float(mu), 'black_rate_se': sd}
+  294| 
+  295|     # Build the world: can, t, and the exclusion split
+  296|     can = np.broadcast_to(can20, (D, C)).copy()
+  297|     excluded = np.zeros((D, C))
+  298|     bs = black & south_cell
+  299|     excluded[:, bs] = can[:, bs] * (1 - t_bs[:, None])
+  300|     can_eff = can - excluded
+  301|     # Calibrate a logit shift per state and sex so votes match exactly.
+  302|     t = np.zeros((D, C))
+  303|     for d in range(D):
+  304|         for sex, target in (('M', votes_M[d]), ('F', votes_F[d])):
+  305|             m = (c.sex == sex).to_numpy()
+  306|             for s in range(S):
+  307|                 cells_s = np.where(m & (sidx == s))[0]
+  308|                 elig = a20[d, cells_s] * can_eff[d, cells_s]
+  309|                 if elig.sum() <= 0 or target[s] <= 0:
+  310|                     t[d, cells_s] = 0.0
+  311|                     continue
+  312|                 t[d, cells_s] = min(target[s] / elig.sum(), 1.0)
+  313|     # Cells with all eligible voting at t>1 would be clipped; flag them
+  314|     over = (votes_M / np.maximum(M20, 1) > 1).mean(axis=0)
+  315| 
+  316|     # C1: women's tilt δ (per draw, re-fitted on this draw's f)
+  317|     rd16 = logit(ret.R16 / (ret.R16 + ret.D16)).to_numpy()
+  318|     rd20 = logit(ret.R20 / (ret.R20 + ret.D20)).to_numpy()
+  319|     y = rd20 - rd16
+  320|     delta = np.empty(D)
+  321|     swing_ns = np.empty(D)
+  322|     swing_s = np.empty(D)
+  323|     for d in range(D):
+  324|         f = np.where(new & ~closed, votes_F[d] / T20[0], 0.0)
+  325|         X = np.column_stack([~south_state, south_state, f]).astype(float)
+  326|         b, _, _ = bayes_ols(X, y, 1, rng)
+  327|         swing_ns[d], swing_s[d], delta[d] = b[0]
+  328| 
+  329|     # C2: Black voters' shift β_B: prior N(1.5, 1.0) [I] updated by a Goodman
+  330|     # regression across non-Southern states with region intercepts (so region
+  331|     # doesn't stand in for race) and the 1916 share as a covariate.
+  332|     blk_votes = per_state((a20 * can_eff * t), black) / T20
+  333|     ns = ~south_state
+  334|     reg_dummies = np.column_stack([[REGION_OF[s] == g for s in states] for g in ('northeast', 'midwest', 'west', 'border')]).astype(float)
+  335|     beta_B = np.empty(D)
+  336|     for d in range(D):
+  337|         X = np.column_stack([reg_dummies[ns], rd16[ns], blk_votes[d, ns]])
+  338|         b, _, _ = bayes_ols(X, rd20[ns], 1, rng, prior_mean=[0, 0, 0, 0, 1, 1.5], prior_sd=[10, 10, 10, 10, 10, 1.0])
+  339|         beta_B[d] = b[0, -1] if not beta_b_prior_only else rng.normal(1.5, 1.0)  # sensitivity: prior only
+  340| 
+  341|     # C3: exact calibration of shares
+  342|     share = np.zeros((D, C, 3))
+  343|     shift_R = np.where(female, 1, 0)[None, :] * delta[:, None] + black[None, :] * beta_B[:, None]
+  344|     votes_cell = a20 * can_eff * t
+  345|     R20, O20 = ret.R20.to_numpy(), ret.O20.to_numpy()
+  346|     D20 = ret.D20.to_numpy()
+  347|     for d in range(D):
+  348|         for s in range(S):
+  349|             idx = np.where(sidx == s)[0]
+  350|             v = votes_cell[d, idx]
+  351|             if v.sum() <= 0:
+  352|                 continue
+  353|             pR, pO = _solve(v, shift_R[d, idx], R20[s] / T20[0, s] * v.sum(), O20[s] / T20[0, s] * v.sum())
+  354|             share[d, idx, 0], share[d, idx, 2], share[d, idx, 1] = pR, pO, 1 - pR - pO
+  355| 
+  356|     # C3b: Black Southern voters split like Black voters outside the South
+  357|     # (the assumption `fifteenth` borrows), subject to an accounting bound:
+  358|     # their votes for either major party can't exceed 80% of that party's
+  359|     # certified vote in the state (in South Carolina Harding got 2,610 votes).
+  360|     # Where the bound binds, Black Southern turnout is lowered, the difference
+  361|     # is counted as exclusion, and the state's other voters of the same sex
+  362|     # make up the total. The rest of the state is then re-calibrated.
+  363|     bound_hits = _black_south_bound(D, S, sidx, south_state, black, south_cell, female, votes_cell, share, can_eff, t,
+  364|                                     R20, D20, O20, T20[0], shift_R)
+  365|     excluded = can - can_eff
+  366| 
+  367|     barred_by = {
+  368|         'legal': a20 * 0 + (1 - can),
+  369|         'excluded': excluded,
+  370|     }
+  371|     world = World(adults=a20, can=can_eff, t=t, share=share, barred_by=barred_by)
+  372|     cells = c.assign(region=c.state.map(REGION_OF), south=south_cell, legal_reason=reason20)
+  373|     params = {'kappa_mean': kappa_mean, 'rho': rho_draw, 't_black_south_rel': t_bs, 'delta': delta,
+  374|               'beta_B': beta_B, 'swing_nonsouth': swing_ns, 'swing_south': swing_s}
+  375|     diag = {
+  376|         'states': states,
+  377|         'old_states': [s for s, o in zip(states, old) if o],
+  378|         'women_turnout_resid': women_resid,      # [D, S] women's implied turnout (N1/N2)
+  379|         'men_turnout_pred': m20_pred,
+  380|         'women_negative_share': dict(zip(states, clipped.tolist())),
+  381|         'men_turnout_over_1': dict(zip(states, over.tolist())),
+  382|         'goodman_south_first_draw': goodman_south,
+  383|         'black_south_bound_share': dict(zip(states, (bound_hits / D).tolist())),
+  384|         'E16': E16, 'E20': E20, 'T16': T16[0], 'T20': T20[0], 'm16': m16,
+  385|         'votes_F': votes_F, 'votes_M': votes_M, 'F20': F20, 'M20': M20,
+  386|     }
+  387|     return Fit(world=world, cells=cells, params=params, diagnostics=diag)
+  388| 
+  389| 
+  390| def carry_forward(base: Fit, inp: Inputs, year: int, seed: int) -> Fit:
+  391|     """A later election with no natural experiment of its own (1924): the base
+  392|     year's fit supplies the group structure, and the new year's returns
+  393|     calibrate it exactly.
+  394| 
+  395|     Per draw d (the base fit's draw d):
+  396|       P   adults: the base cells aged to election day (data.population) with
+  397|           fresh census noise.
+  398|       X   Black Southern exclusion: the base year's relative turnout t_bs.
+  399|       T   turnout: the base year's cell turnout in logits, plus one shift per
+  400|           state (all groups and both sexes alike) solved so the state's total
+  401|           votes match. So the base year's women-to-men and group ratios carry
+  402|           forward [I]; Corder–Wolbrecht 1924 is held out to check that.
+  403|           Cells that couldn't vote in the base year (Georgia and Mississippi
+  404|           women in 1920) start from their state's men times the median
+  405|           women-to-men turnout ratio of the other Southern states.
+  406|       C   choice: the base year's tilts (women δ, Black voters β_B), then the
+  407|           same exact calibration (C3, C3b) to the year's R, D and other votes.
+  408|           A third candidate's vote (La Follette) is spread evenly across a
+  409|           state's groups: within-state differences in it aren't identified.
+  410|     """
+  411|     rng = np.random.default_rng(seed + year)
+  412|     c = inp.cells.reset_index(drop=True)
+  413|     assert (c[['state', 'sex', 'group']].to_numpy() == base.cells[['state', 'sex', 'group']].to_numpy()).all()
+  414|     states = base.diagnostics['states']
+  415|     S, C = len(states), len(c)
+  416|     D = base.world.t.shape[0]
+  417|     sidx = np.array([states.index(s) for s in c.state])
+  418|     female = (c.sex == 'F').to_numpy()
+  419|     black = (c.group == 'black').to_numpy()
+  420|     south_state = np.array([s in SOUTH for s in states])
+  421|     south_cell = south_state[sidx]
+  422|     y = year % 100
+  423|     ret = inp.returns.loc[states]
+  424|     T, R, Dm, O = (ret[f'{k}{y}'].to_numpy() for k in ('T', 'R', 'D', 'O'))
+  425| 
+  426|     def per_state(x):
+  427|         out = np.zeros((x.shape[0], S))
+  428|         np.add.at(out, (slice(None), sidx), x)
+  429|         return out
+  430| 
+  431|     cv = {'native_white': 0.02, 'foreign_white_naturalized': 0.04, 'foreign_white_alien': 0.05, 'black': 0.05, 'other': 0.08}
+  432|     cv_c = c.group.map(cv).to_numpy()
+  433|     a = c.adults20.to_numpy()[None, :] * np.exp(rng.normal(0, 1, (D, C)) * cv_c - cv_c ** 2 / 2)
+  434| 
+  435|     can1, reason = legal_can(inp, year)
+  436|     can = np.broadcast_to(can1, (D, C)).copy()
+  437|     t_bs = base.params['t_black_south_rel']
+  438|     excluded = np.zeros((D, C))
+  439|     bs = black & south_cell
+  440|     excluded[:, bs] = can[:, bs] * (1 - t_bs[:, None])
+  441|     can_eff = can - excluded
+  442| 
+  443|     # T: turnout prior from the base year, one logit shift per state.
+  444|     t0 = base.world.t.copy()
+  445|     male_of = {(r.state, r.group): i for i, r in c.iterrows() if r.sex == 'M'}
+  446|     mate = np.array([male_of.get((r.state, r.group), i) for i, r in c.iterrows()])
+  447|     sw = female & south_cell & (t0.mean(axis=0) > 0)
+  448|     ratio = np.median(np.where(sw[None, :], t0 / np.maximum(t0[:, mate], 1e-6), np.nan)[:, sw], axis=1)
+  449|     gap = (t0 <= 0) & (can_eff > 0) & female[None, :]
+  450|     t0 = np.where(gap, t0[:, mate] * ratio[:, None], t0)
+  451|     lt = logit(np.clip(t0, 1e-4, 0.995))
+  452|     elig = a * can_eff
+  453|     lo, hi = np.full((D, S), -8.0), np.full((D, S), 8.0)
+  454|     for _ in range(60):
+  455|         mid = (lo + hi) / 2
+  456|         v = per_state(elig * expit(lt + mid[:, sidx]))
+  457|         over = v > T[None, :]
+  458|         hi, lo = np.where(over, mid, hi), np.where(over, lo, mid)
+  459|     k = (lo + hi) / 2
+  460|     t = np.where(elig > 0, expit(lt + k[:, sidx]), 0.0)
+  461|     votes_cell = elig * t
+  462| 
+  463|     # C: the base year's tilts, recalibrated exactly.
+  464|     delta, beta_B = base.params['delta'], base.params['beta_B']
+  465|     shift_R = female[None, :] * delta[:, None] + black[None, :] * beta_B[:, None]
+  466|     share = np.zeros((D, C, 3))
+  467|     for d in range(D):
+  468|         for s in range(S):
+  469|             idx = np.where(sidx == s)[0]
+  470|             v = votes_cell[d, idx]
+  471|             if v.sum() <= 0:
+  472|                 continue
+  473|             pR, pO = _solve(v, shift_R[d, idx], R[s] / T[s] * v.sum(), O[s] / T[s] * v.sum())
+  474|             share[d, idx, 0], share[d, idx, 2], share[d, idx, 1] = pR, pO, 1 - pR - pO
+  475|     bound_hits = _black_south_bound(D, S, sidx, south_state, black, south_cell, female, votes_cell, share, can_eff, t,
+  476|                                     R, Dm, O, T, shift_R)
+  477|     world = World(adults=a, can=can_eff, t=t, share=share, barred_by={'legal': 1 - can, 'excluded': can - can_eff})
+  478|     cells = c.assign(region=c.state.map(REGION_OF), south=south_cell, legal_reason=reason)
+  479|     F = per_state(a * can_eff * female[None, :])
+  480|     diag = {'states': states, 'base_year': base.diagnostics.get('year', 1920), 'turnout_shift': k,
+  481|             'women_turnout': per_state(votes_cell * female[None, :]) / np.maximum(F, 1),
+  482|             'men_turnout': per_state(votes_cell * ~female[None, :]) / np.maximum(per_state(a * can_eff * ~female[None, :]), 1),
+  483|             'black_south_bound_share': dict(zip(states, (bound_hits / D).tolist())), 'gap_ratio': ratio}
+  484|     params = {'delta': delta, 'beta_B': beta_B, 't_black_south_rel': t_bs, 'turnout_shift': k}
+  485|     return Fit(world=world, cells=cells, params=params, diagnostics=diag)
+  486| 
+  487| 
+  488| # ── General years (general_fit): every year without 1920's natural experiment or a base year ──
+  489| #
+  490| # Priors are (year, mean, sd) knots, linear between knots and flat beyond the
+  491| # ends; every one is [I] (an assumption from the literature, not estimated
+  492| # here). Sources and judgement calls: notes/B.md.
+  493| 
+  494| # Turnout, logit offset against native white adults of the same state and sex.
+  495| WOMEN_TURNOUT = [(1789, -1.3, 0.4), (1916, -1.3, 0.4), (1920, -1.3, 0.3), (1928, -1.0, 0.3), (1940, -0.7, 0.25),
+  496|                  (1952, -0.45, 0.2), (1964, -0.24, 0.1), (1972, -0.09, 0.08), (1980, 0.0, 0.08), (1992, 0.09, 0.06),
+  497|                  (2008, 0.18, 0.06), (2024, 0.16, 0.06)]       # against men: C–W 2016; ANES; CPS P20
+  498| # The WOMEN_TURNOUT knots taken from Corder–Wolbrecht (2016). A general_fit year
+  499| # whose prior interpolates from one of them can't be scored against
+  500| # Corder–Wolbrecht as held out: that would check the prior against its own source.
+  501| CW_PRIOR_KNOTS = (1928, 1940)
+  502| NAT_TURNOUT = [(1789, -0.3, 0.3), (2024, -0.3, 0.25)]          # Merriam–Gosnell 1924; CPS naturalized vs native
+  503| ALIEN_TURNOUT = [(1789, -0.6, 0.4), (2024, -0.6, 0.4)]         # declarant aliens where legal (to 1926)
+  504| OTHER_TURNOUT = [(1789, -0.3, 0.4), (2024, -0.3, 0.4)]
+  505| BLACK_TURNOUT = [(1789, 0.0, 0.4), (1960, 0.0, 0.3), (1964, -0.5, 0.2), (1976, -0.5, 0.15), (1984, -0.25, 0.15),
+  506|                  (1992, -0.4, 0.15), (2000, -0.2, 0.15), (2004, -0.3, 0.15), (2008, -0.06, 0.12), (2012, 0.09, 0.12),
+  507|                  (2016, -0.24, 0.12), (2020, -0.37, 0.12), (2024, -0.45, 0.2)]   # CPS P20, citizen basis
+  508| # Black Southern exclusion: share of legally eligible Black adults in the
+  509| # eleven ex-Confederate states kept from voting (beta draws; 0 = none).
+  510| BLACK_SOUTH_EXCLUDED = [(1866, 0.0, 0.0), (1868, 0.15, 0.1), (1872, 0.1, 0.08), (1876, 0.2, 0.1), (1880, 0.35, 0.12),
+  511|                         (1888, 0.4, 0.12), (1892, 0.55, 0.12), (1896, 0.6, 0.12), (1900, 0.75, 0.1),
+  512|                         (1904, 0.884, 0.104), (1944, 0.884, 0.104),     # 1920 fit's t_bs posterior (0.116 ± 0.104)
+  513|                         (1948, 0.77, 0.08), (1952, 0.67, 0.08), (1956, 0.6, 0.08), (1960, 0.52, 0.08),
+  514|                         (1964, 0.41, 0.08), (1968, 0.25, 0.07), (1972, 0.15, 0.06), (1976, 0.1, 0.05), (1980, 0.0, 0.0)]
+  515| BOUND_YEARS = (1892, 1964)     # C3b accounting bound (_black_south_bound) applies in these years
+  516| 
+  517| # Choice, logit tilt toward R (vs D) against white / native voters of the same state.
+  518| DELTA_1920 = (-0.662, 0.272)   # backbone.fit(1920), 400 draws: posterior mean, sd of δ (DISCLOSURES B4)
+  519| WOMEN_TILT = [(1789, *DELTA_1920), (1940, *DELTA_1920), (1944, 0.0, 0.3), (1948, 0.05, 0.25), (1952, 0.2, 0.2),
+  520|               (1956, 0.25, 0.2), (1960, 0.1, 0.2), (1964, -0.08, 0.2), (1968, 0.0, 0.2), (1972, 0.0, 0.2),
+  521|               (1976, 0.15, 0.2), (1980, -0.38, 0.15), (1984, -0.28, 0.15), (1988, -0.31, 0.15), (1992, -0.12, 0.15),
+  522|               (1996, -0.37, 0.15), (2000, -0.46, 0.15), (2004, -0.28, 0.15), (2008, -0.24, 0.15), (2012, -0.37, 0.15),
+  523|               (2016, -0.52, 0.15), (2020, -0.47, 0.15), (2024, -0.43, 0.15)]   # Gallup 1944–76; exit polls 1980–
+  524| BLACK_TILT = [(1789, 0.5, 1.0), (1852, 0.5, 1.0), (1856, 1.5, 1.0), (1864, 1.5, 1.0), (1868, 2.5, 1.0), (1876, 2.5, 1.0),
+  525|               (1880, 1.5, 1.0), (1928, 1.5, 1.0), (1932, 1.0, 0.7), (1936, -0.4, 0.6), (1940, -0.55, 0.5),
+  526|               (1944, -0.6, 0.5), (1948, -1.1, 0.5), (1952, -1.6, 0.5), (1956, -0.8, 0.5), (1960, -0.8, 0.5),
+  527|               (1964, -2.4, 0.4), (1968, -2.2, 0.4), (1972, -2.65, 0.4), (1976, -1.7, 0.4), (1980, -2.2, 0.4),
+  528|               (1984, -2.9, 0.4), (1988, -2.6, 0.4), (1992, -2.15, 0.4), (1996, -2.0, 0.4), (2000, -2.55, 0.4),
+  529|               (2004, -2.4, 0.4), (2008, -3.4, 0.4), (2012, -3.15, 0.4), (2016, -2.9, 0.4), (2020, -2.5, 0.4),
+  530|               (2024, -2.1, 0.4)]
+  531| NAT_TILT = [(1789, -0.5, 0.6), (1892, -0.5, 0.5), (1896, 0.0, 0.5), (1924, 0.0, 0.5), (1928, -0.6, 0.4),
+  532|             (1960, -0.6, 0.4), (1964, -0.2, 0.4), (1988, -0.2, 0.4), (1992, -0.4, 0.4), (2024, -0.3, 0.4)]
+  533| OTHER_TILT = [(1789, 0.0, 0.7), (2024, 0.0, 0.7)]
+  534| 
+  535| POP_CV = {'native_white': 0.02, 'foreign_white_naturalized': 0.04, 'foreign_white_alien': 0.05, 'black': 0.05, 'other': 0.08}
+  536| 
+  537| 
+  538| def prior_at(table, year):
+  539|     """(mean, sd) of a knot table at `year`."""
+  540|     ys = np.array([k[0] for k in table], float)
+  541|     return float(np.interp(year, ys, [k[1] for k in table])), float(np.interp(year, ys, [k[2] for k in table]))
+  542| 
+  543| 
+  544| def cw_held_out(year: int, method: str | None) -> bool:
+  545|     """Whether Corder–Wolbrecht is held out from this year's fit: always, except a
+  546|     general_fit year whose women's-turnout prior uses a CW_PRIOR_KNOTS knot."""
+  547|     if method != 'general_fit':
+  548|         return True
+  549|     ys = [k[0] for k in WOMEN_TURNOUT]
+  550|     if year in ys:
+  551|         return year not in CW_PRIOR_KNOTS
+  552|     lo = max((y for y in ys if y < year), default=None)
+  553|     hi = min((y for y in ys if y > year), default=None)
+  554|     return not ({lo, hi} & set(CW_PRIOR_KNOTS))
+  555| 
+  556| 
+  557| def _draw_normal(rng, table, year, D):
+  558|     m, s = prior_at(table, year)
+  559|     return m + s * rng.normal(0, 1, D)
+  560| 
+  561| 
+  562| def _draw_beta(rng, table, year, D):
+  563|     m, s = prior_at(table, year)
+  564|     if m <= 0:
+  565|         return np.zeros(D)
+  566|     s = min(s, 0.99 * np.sqrt(m * (1 - m)))
+  567|     k = m * (1 - m) / s ** 2 - 1
+  568|     return rng.beta(m * k, (1 - m) * k, D)
+  569| 
+  570| 
+  571| def _solve_ledger(v, shift, tgt, iters=1000, tol=1e-11):
+  572|     """_solve for any ledger, vectorised over draws: v [D, n] votes, shift [D, n]
+  573|     the R tilt (D as reference), tgt [D, 3] R, D, O votes. A party with no votes
+  574|     gets share exactly 0; the base is the state's largest party, so near-unanimous
+  575|     and minor-party-majority states converge. Returns shares [D, n, 3]."""
+  576|     Dn, n = v.shape
+  577|     tgt = np.maximum(tgt, 0.0)
+  578|     act = tgt[0] > 0
+  579|     P = np.zeros((Dn, n, 3))
+  580|     if not act.any():
+  581|         P[..., 1] = 1.0
+  582|         return P
+  583|     base = int(np.argmax(tgt[0]))
+  584|     if act.sum() == 1:
+  585|         P[..., base] = 1.0
+  586|         return P
+  587|     sh = np.zeros((Dn, n, 3))
+  588|     sh[..., 0] = shift
+  589|     a = np.zeros((Dn, 3))
+  590|     upd = [j for j in range(3) if act[j] and j != base]
+  591|     total = v.sum(axis=1)
+  592|     for _ in range(iters):
+  593|         u = a[:, None, :] + sh
+  594|         u = np.where(act[None, None, :], u - u[..., base:base + 1], -np.inf)
+  595|         e = np.exp(u - u.max(axis=2, keepdims=True))
+  596|         P = e / e.sum(axis=2, keepdims=True)
+  597|         cur = (v[..., None] * P).sum(axis=1)
+  598|         if (np.abs(cur - tgt)[:, act] <= tol * total[:, None] + 1e-9).all():
+  599|             break
+  600|         for j in upd:
+  601|             a[:, j] += np.log(tgt[:, j] / np.maximum(cur[:, j], 1e-300))
+  602|     return P
+  603| 
+  604| 
+  605| def _solve_scalar(v, shift, tR, tO):
+  606|     """_solve's signature on _solve_ledger (for _black_south_bound in general years)."""
+  607|     tgt = np.array([[tR, max(v.sum() - tR - tO, 0.0), tO]])
+  608|     P = _solve_ledger(v[None, :], shift[None, :], tgt)[0]
+  609|     return P[:, 0], P[:, 2]
+  610| 
+  611| 
+  612| def general_fit(inp: Inputs, year: int, draws: int, seed: int, delta_draws: np.ndarray | None = None,
+  613|                 pop_cv: dict | None = None) -> Fit:
+  614|     """Any year with neither 1920's natural experiment nor a base year.
+  615| 
+  616|     Per draw d:
+  617|       L   legal: legal_can(inp, year) (women_vote, black_can, white_can,
+  618|           alien_voting, other_citizen); legislature states (no_popular) cast 0.
+  619|       X   Black Southern exclusion (1868–1976): a beta draw of the share kept
+  620|           from voting, era prior BLACK_SOUTH_EXCLUDED [I]; Reconstruction low.
+  621|       T   turnout: group logit offsets drawn from era priors (women, naturalized,
+  622|           aliens, Black, other) [I], plus one shift per state (bisection) so the
+  623|           state's votes are exactly R + D + O. If the ledger exceeds 97% of the
+  624|           eligible, the state's adults are scaled up (flagged).
+  625|       C   choice: R tilts drawn from era priors (women δ, Black β_B, naturalized
+  626|           β_N, other β_O) [I]; per state the R, D and O intercepts are solved
+  627|           exactly (_solve_ledger: zero-vote parties get 0). O is spread like
+  628|           carry_forward (one intercept per state). 1892–1964: the C3b bound.
+  629|       delta_draws: optional δ draws from a 1920 fit to use for 1920–1940 in
+  630|           place of the summary prior DELTA_1920.
+  631|       pop_cv: census-noise CVs by group (POP_CV by default; zeros for run.uncertainty_budget).
+  632|     """
+  633|     rng = np.random.default_rng(seed + year)
+  634|     D = draws
+  635|     yy = year % 100
+  636|     c0 = inp.cells.reset_index(drop=True)
+  637|     acol = 'adults20' if 'adults20' in c0 else 'adults'
+  638|     can0, reason0 = legal_can(inp, year)
+  639| 
+  640|     # ── Ledger: R, D, O per state; targets are R + D + O (verify checks those) ──
+  641|     rr = inp.returns
+  642|     col = lambda k: rr[f'{k}{yy}'] if f'{k}{yy}' in rr else pd.Series(0.0, index=rr.index)
+  643|     led = pd.DataFrame({k: pd.to_numeric(col(k), errors='coerce') for k in 'RDOTP'}).fillna(0.0)
+  644|     if f'O{yy}' not in rr:
+  645|         led['O'] = (led['T'] - led['R'] - led['D']).clip(lower=0)
+  646|     ev_idx = set(map(str, getattr(inp.ev, 'index', [])))
+  647|     keep = set(map(str, led.index)) | ev_idx | set(inp.no_popular)
+  648|     dropped = sorted(set(c0.state) - keep)
+  649|     c0 = c0[~c0.state.isin(dropped)].reset_index(drop=True) if dropped else c0
+  650|     if dropped:
+  651|         m_keep = ~inp.cells.reset_index(drop=True).state.isin(dropped).to_numpy()
+  652|         can0, reason0 = can0[m_keep], [r for r, k in zip(reason0, m_keep) if k]
+  653|     states = sorted(set(map(str, led.index)) | set(c0.state) | (ev_idx & set(inp.no_popular)))
+  654|     missing = sorted(set(states) - set(map(str, led.index)))
+  655|     led = led.reindex(states).fillna(0.0)
+  656|     for s in inp.no_popular:
+  657|         if s in led.index:
+  658|             led.loc[s, ['R', 'D', 'O', 'T', 'P']] = 0.0
+  659|     R, Dm, O = (led[k].to_numpy(float) for k in 'RDO')
+  660|     R, Dm, O = np.maximum(R, 0), np.maximum(Dm, 0), np.maximum(O, 0)
+  661|     T = R + Dm + O
+  662|     t_mismatch = {s: float(a - b) for s, a, b in zip(states, led['T'], T) if abs(a - b) > 0.5 and a > 0}
+  663| 
+  664|     # ── Synthetic cells: a state with votes but no population cells ──
+  665|     women_ok = lambda s: year >= 1920 or s in inp.women_vote
+  666|     pop_s = c0.groupby('state')[acol].sum()
+  667|     syn_rows = []
+  668|     for s, tv in zip(states, T):
+  669|         if tv > 0 and pop_s.get(s, 0.0) <= 0:
+  670|             sexes = ['M', 'F'] if women_ok(s) else ['M']
+  671|             for x in sexes:
+  672|                 syn_rows.append({'state': s, 'sex': x, 'group': 'native_white', acol: tv / 0.6 / len(sexes)})
+  673|     c = c0.assign(synthetic=False)
+  674|     if syn_rows:
+  675|         c = pd.concat([c, pd.DataFrame(syn_rows).assign(synthetic=True)], ignore_index=True)
+  676|         can0 = np.concatenate([can0, np.ones(len(syn_rows))])
+  677|         reason0 = list(reason0) + [''] * len(syn_rows)
+  678|     S, C = len(states), len(c)
+  679|     sidx = np.array([states.index(s) for s in c.state])
+  680|     female = (c.sex == 'F').to_numpy()
+  681|     grp = c.group.to_numpy()
+  682|     black, nat, alien, other = (grp == 'black'), (grp == 'foreign_white_naturalized'), (grp == 'foreign_white_alien'), (grp == 'other')
+  683|     south_state = np.array([s in SOUTH for s in states])
+  684|     south_cell = south_state[sidx]
+  685|     no_pop = np.array([s in inp.no_popular for s in states])
+  686| 
+  687|     def per_state(x):
+  688|         out = np.zeros((x.shape[0], S))
+  689|         np.add.at(out, (slice(None), sidx), x)
+  690|         return out
+  691| 
+  692|     # ── P: population draws ──
+  693|     cv_c = c.group.map(pop_cv or POP_CV).fillna(0.0 if pop_cv else 0.05).to_numpy()
+  694|     a = c[acol].fillna(0.0).to_numpy(float)[None, :] * np.exp(rng.normal(0, 1, (D, C)) * cv_c - cv_c ** 2 / 2)
+  695| 
+  696|     # ── L, X: legal and practical eligibility ──
+  697|     can = np.broadcast_to(can0, (D, C)).copy()
+  698|     reason = list(reason0)
+  699|     contradict = []
+  700|     for s in np.where((T > 0) & ((a * can).sum(axis=0) @ np.eye(S)[sidx] <= 0))[0]:
+  701|         # Votes cast where the coded rules bar everyone: the rules lose (men first).
+  702|         m = (sidx == s) & ~female if ((sidx == s) & ~female & (a[0] > 0)).any() else (sidx == s)
+  703|         can[:, m] = 1.0
+  704|         for i in np.where(m)[0]:
+  705|             reason[i] = ''
+  706|         contradict.append(states[s])
+  707|     x_bs = _draw_beta(rng, BLACK_SOUTH_EXCLUDED, year, D) if year >= 1868 else np.zeros(D)
+  708|     bs = black & south_cell
+  709|     excluded = np.zeros((D, C))
+  710|     excluded[:, bs] = can[:, bs] * x_bs[:, None]
+  711|     can_eff = can - excluded
+  712| 
+  713|     # ── T: turnout ──
+  714|     pri = {'women_turnout': WOMEN_TURNOUT, 'naturalized_turnout': NAT_TURNOUT, 'alien_turnout': ALIEN_TURNOUT,
+  715|            'black_turnout': BLACK_TURNOUT, 'other_turnout': OTHER_TURNOUT}
+  716|     dr = {k: _draw_normal(rng, tab, year, D) for k, tab in pri.items()}
+  717|     off = (female[None, :] * dr['women_turnout'][:, None] + nat[None, :] * dr['naturalized_turnout'][:, None]
+  718|            + alien[None, :] * dr['alien_turnout'][:, None] + black[None, :] * dr['black_turnout'][:, None]
+  719|            + other[None, :] * dr['other_turnout'][:, None])
+  720|     elig = a * can_eff
+  721|     E = per_state(elig)
+  722|     cap = 0.97
+  723|     need = np.where(E > 0, T[None, :] / np.maximum(cap * E, 1e-9), 1.0)
+  724|     grow = np.maximum(need, 1.0)
+  725|     scaled = (grow > 1).mean(axis=0)
+  726|     a = a * grow[:, sidx]
+  727|     elig = a * can_eff
+  728|     lo, hi = np.full((D, S), -30.0), np.full((D, S), 30.0)
+  729|     for _ in range(100):
+  730|         mid = (lo + hi) / 2
+  731|         v = per_state(elig * expit(off + mid[:, sidx]))
+  732|         over = v > T[None, :]
+  733|         hi, lo = np.where(over, mid, hi), np.where(over, lo, mid)
+  734|     k = (lo + hi) / 2
+  735|     t = np.where(elig > 0, expit(off + k[:, sidx]), 0.0)
+  736|     t[:, (T <= 0)[sidx]] = 0.0
+  737|     V = per_state(elig * t)
+  738|     t = np.minimum(t * np.where(V > 0, T[None, :] / np.maximum(V, 1e-300), 0.0)[:, sidx], 1.0)
+  739|     votes_cell = elig * t
+  740| 
+  741|     # ── C: choice ──
+  742|     if delta_draws is not None and 1920 <= year <= 1940:
+  743|         delta = np.asarray(delta_draws, float)[np.arange(D) % len(delta_draws)]
+  744|     else:
+  745|         delta = _draw_normal(rng, WOMEN_TILT, year, D)
+  746|     beta_B = _draw_normal(rng, BLACK_TILT, year, D)
+  747|     beta_N = _draw_normal(rng, NAT_TILT, year, D)
+  748|     beta_O = _draw_normal(rng, OTHER_TILT, year, D)
+  749|     shift_R = (female[None, :] * delta[:, None] + black[None, :] * beta_B[:, None]
+  750|                + (nat | alien)[None, :] * beta_N[:, None] + other[None, :] * beta_O[:, None])
+  751|     share = np.zeros((D, C, 3))
+  752|     share[..., 1] = 1.0
+  753|     ledger = np.stack([R, Dm, O], axis=1)
+  754|     for s in range(S):
+  755|         idx = np.where(sidx == s)[0]
+  756|         if len(idx) == 0 or T[s] <= 0:
+  757|             continue
+  758|         v = votes_cell[:, idx]
+  759|         tgt = ledger[s][None, :] / T[s] * v.sum(axis=1, keepdims=True)
+  760|         share[:, idx, :] = _solve_ledger(v, shift_R[:, idx], tgt)
+  761|     bound_hits = np.zeros(S)
+  762|     nsb_votes = votes_cell[:, black & ~south_cell].sum(axis=1)
+  763|     bound_on = BOUND_YEARS[0] <= year <= BOUND_YEARS[1] and bs.any() and bool((nsb_votes > 0).all())
+  764|     if bound_on:
+  765|         bound_hits = _black_south_bound(D, S, sidx, south_state & (T > 0), black, south_cell, female, votes_cell, share,
+  766|                                         can_eff, t, R, Dm, O, np.maximum(T, 1e-9), shift_R, solver=_solve_scalar)
+  767| 
+  768|     world = World(adults=a, can=can_eff, t=t, share=share, barred_by={'legal': 1 - can, 'excluded': can - can_eff})
+  769|     # AK and HI (from 1960) aren't in geo.REGION_OF yet: 'west' so cohort merging has a region.
+  770|     cells = c.assign(region=c.state.map(REGION_OF).fillna('west'), south=south_cell, legal_reason=reason)
+  771|     F = per_state(a * can_eff * female[None, :])
+  772|     M = per_state(a * can_eff * ~female[None, :])
+  773|     vF, vM = per_state(votes_cell * female[None, :]), per_state(votes_cell * ~female[None, :])
+  774|     prior_used = {k: prior_at(tab, year) for k, tab in
+  775|                   {**pri, 'black_south_excluded': BLACK_SOUTH_EXCLUDED, 'women_tilt': WOMEN_TILT,
+  776|                    'black_tilt': BLACK_TILT, 'naturalized_tilt': NAT_TILT, 'other_tilt': OTHER_TILT}.items()}
+  777|     P = led['P'].to_numpy(float)
+  778|     diag = {
+  779|         'states': states, 'year': year, 'method': 'general_fit', 'old_states': sorted(inp.women_vote),
+  780|         'priors': prior_used,
+  781|         'no_popular': sorted(s for s, n in zip(states, no_pop) if n),
+  782|         'missing_returns': missing,
+  783|         'dropped_cell_states': dropped,
+  784|         'synthetic_cell_states': sorted({r['state'] for r in syn_rows}),
+  785|         'legal_rules_contradicted': contradict,
+  786|         'T_column_mismatch': t_mismatch,
+  787|         'zero_party': {p: [s for s, x, tv in zip(states, arr, T) if tv > 0 and x <= 0]
+  788|                        for p, arr in (('R', R), ('D', Dm), ('O', O))},
+  789|         'other_majority': [s for s, o, tv in zip(states, O, T) if tv > 0 and o > 0.5 * tv],
+  790|         'third_candidate_share_of_O': {s: float(p / o) for s, p, o in zip(states, P, O) if o > 0 and p > 0},
+  791|         'adults_scaled_share': dict(zip(states, scaled.tolist())),
+  792|         'turnout_shift': k,
+  793|         'women_turnout': vF / np.maximum(F, 1), 'men_turnout': vM / np.maximum(M, 1),
+  794|         'votes_F': vF, 'votes_M': vM, 'F20': F, 'M20': M, 'T20': T,
+  795|         'black_south_bound_on': bound_on,
+  796|         'black_south_bound_share': dict(zip(states, (bound_hits / D).tolist())),
+  797|     }
+  798|     params = {'delta': delta, 'beta_B': beta_B, 'beta_N': beta_N, 'beta_O': beta_O,
+  799|               't_black_south_rel': 1 - x_bs, 'turnout_shift': k, **{f'off_{k_}': v_ for k_, v_ in dr.items()}}
+  800|     return Fit(world=world, cells=cells, params=params, diagnostics=diag)
+```
+
+## `simharness/benchmarks.py`
+
+```python
+    1| """Held-out benchmarks. Only the validation stages (Run.evaluate, and
+    2| Run.verify's Corder–Wolbrecht comparison) import this module; the backbone,
+    3| the agents and the publisher never do (checked by test_benchmarks_isolated in
+    4| tests/test_isolation.py, which parses every module and script).
+    5| """
+    6| from __future__ import annotations
+    7| 
+    8| import numpy as np
+    9| import pandas as pd
+   10| 
+   11| from .config import CACHE
+   12| from .evaluate import check
+   13| 
+   14| CW_STATES = ['CT', 'IL', 'MA', 'MI', 'NY']
+   15| 
+   16| 
+   17| def corder_wolbrecht_any_year() -> pd.DataFrame:
+   18|     """Every year and state in the Corder–Wolbrecht file (for `run verify`); empty when it isn't in the cache."""
+   19|     f = CACHE / 'benchmarks/corder_wolbrecht_turnout_by_sex.csv'
+   20|     return pd.read_csv(f) if f.exists() else pd.DataFrame(columns=['year', 'state'])
+   21| 
+   22| 
+   23| def corder_wolbrecht() -> pd.DataFrame:
+   24|     b = pd.read_csv(CACHE / 'benchmarks/corder_wolbrecht_turnout_by_sex.csv')
+   25|     return b[(b.year == 1920) & b.state.isin(CW_STATES)].set_index('state')
+   26| 
+   27| 
+   28| def natural_experiment(fit, inp, extras) -> list:
+   29|     dg = fit.diagnostics
+   30|     states = dg['states']
+   31|     idx = {s: i for i, s in enumerate(states)}
+   32|     cw = corder_wolbrecht()
+   33|     # Corder–Wolbrecht's "eligible" counts are all adults 21+ (they equal the
+   34|     # census 21+ totals, non-citizens included), so the like-for-like
+   35|     # comparison divides the backbone's women's votes by all women 21+. The
+   36|     # citizen-denominator rate is reported alongside (`backbone_citizen`).
+   37|     c = fit.cells
+   38|     all_f = np.zeros((fit.world.adults.shape[0], len(states)))
+   39|     fem = (c.sex == 'F').to_numpy()
+   40|     sidx = np.array([idx[s] for s in c.state])
+   41|     np.add.at(all_f, (slice(None), sidx[fem]), fit.world.adults[:, fem])
+   42|     wt = dg['votes_F'] / np.maximum(all_f, 1)
+   43|     wt_cit = dg['votes_F'] / np.maximum(dg['F20'], 1)
+   44|     rows, inside = [], []
+   45|     for s in CW_STATES:
+   46|         d = wt[:, idx[s]]
+   47|         lo, hi = np.quantile(d, 0.05), np.quantile(d, 0.95)
+   48|         est = float(cw.loc[s, 'women_turnout'])
+   49|         rows.append({'state': s, 'backbone': round(float(np.median(d)) * 100, 1), 'lo90': round(lo * 100, 1),
+   50|                      'hi90': round(hi * 100, 1), 'corder_wolbrecht': round(est * 100, 1),
+   51|                      'cw_lo95': round(float(cw.loc[s, 'women_turnout_lo95']) * 100, 1),
+   52|                      'cw_hi95': round(float(cw.loc[s, 'women_turnout_hi95']) * 100, 1),
+   53|                      'backbone_citizen': round(float(np.median(wt_cit[:, idx[s]])) * 100, 1),
+   54|                      'method': 'ratio (women voted in 1916)' if s in inp.women16 else 'residual (1916 men-only)'})
+   55|         inside.append(lo <= est <= hi)
+   56|     mae = float(np.mean([abs(r['backbone'] - r['corder_wolbrecht']) for r in rows]))
+   57|     cover = float(np.mean(inside))
+   58|     out = [check('N1', 'Backbone women\'s turnout vs Corder–Wolbrecht (1920)', {'mae_points': round(mae, 1), 'coverage_90': cover, 'rows': rows},
+   59|                  'MAE ≤ 8 points and ≥ 70% inside the 90% interval', mae <= 8 and cover >= 0.7)]
+   60| 
+   61|     # N2 placebo: GA and MS, where women couldn't register in time
+   62|     if inp.closed_1920:
+   63|         c = fit.cells
+   64|         fem_cit = ((c.sex == 'F') & (c.group != 'foreign_white_alien')).to_numpy()
+   65|         prow = []
+   66|         ok = True
+   67|         for s in sorted(inp.closed_1920):
+   68|             m = fem_cit & (c.state == s).to_numpy()
+   69|             Fc = fit.world.adults[:, m].sum(axis=1)
+   70|             W = dg['T20'][idx[s]] - dg['men_turnout_pred'][:, idx[s]] * dg['M20'][:, idx[s]]
+   71|             w = W / Fc
+   72|             med = float(np.median(w))
+   73|             prow.append({'state': s, 'implied_women_turnout': round(med * 100, 1),
+   74|                          'lo90': round(float(np.quantile(w, 0.05)) * 100, 1), 'hi90': round(float(np.quantile(w, 0.95)) * 100, 1)})
+   75|             ok = ok and abs(med) <= 0.05
+   76|         out.append(check('N2', 'Placebo: implied women\'s turnout where women couldn\'t register (GA, MS)', prow, 'within ±5 points of 0', ok,
+   77|                          'Documented: franchise/state_franchise_1920.csv women_nov1920_note (NPS).'))
+   78|     else:
+   79|         out.append(check('N2', 'Placebo (GA, MS)', None, '±5 points', None, 'not run: the registration closure is not documented in the data'))
+   80|     return out
+   81| 
+   82| 
+   83| def agent_checks(an, fit, run, extras) -> list:
+   84|     if not an:
+   85|         return [check(i, n, None, t, None, 'not run: no agent answers') for i, n, t in [
+   86|             ('N3', 'Agent women\'s turnout vs Corder–Wolbrecht', 'MAE ≤ 10'), ('L1', 'Recall probe', 'reported'),
+   87|             ('L2', 'Label swap', '< 20% follow the label'), ('A1', 'Cohort bias', 'reported'),
+   88|             ('A2', 'Homogenization index', '≤ 25%'), ('A3', 'Prompt and model sensitivity', 'SD < |effect|; signs agree'),
+   89|             ('A4', 'Stereotype audit', '≤ 10%')]]
+   90|     out = []
+   91|     # N3: agents' stated turnout, women in the C-W states (control, sonnet)
+   92|     import json
+   93|     agents = json.loads((run.dir / 'agents/agents.json').read_text())
+   94|     ans = run.answers()
+   95|     cw = corder_wolbrecht()
+   96|     rows = []
+   97|     for s in CW_STATES:
+   98|         pv = [ans[f'control|{a["id"]}|{run.bulk}']['data'].get('p_vote', 0) / 100 for a in agents
+   99|               if a['state'] == s and a['sex'] == 'F' and a['group'] != 'foreign_white_alien' and f'control|{a["id"]}|{run.bulk}' in ans]
+  100|         if pv:
+  101|             c = fit.cells
+  102|             f = c[(c.state == s) & (c.sex == 'F')]
+  103|             cit = f[f.group != 'foreign_white_alien'].adults20.sum() / f.adults20.sum()
+  104|             rows.append({'state': s, 'n': len(pv), 'agents': round(float(np.mean(pv)) * cit * 100, 1),
+  105|                          'agents_citizen': round(float(np.mean(pv)) * 100, 1),
+  106|                          'corder_wolbrecht': round(float(cw.loc[s, 'women_turnout']) * 100, 1)})
+  107|     if rows:
+  108|         mae = float(np.mean([abs(r['agents'] - r['corder_wolbrecht']) for r in rows]))
+  109|         out.append(check('N3', 'Agents\' stated turnout, women, vs Corder–Wolbrecht', {'mae_points': round(mae, 1), 'rows': rows}, 'MAE ≤ 10 points', mae <= 10,
+  110|                          f'{sum(r["n"] for r in rows)} women agents in {len(rows)} of 5 states'))
+  111|     else:
+  112|         out.append(check('N3', 'Agents\' stated turnout, women, vs Corder–Wolbrecht', None, 'MAE ≤ 10 points', None, 'not run: no women agents drawn in those states'))
+  113| 
+  114|     l1 = an['l1']
+  115|     out.append(check('L1', 'Recall probe: identifies year / candidates / winner',
+  116|                      {'n': l1['n'], 'year': l1['year_rate'], 'candidates': l1['names_rate'], 'winner': l1['winner_rate'],
+  117|                       'exposed_cohorts': len(l1['exposed_cohorts'])},
+  118|                      'reported; > 50% winner ⇒ memorization-exposed', None,
+  119|                      'memorization-exposed nationally' if an['nationally_exposed'] else 'not exposed nationally'))
+  120|     l2 = an['l2']
+  121|     out.append(check('L2', 'Label swap: choices that follow the label, not the platform', {'n': l2['n'], 'label': l2['label_rate'], 'platform': l2['platform_rate']},
+  122|                      '< 20% follow the label', (l2['label_rate'] is not None and l2['label_rate'] < 0.2) if l2['n'] else None,
+  123|                      'With the order flipped too, following the display position is the same as following the platform here; the test separates label from platform.'))
+  124|     a1 = an['a1']
+  125|     big = [x for x in a1 if x['bias_logit'] is not None and abs(x['bias_logit']) > 1.0]
+  126|     out.append(check('A1', 'Cohort bias (control vs calibrated backbone, logit)',
+  127|                      {'cohorts': len(a1), 'median_abs_bias': round(float(np.median([abs(x['bias_logit']) for x in a1 if x['bias_logit'] is not None])), 3) if a1 else None,
+  128|                       'over_1_logit': len(big), 'mean_tvd': round(float(np.mean([x['tvd'] for x in a1])), 3) if a1 else None},
+  129|                      'reported; |bias| > 1 ⇒ shrunk', None, f'{len(big)} cohorts shrunk for bias'))
+  130|     a2 = an['a2']
+  131|     out.append(check('A2', 'Homogenization index', {'index': a2['homogenization_index'], 'eligible_cohorts': a2['eligible_cohorts']},
+  132|                      '≤ 25%', (a2['homogenization_index'] <= 0.25) if a2['homogenization_index'] is not None else None))
+  133|     for wk, e in an['effects'].items():
+  134|         paras = [v['dr'] for v in e['by_paraphrase'].values()]
+  135|         sd = float(np.std(paras, ddof=1)) if len(paras) > 1 else None
+  136|         shared = e.get('shared_subsample') or {}
+  137|         signs = None
+  138|         if 'sonnet' in shared and 'opus' in shared:
+  139|             signs = bool(np.sign(shared['sonnet']['dr']) == np.sign(shared['opus']['dr']))
+  140|         eff = e['national']['dr']['mean']
+  141|         ok = (sd is not None and sd < abs(eff) and signs is True) if (sd is not None and signs is not None) else None
+  142|         out.append(check(f'A3:{wk}', f'Prompt and model sensitivity, {wk} (two-party logit effect)',
+  143|                          {'national_effect': round(eff, 3), 'paraphrase_sd': round(sd, 3) if sd is not None else None,
+  144|                           'by_paraphrase': {k: round(v, 3) for k, v in zip(e['by_paraphrase'], paras)},
+  145|                           'sonnet_vs_opus': {m: round(v['dr'], 3) for m, v in shared.items()}},
+  146|                          'paraphrase SD < |effect| and Sonnet/Opus agree on sign', ok))
+  147|     a4 = an['a4']
+  148|     out.append(check('A4', 'Stereotype audit: reasons resting on a group label', {'audited': a4['audited'], 'flagged': a4['flagged'], 'rate': a4['rate']},
+  149|                      '≤ 10%', a4['rate'] <= 0.10, 'Heuristic first pass (quotes.LABEL_DRIVEN); flagged examples in analysis.json.'))
+  150|     return out
+```
+
+## `simharness/cohorts.py`
+
+```python
+    1| """Agent cohorts: strata of the cell table, merged to a cost cap.
+    2| 
+    3| Stratification for 1920 (justified in METHOD.md §A.2): region × sex ×
+    4| race/nativity/citizenship. These are the dimensions the franchise turned on in
+    5| 1920 (sex, citizenship, race in practice) plus region, which carried the
+    6| parties' coalitions. Age and urban/rural vary within a cohort's agents (persona
+    7| diversity) but don't define cohorts: no 1920 source identifies their effect.
+    8| 
+    9| Merge rule: while there are more cohorts than the cap, or any cohort holds
+   10| under `min_share` of eligible-or-barred adults, fold the smallest into the same
+   11| sex and group in the nearest region (geo.NEAREST_REGION); a cohort with no
+   12| same-(sex, group) neighbour left folds into the national cohort for that sex
+   13| and group. The rule is deterministic, so a cohort's key names every region it
+   14| holds.
+   15| """
+   16| from __future__ import annotations
+   17| 
+   18| import pandas as pd
+   19| 
+   20| from .geo import NEAREST_REGION
+   21| 
+   22| GROUP_LABEL = {
+   23|     'native_white': 'native-born white', 'foreign_white_naturalized': 'naturalized immigrant',
+   24|     'foreign_white_alien': 'immigrant non-citizen', 'black': 'Black', 'other': 'American Indian and Asian',
+   25| }
+   26| SEX_LABEL = {'M': 'men', 'F': 'women'}
+   27| 
+   28| 
+   29| def build(cells: pd.DataFrame, cap: int = 40, min_share: float = 0.004, year: int = 1920) -> tuple[dict, dict]:
+   30|     """Returns ({cohort key: cohort}, {cell index: cohort key}). year picks the era's group labels
+   31|     (agentlayer.groups_for); 1868–1968 use GROUP_LABEL."""
+   32|     labels, upper = GROUP_LABEL, str.capitalize
+   33|     if not 1868 <= year < 1972:
+   34|         from .agentlayer import groups_for
+   35|         labels, upper = groups_for(year)['labels'], lambda x: x[0].upper() + x[1:]
+   36|     total = cells.adults20.sum()
+   37|     groups = {}
+   38|     for i, r in cells.iterrows():
+   39|         k = (r.region, r.sex, r.group)
+   40|         groups.setdefault(k, []).append(i)
+   41|     members = {k: set([k[0]]) for k in groups}
+   42| 
+   43|     def size(k):
+   44|         return cells.loc[groups[k], 'adults20'].sum()
+   45| 
+   46|     while True:
+   47|         # A national cohort can't merge further, so it's never picked.
+   48|         keys = [k for k in sorted(groups, key=size) if k[0] != 'national']
+   49|         small = [k for k in keys if size(k) < min_share * total]
+   50|         if (len(groups) <= cap and not small) or not keys:
+   51|             break
+   52|         k = small[0] if small else keys[0]
+   53|         region, sex, group = k
+   54|         target = next(((r, sex, group) for r in NEAREST_REGION.get(region, []) if (r, sex, group) in groups and (r, sex, group) != k), None)
+   55|         if target is None:
+   56|             target = ('national', sex, group)
+   57|             groups.setdefault(target, [])
+   58|             members.setdefault(target, set())
+   59|         groups[target] += groups.pop(k)
+   60|         members[target] |= members.pop(k)
+   61| 
+   62|     cohorts, cell_to = {}, {}
+   63|     for k, idx in groups.items():
+   64|         regions = '+'.join(sorted(members[k]))
+   65|         key = f'{regions}:{k[1]}:{k[2]}'
+   66|         sub = cells.loc[idx]
+   67|         by_state = sub.groupby('state').adults20.sum().to_dict()
+   68|         cohorts[key] = {
+   69|             'key': key, 'region': k[0] if len(members[k]) == 1 else 'mixed', 'regions': sorted(members[k]),
+   70|             'sex': k[1], 'group': k[2], 'adults': float(sub.adults20.sum()),
+   71|             'adults_by_state': by_state,
+   72|             'label': f'{upper(labels[k[2]])} {SEX_LABEL[k[1]]}, {regions.replace("+", ", ")}',
+   73|         }
+   74|         for i in idx:
+   75|             cell_to[i] = key
+   76|     return cohorts, cell_to
+```
+
+## `simharness/config.py`
+
+```python
+    1| """Run configuration: everything that determines a run, hashed into its id.
+    2| 
+    3| A run is re-hashed by (election, what-ifs, seed, models, prompt version, draw
+    4| counts, agent counts, data manifest). Two runs with the same hash must produce
+    5| the same numbers; the run directory is named by it.
+    6| """
+    7| from __future__ import annotations
+    8| 
+    9| import hashlib
+   10| import json
+   11| import os
+   12| from dataclasses import asdict, dataclass, field
+   13| from pathlib import Path
+   14| 
+   15| HERE = Path(__file__).resolve().parent
+   16| # The repo root: configs/, profiles/, whatifs/, extracts/, runs/, sessions/ and serve/bundles/
+   17| # all sit next to the simharness package.
+   18| ROOT = HERE.parent
+   19| RUNS = ROOT / 'runs'
+   20| 
+   21| # Raw downloads live outside the web repo: some carry terms that forbid
+   22| # redistribution, and the UI agent's dev server shouldn't watch them.
+   23| CACHE = Path(os.environ.get(
+   24|     'SIMHARNESS_CACHE',
+   25|     str(Path.home() / 'research_notes/historical_election_sim_data/harness_cache'),
+   26| ))
+   27| 
+   28| 
+   29| @dataclass
+   30| class AgentConfig:
+   31|     bulk_model: str = 'claude-sonnet-5-5'
+   32|     check_model: str = 'claude-opus-5-5'
+   33|     check_share: float = 0.2          # share of agents also asked on check_model
+   34|     per_cohort: int = 6               # agents per agent cohort
+   35|     paraphrases: int = 3              # control and counterfactual paraphrases
+   36|     effort: str = 'low'               # output_config.effort for the voice layer
+   37|     backend: str = 'anthropic'        # anthropic | anthropic-batch | transcript
+   38|     max_cohorts: int = 40             # cost cap; the merge rule folds the smallest
+   39|     arms: list | None = None          # subset of control, cf, swap, probe; None sends all
+   40|     only_cohorts: list | None = None  # cohort keys to interview; None interviews all
+   41|     max_tokens: int = 4000            # per-request output ceiling (also the estimate's worst case)
+   42|     # Compiled what-ifs only; the defaults leave hand-written what-ifs' runs as they were (D33):
+   43|     replace_barred: bool = False      # someone who can't vote in either world takes no interview slot
+   44|     focus_cohorts: int = 0            # extra cohorts the staging pass names as the change's decisive groups
+   45|     escalate_model: str | None = None  # re-ask, on this model, anyone whose answer didn't take the change as true
+   46|     escalate_max: int = 24            # cap on escalated requests per run
+   47|     fast: bool = False                # fast mode for this layer's Opus requests (escalations); 2x price
+   48| 
+   49| 
+   50| @dataclass
+   51| class ResearchConfig:
+   52|     """The once-per-what-if calls behind a typed what-if: compile → research → extract → stage
+   53|     (scenario.py, evidence.py, world.py), and the audit of the interviews' reasoning. They run
+   54|     once per change, not once per voter, so they can afford the strongest model and effort (D33)."""
+   55|     compile_model: str = 'claude-sonnet-5-5'
+   56|     research_model: str = 'claude-sonnet-5-5'
+   57|     extract_model: str = 'claude-sonnet-5-5'  # Haiku judged every analogue unreliable and extracted none (D15)
+   58|     world_model: str | None = None     # the staging pass (world.py); None skips it
+   59|     audit_model: str | None = None     # the reasoning audit (world.py); None skips it
+   60|     compile_effort: str = 'low'
+   61|     research_effort: str = 'low'
+   62|     extract_effort: str = 'low'
+   63|     world_effort: str = 'high'
+   64|     audit_effort: str = 'medium'
+   65|     pass_max_tokens: int = 3000        # compile/stage/audit output ceiling; Opus thinking counts toward it
+   66|     fast: bool = False                 # fast mode for the Opus passes (compile, extract, stage, audit); 2x price
+   67|     max_searches: int = 4              # web_search max_uses per research call
+   68|     research_max_tokens: int = 4000
+   69| 
+   70| 
+   71| @dataclass
+   72| class RunConfig:
+   73|     election: int = 1920
+   74|     election_day: str = '1920-11-02'
+   75|     context_cutoff: str = '1920-11-01'  # last admissible source date
+   76|     mode: str = 'truth'                 # truth | strict
+   77|     what_ifs: list = field(default_factory=lambda: ['no-19th', 'fifteenth', 'league'])
+   78|     seed: int = 1920
+   79|     draws: int = 400
+   80|     prompt_version: str = 'p1'
+   81|     holdout: list = field(default_factory=lambda: 'CA FL ID IN LA MI MO MT NC NY OH OK'.split())
+   82|     agents: AgentConfig = field(default_factory=AgentConfig)
+   83|     research: ResearchConfig = field(default_factory=ResearchConfig)
+   84|     max_combo: int = 3                  # largest what-if combination published (2^n grows fast)
+   85| 
+   86|     @classmethod
+   87|     def load(cls, path: str | Path) -> 'RunConfig':
+   88|         raw = json.loads(Path(path).read_text())
+   89|         # Spending caps were removed; older configs that still carry them load as before.
+   90|         agents = AgentConfig(**{k: v for k, v in raw.pop('agents', {}).items() if k not in ('max_requests', 'max_dollars')})
+   91|         research = ResearchConfig(**{k: v for k, v in raw.pop('research', {}).items() if k != 'whatif_dollars'})
+   92|         return cls(**raw, agents=agents, research=research)
+   93| 
+   94|     def to_dict(self) -> dict:
+   95|         return asdict(self)
+   96| 
+   97|     def run_id(self, data_manifest: dict | None = None) -> str:
+   98|         # G1: the code is part of the instrument, so a changed prompt or module gets a new run folder.
+   99|         code = hashlib.sha256(b''.join(p.read_bytes() for p in sorted(HERE.glob('*.py')))).hexdigest()
+  100|         blob = json.dumps({'config': self.to_dict(), 'data': data_manifest or {}, 'code': code}, sort_keys=True)
+  101|         return f'{self.election}-{hashlib.sha256(blob.encode()).hexdigest()[:10]}'
+```
+
+## `simharness/data.py`
+
+```python
+    1| """Loaders for the harness cache. Benchmarks are not loaded here (see
+    2| benchmarks.py): the fitting code never imports them.
+    3| 
+    4| Files (all under config.CACHE; provenance in each folder's PROVENANCE-*.md):
+    5|   labels/state_pres_1916_1920_1924.csv     certified returns (labels)
+    6|   population/adults_1920_by_state.csv      1920 census, 21+, sex × race/nativity/citizenship
+    7|   population/adults_1910_by_state.csv      the same for 1910 (1916 interpolation)
+    8|   population/urban_rural_1920_by_state.csv urban share (persona diversity)
+    9|   franchise/state_franchise_1920.csv       poll tax, literacy test, alien voting
+   10|   franchise/women_suffrage_pre19th.csv     women's presidential suffrage before the 19th
+   11|   sources/corpus_1920.jsonl                dated Chronicling America items
+   12|   context/platforms_1920.json              verified platform planks
+   13| 
+   14| General years (every election 1789–2024 except 1916/1920/1924, which keep the
+   15| files above and load exactly as before):
+   16|   labels/state_pres_all.csv                1868–2024 returns (scripts/build_returns.py)
+   17|   labels/state_pres_1789_1864.csv          1789–1864 returns (same columns)
+   18|   population/adults_<census>_by_state_nhgis.csv    21+ by census
+   19|   population/adults18_<census>_by_state_nhgis.csv  18+ (1950 on)
+   20|   franchise/state_franchise_all.csv        1868–1968 (scripts/build_franchise.py)
+   21|   franchise/state_franchise_1789_1864.csv, franchise/state_franchise_1972_2024.csv
+   22| """
+   23| from __future__ import annotations
+   24| 
+   25| import hashlib
+   26| import json
+   27| import re
+   28| 
+   29| import numpy as np
+   30| import pandas as pd
+   31| 
+   32| from .backbone import Inputs
+   33| from .config import CACHE
+   34| from .geo import ALL_STATES, CODE_OF, STATES_1920
+   35| 
+   36| LEGACY = (1916, 1920, 1924)
+   37| 
+   38| GROUP_MAP = {
+   39|     'native_white': 'native_white',
+   40|     'native_white_native_parentage': 'native_white',
+   41|     'native_white_foreign_parentage': 'native_white',
+   42|     'native_white_foreign_or_mixed_parentage': 'native_white',
+   43|     'native_white_mixed_parentage': 'native_white',
+   44|     'foreign_white_naturalized': 'foreign_white_naturalized',
+   45|     'foreign_white_first_papers': 'foreign_white_alien',
+   46|     'foreign_white_alien': 'foreign_white_alien',
+   47|     'foreign_white_unknown': 'foreign_white_unknown',
+   48|     'negro': 'black',
+   49|     'black': 'black',
+   50|     'other_races': 'other',
+   51|     'other': 'other',
+   52|     # 1910 women: citizenship wasn't asked of women in 1910.
+   53|     'foreign_white_citizenship_not_tabulated': 'foreign_white_unknown',
+   54|     # Modern (ACS / decennial 1980 on).
+   55|     'white_nh_native': 'native_white',
+   56|     'naturalized': 'foreign_white_naturalized',
+   57|     'noncitizen': 'foreign_white_alien',
+   58|     'black_nh_native': 'black',
+   59|     'other_native': 'other',
+   60|     # Early republic (1790–1860).
+   61|     'white': 'native_white',
+   62|     'free_colored': 'black',
+   63|     'enslaved': 'black',
+   64| }
+   65| 
+   66| 
+   67| def manifest(paths: list) -> dict:
+   68|     out = {}
+   69|     for p in paths:
+   70|         f = CACHE / p
+   71|         if f.exists():
+   72|             out[p] = hashlib.sha256(f.read_bytes()).hexdigest()[:16]
+   73|     return out
+   74| 
+   75| 
+   76| def _returns_legacy(year: int = 1920) -> pd.DataFrame:
+   77|     d = pd.read_csv(CACHE / 'labels/state_pres_1916_1920_1924.csv')
+   78|     out = {}
+   79|     for y in (1916, 1920, 1924):
+   80|         x = d[d.year == y].set_index('state')
+   81|         out[f'R{y % 100}'] = x.rep
+   82|         out[f'D{y % 100}'] = x.dem
+   83|         out[f'O{y % 100}'] = x.total - x.rep - x.dem
+   84|         out[f'T{y % 100}'] = x.total
+   85|         if y == 1924:
+   86|             out['P24'] = x.wp_progressive.fillna(0)  # La Follette's own votes within `other` (Wikipedia per-party column)
+   87|     r = pd.DataFrame(out).loc[STATES_1920].astype(float)
+   88|     x = d[d.year == year].set_index('state').loc[STATES_1920]
+   89|     # 1920: NARA's count; 1924: Algara–Amlani's electoral votes by party (same 1910 apportionment).
+   90|     ev = (x.nara_ev_total if year == 1920 else x.aa_state_ev_dem + x.aa_state_ev_rep + x.aa_state_ev_other).astype(int)
+   91|     assert int(ev.sum()) == 531
+   92|     return r, ev
+   93| 
+   94| 
+   95| def _long_pop(path) -> pd.DataFrame:
+   96|     p = pd.read_csv(path)
+   97|     p = p[p.state.isin(STATES_1920) & (p.group != 'TOTAL')].copy()
+   98|     p['group'] = p.group.map(lambda g: GROUP_MAP.get(g, g))
+   99|     return p.groupby(['state', 'sex', 'group'], as_index=False)['count'].sum()
+  100| 
+  101| 
+  102| def _population_legacy(year: int = 1920) -> pd.DataFrame:
+  103|     """Cells state × sex × group with adults20 and adults16 (1916 by geometric
+  104|     interpolation between the 1910 and 1920 counts, truth mode). adults20 holds
+  105|     the election year's adults (the name is 1920's): for 1924, the 1920 count
+  106|     aged along the cell's 1910→1920 trend to November 1924 [I] (DISCLOSURES C13)."""
+  107|     p20 = _long_pop(CACHE / 'population/adults_1920_by_state.csv')
+  108|     f10 = CACHE / 'population/adults_1910_by_state.csv'
+  109|     p10 = _long_pop(f10) if f10.exists() else None
+  110|     # Unknown citizenship: split between naturalized and alien in the state-sex ratio.
+  111|     def resolve(p):
+  112|         """Unknown citizenship → naturalized/alien in the state-sex ratio; where a
+  113|         sex has no split at all (1910 women), the same state's men's ratio [I]:
+  114|         before 1922 a wife's citizenship followed her husband's."""
+  115|         rows = []
+  116|         split = {}
+  117|         for (s, x), g in p.groupby(['state', 'sex']):
+  118|             d = dict(zip(g.group, g['count']))
+  119|             nat, ali = d.get('foreign_white_naturalized', 0.0), d.get('foreign_white_alien', 0.0)
+  120|             if nat + ali > 0:
+  121|                 split[s] = nat / (nat + ali)
+  122|         for (s, x), g in p.groupby(['state', 'sex']):
+  123|             d = dict(zip(g.group, g['count']))
+  124|             unk = d.pop('foreign_white_unknown', 0.0)
+  125|             nat, ali = d.get('foreign_white_naturalized', 0.0), d.get('foreign_white_alien', 0.0)
+  126|             share = nat / (nat + ali) if nat + ali > 0 else split.get(s, 0.5)
+  127|             if unk:
+  128|                 d['foreign_white_naturalized'] = nat + unk * share
+  129|                 d['foreign_white_alien'] = ali + unk * (1 - share)
+  130|             for k, v in d.items():
+  131|                 rows.append({'state': s, 'sex': x, 'group': k, 'count': v})
+  132|         return pd.DataFrame(rows)
+  133|     p20 = resolve(p20)
+  134|     cells = p20.rename(columns={'count': 'adults20'})
+  135|     if p10 is not None:
+  136|         p10 = resolve(p10).rename(columns={'count': 'adults10'})
+  137|         cells = cells.merge(p10, on=['state', 'sex', 'group'], how='left')
+  138|         # Census days: 15 Apr 1910 and 1 Jan 1920 (9.71 years apart). Election
+  139|         # days: 7 Nov 1916 (6.56 years after the 1910 count) and 2 Nov 1920
+  140|         # (0.84 years after the 1920 count).
+  141|         ratio = (cells.adults20 / cells.adults10).where(cells.adults10 > 0)
+  142|         cells['adults16'] = np.where(ratio.notna(), cells.adults10 * ratio ** (6.56 / 9.71), cells.adults20 * 0.94)
+  143|         # Election day, in years after the 1 Jan 1920 count: 0.84 for 1920, 4.84 for 1924.
+  144|         after = 0.84 + (year - 1920)
+  145|         cells['adults20'] = np.where(ratio.notna(), cells.adults20 * ratio.clip(0.5, 2.0) ** (after / 9.71), cells.adults20)
+  146|         cells['interp'] = np.where(ratio.notna(), 'geometric 1910→1920, extrapolated to Nov 1920', 'fallback')
+  147|     else:
+  148|         cells['adults16'] = cells.adults20 * 0.94
+  149|         cells['interp'] = 'fallback: 1920 × 0.94 [I]'
+  150|     return cells.sort_values(['state', 'sex', 'group']).reset_index(drop=True)
+  151| 
+  152| 
+  153| def _franchise_legacy(year: int = 1920) -> dict:
+  154|     f = pd.read_csv(CACHE / 'franchise/state_franchise_1920.csv')
+  155|     f = f[f.state.isin(STATES_1920)].set_index('state')
+  156|     if year != 1920:
+  157|         # The year's poll tax and literacy test from Gray & Jenkins (presidential rows).
+  158|         gj = pd.read_csv(CACHE / 'franchise/grayjenkins_state_franchise_1916_1920_1924.csv')
+  159|         gj = gj[(gj.year == year) & gj.state.isin(STATES_1920)].set_index('state')
+  160|         f['poll_tax'] = gj.poll_tax.reindex(f.index).fillna(f.poll_tax)
+  161|         f['literacy_test'] = gj.lit_test.reindex(f.index).fillna(f.literacy_test)
+  162|     w = pd.read_csv(CACHE / 'franchise/women_suffrage_pre19th.csv').set_index('state')
+  163|     pres = w.presidential_suffrage_year.combine_first(w.full_suffrage_year) if 'full_suffrage_year' in w else w.presidential_suffrage_year
+  164|     women16 = {s for s, y in pres.items() if pd.notna(y) and float(y) <= 1916}
+  165|     women_pre19 = {s for s, y in pres.items() if pd.notna(y) and float(y) <= 1920}
+  166|     alien = set(f.index[f.get('alien_declarant_voting', pd.Series(0, index=f.index)).fillna(0).astype(int) == 1])
+  167|     # Georgia and Mississippi: registration closed before women could enrol
+  168|     # (sources in franchise/state_franchise_1920.csv, women_nov1920_note).
+  169|     closed = set(f.index[f.women_able_to_vote_nov1920.fillna(1).astype(int) == 0]) if year == 1920 else set()
+  170|     return {'table': f, 'women16': women16, 'women_pre19': women_pre19, 'alien_voting': alien,
+  171|             'closed_1920': closed, 'pres_year': pres.to_dict()}
+  172| 
+  173| 
+  174| # ---------------------------------------------------------------- general years
+  175| 
+  176| RETURNS_FILES = ['labels/state_pres_1789_1864.csv', 'labels/state_pres_all.csv']
+  177| FRANCHISE_FILES = ['franchise/state_franchise_1789_1864.csv', 'franchise/state_franchise_all.csv',
+  178|                    'franchise/state_franchise_1972_2024.csv']
+  179| # Electoral votes counted by Congress, 1868–2024 (scripts/build_returns.py KNOWN_EV).
+  180| KNOWN_EV = {1868: 294, 1872: 352, 1876: 369, 1880: 369, 1884: 401, 1888: 401, 1892: 444, 1896: 447, 1900: 447,
+  181|             1904: 476, 1908: 483, 1960: 537, **{y: 531 for y in range(1912, 1960, 4)},
+  182|             **{y: 538 for y in range(1964, 2025, 4)}}
+  183| 
+  184| 
+  185| def _year_rows(files: list, year: int, what: str) -> pd.DataFrame:
+  186|     frames = [pd.read_csv(CACHE / f) for f in files if (CACHE / f).exists()]
+  187|     d = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=['year', 'state'])
+  188|     x = d[d.year == year]
+  189|     if x.empty:
+  190|         missing = [f for f in files if not (CACHE / f).exists()]
+  191|         raise FileNotFoundError(f'no {what} rows for {year}; missing file(s): {missing}' if missing else
+  192|                                 f'no {what} rows for {year} in {files}')
+  193|     return x.drop_duplicates('state', keep='last').set_index('state').sort_index()
+  194| 
+  195| 
+  196| def _returns_rows(year: int) -> pd.DataFrame:
+  197|     x = _year_rows(RETURNS_FILES, year, 'returns')
+  198|     ev = x.ev_total.fillna(0)
+  199|     return x[(x.chosen_by != 'none') | (ev > 0)]
+  200| 
+  201| 
+  202| def states(year: int) -> list:
+  203|     """States with a popular vote or electors that year."""
+  204|     if year in LEGACY:
+  205|         return list(STATES_1920)
+  206|     return list(_returns_rows(year).index)
+  207| 
+  208| 
+  209| def returns(year: int = 1920):
+  210|     """(R/D/O/T/P{yy} by state, electoral votes by state). Legislature states carry 0 votes."""
+  211|     if year in LEGACY:
+  212|         return _returns_legacy(year)
+  213|     x = _returns_rows(year)
+  214|     yy = year % 100
+  215|     v = x[['rep', 'dem', 'total', 'third']].astype(float).fillna(0.0)
+  216|     r = pd.DataFrame({f'R{yy}': v.rep, f'D{yy}': v.dem, f'O{yy}': (v.total - v.rep - v.dem).clip(lower=0),
+  217|                       f'T{yy}': v.total, f'P{yy}': v.third}).astype(float)
+  218|     r.index.name = None
+  219|     ev = x.ev_total.fillna(0).astype(int)
+  220|     if year < 1868:
+  221|         # Before 1868 count the electors who voted (1864 NV cast 2 of 3; 1820 MS 2 of 3).
+  222|         ev = x[['ev_rep', 'ev_dem', 'ev_other']].fillna(0).sum(axis=1).astype(int)
+  223|     ev.name = None
+  224|     ev.index.name = None
+  225|     if year in KNOWN_EV:
+  226|         # 1789–1864 (agent G's file) can have electors who didn't vote, so the
+  227|         # slot identity and the national total are checked from 1868 on.
+  228|         slots = x[['ev_rep', 'ev_dem', 'ev_other']].fillna(0).sum(axis=1).astype(int)
+  229|         assert (slots == ev).all(), f'{year}: ev_total != ev_rep + ev_dem + ev_other in {list(ev.index[slots != ev])}'
+  230|         assert int(ev.sum()) == KNOWN_EV[year], f'{year}: {int(ev.sum())} electoral votes, expected {KNOWN_EV[year]}'
+  231|     return r, ev
+  232| 
+  233| 
+  234| def _voting_age_rule(state: str, year: int) -> int:
+  235|     if year >= 1972:
+  236|         return 18
+  237|     if (state == 'GA' and year >= 1944) or (state == 'KY' and year >= 1956):
+  238|         return 18
+  239|     if year >= 1960 and state in ('AK', 'HI'):
+  240|         return {'AK': 19, 'HI': 20}[state]
+  241|     return 21
+  242| 
+  243| 
+  244| def _election_day(year: int) -> pd.Timestamp:
+  245|     """First Tuesday after the first Monday in November (1848 on); 1 Nov before [I]."""
+  246|     if year < 1848:
+  247|         return pd.Timestamp(year, 11, 1)
+  248|     d = pd.Timestamp(year, 11, 2)
+  249|     return d + pd.Timedelta(days=(1 - d.weekday()) % 7)
+  250| 
+  251| 
+  252| def _census_day(c: int) -> pd.Timestamp:
+  253|     if c % 10:
+  254|         return pd.Timestamp(c, 7, 1)  # ACS year: mid-year estimate [I]
+  255|     if c <= 1820:
+  256|         return pd.Timestamp(c, 8, 2)  # first Monday in August (1790–1820)
+  257|     if c <= 1900:
+  258|         return pd.Timestamp(c, 6, 1)
+  259|     return {1910: pd.Timestamp(1910, 4, 15), 1920: pd.Timestamp(1920, 1, 1)}.get(c, pd.Timestamp(c, 4, 1))
+  260| 
+  261| 
+  262| def _pop_path(c: int, age: int):
+  263|     """The census file for year c and age floor (21 or 18), or None."""
+  264|     names = [f'population/adults18_{c}_by_state_nhgis.csv'] if age == 18 else \
+  265|         ([f'population/adults_{c}_by_state.csv'] if c in (1910, 1920) else []) + [f'population/adults_{c}_by_state_nhgis.csv']
+  266|     for n in names:
+  267|         if (CACHE / n).exists():
+  268|             return n
+  269|     return None
+  270| 
+  271| 
+  272| def _census_years(age: int) -> list:
+  273|     """Decennial censuses 1790–2020 plus any ACS years with a file."""
+  274|     import glob
+  275|     pat = 'adults18_*_by_state_nhgis.csv' if age == 18 else 'adults_*_by_state_nhgis.csv'
+  276|     found = {int(m.group(1)) for f in glob.glob(str(CACHE / 'population' / pat))
+  277|              if (m := re.search(r'_(\d{4})_by_state', f))}
+  278|     return sorted(set(range(1790, 2021, 10)) | found)
+  279| 
+  280| 
+  281| def _resolve(p: pd.DataFrame) -> pd.DataFrame:
+  282|     """Unknown citizenship → naturalized/alien in the state-sex ratio; else the same
+  283|     state's other sex; else 0.5 [I] (1850–1860, before citizenship was asked)."""
+  284|     rows, split = [], {}
+  285|     for (s, x), g in p.groupby(['state', 'sex']):
+  286|         d = dict(zip(g.group, g['count']))
+  287|         nat, ali = d.get('foreign_white_naturalized', 0.0), d.get('foreign_white_alien', 0.0)
+  288|         if nat + ali > 0:
+  289|             split[s] = nat / (nat + ali)
+  290|     for (s, x), g in p.groupby(['state', 'sex']):
+  291|         d = dict(zip(g.group, g['count']))
+  292|         unk = d.pop('foreign_white_unknown', 0.0)
+  293|         nat, ali = d.get('foreign_white_naturalized', 0.0), d.get('foreign_white_alien', 0.0)
+  294|         share = nat / (nat + ali) if nat + ali > 0 else split.get(s, 0.5)
+  295|         if unk:
+  296|             d['foreign_white_naturalized'] = nat + unk * share
+  297|             d['foreign_white_alien'] = ali + unk * (1 - share)
+  298|         for k, v in d.items():
+  299|             rows.append({'state': s, 'sex': x, 'group': k, 'count': v})
+  300|     return pd.DataFrame(rows)
+  301| 
+  302| 
+  303| _POP_CACHE: dict = {}
+  304| 
+  305| 
+  306| def _census(c: int, age: int) -> pd.Series:
+  307|     """Resolved counts by (state, sex, group) for census c, age floor 21 or 18."""
+  308|     key = (c, age)
+  309|     if key not in _POP_CACHE:
+  310|         rel = _pop_path(c, age)
+  311|         if rel is None:
+  312|             raise FileNotFoundError(f'population file missing: population/adults{"18" if age == 18 else ""}_{c}_by_state_nhgis.csv')
+  313|         p = pd.read_csv(CACHE / rel)
+  314|         p = p[p.state.isin(ALL_STATES) & (p.group != 'TOTAL')].copy()
+  315|         p['group'] = p.group.map(lambda g: GROUP_MAP.get(g, g))
+  316|         p = p.groupby(['state', 'sex', 'group'], as_index=False)['count'].sum()
+  317|         _POP_CACHE[key] = (_resolve(p).groupby(['state', 'sex', 'group'])['count'].sum(), rel)
+  318|     return _POP_CACHE[key][0]
+  319| 
+  320| 
+  321| def _brackets(year: int, age: int) -> tuple[int, int]:
+  322|     """The two censuses to interpolate (or extrapolate) from for election day."""
+  323|     t = _election_day(year)
+  324|     cs = [c for c in _census_years(age) if c % 10 == 0 or _pop_path(c, age)]
+  325|     before = [c for c in cs if _census_day(c) <= t]
+  326|     after = [c for c in cs if _census_day(c) > t]
+  327|     if before and after:
+  328|         return before[-1], after[0]
+  329|     if before:  # after the last census: the last two (an ACS year counts)
+  330|         have = [c for c in before if _pop_path(c, age)]
+  331|         if before[-1] not in have:
+  332|             raise FileNotFoundError(f'population file missing: {_missing(before[-1], age)}')
+  333|         return have[-2], have[-1]
+  334|     return after[0], after[1]  # before 1790
+  335| 
+  336| 
+  337| def _missing(c, age):
+  338|     return f'population/adults{"18" if age == 18 else ""}_{c}_by_state_nhgis.csv'
+  339| 
+  340| 
+  341| def _interp(year: int, age: int) -> tuple[pd.Series, pd.Series, list]:
+  342|     """Counts at election day by (state, sex, group): geometric between the two
+  343|     bracketing censuses; beyond them, the decade's trend with the ratio capped to
+  344|     [0.5, 2] [I]. A cell missing from one census carries the other's count [I]."""
+  345|     c0, c1 = _brackets(year, age)
+  346|     a, b = _census(c0, age), _census(c1, age)
+  347|     t, t0, t1 = _election_day(year), _census_day(c0), _census_day(c1)
+  348|     f = (t - t0).days / (t1 - t0).days
+  349|     idx = a.index.union(b.index)
+  350|     a, b = a.reindex(idx), b.reindex(idx)
+  351|     ratio = (b / a).where((a > 0) & (b > 0))
+  352|     inside = 0 <= f <= 1
+  353|     rr = ratio if inside else ratio.clip(0.5, 2.0)
+  354|     geo = a * rr ** f
+  355|     lin = a.fillna(0) + (b.fillna(0) - a.fillna(0)) * f
+  356|     first, second = (b, a) if f >= 0.5 else (a, b)
+  357|     near = first.fillna(second)
+  358|     out = geo.where(ratio.notna(), lin.where(a.notna() & b.notna(), near)).clip(lower=0)
+  359|     how = pd.Series(np.where(ratio.notna(), f'geometric {c0}→{c1}' + ('' if inside else ', extrapolated'),
+  360|                              np.where(a.notna() & b.notna(), f'linear {c0}→{c1} [I]', f'fallback: one census of {c0}/{c1} [I]')),
+  361|                     index=idx)
+  362|     return out, how, [_POP_CACHE[(c0, age)][1], _POP_CACHE[(c1, age)][1]]
+  363| 
+  364| 
+  365| def _ages(year: int, sts: list) -> dict:
+  366|     try:
+  367|         fr = _year_rows(FRANCHISE_FILES, year, 'franchise')
+  368|         va = fr.voting_age.reindex(sts)
+  369|     except (FileNotFoundError, AttributeError):
+  370|         va = pd.Series(np.nan, index=sts)
+  371|     return {s: int(va[s]) if pd.notna(va.get(s)) else _voting_age_rule(s, year) for s in sts}
+  372| 
+  373| 
+  374| def _pop_general(year: int) -> tuple[pd.DataFrame, list]:
+  375|     sts = states(year)
+  376|     ages = _ages(year, sts)
+  377|     need21 = any(a > 18 for a in ages.values())
+  378|     need18 = any(a < 21 for a in ages.values())
+  379|     files = []
+  380|     p21 = p18 = None
+  381|     if need21:
+  382|         p21, h21, f = _interp(year, 21)
+  383|         files += f
+  384|     if need18:
+  385|         try:
+  386|             p18, h18, f = _interp(year, 18)
+  387|             files += f
+  388|         except FileNotFoundError:
+  389|             if year >= 1952 or p21 is None:
+  390|                 raise
+  391|             # No 18+ census before 1950: 21+ × the 1950 18+/21+ ratio of the cell [I].
+  392|             r50 = (_census(1950, 18) / _census(1950, 21)).replace([np.inf], np.nan)
+  393|             p18 = p21 * r50.reindex(p21.index).fillna(1.065)
+  394|             h18 = h21 + ' × 1950 18+/21+ ratio [I]'
+  395|             files += [_POP_CACHE[(1950, 18)][1], _POP_CACHE[(1950, 21)][1]]
+  396|     rows = []
+  397|     for s in sts:
+  398|         a = ages[s]
+  399|         if a >= 21:
+  400|             n, h = p21, h21
+  401|         elif a == 18:
+  402|             n, h = p18, h18
+  403|         else:  # 19, 20: linear between the 18+ and 21+ counts [I]
+  404|             n = p21 + (p18.reindex(p21.index) - p21) * (21 - a) / 3
+  405|             h = h21 + f' / {a}+ linear between 18+ and 21+ [I]'
+  406|         if s not in n.index.get_level_values(0):
+  407|             raise FileNotFoundError(f'{year}: no census cells for {s} in {sorted(set(files))}')
+  408|         x = n.loc[s]
+  409|         hh = h.loc[s]
+  410|         for (sex, g), v in x.items():
+  411|             rows.append({'state': s, 'sex': sex, 'group': g, 'adults20': float(v), 'interp': hh.loc[(sex, g)]})
+  412|     cells = pd.DataFrame(rows)
+  413|     cells['adults16'] = cells.adults20
+  414|     cells = cells[['state', 'sex', 'group', 'adults20', 'adults16', 'interp']]
+  415|     return cells.sort_values(['state', 'sex', 'group']).reset_index(drop=True), sorted(set(files))
+  416| 
+  417| 
+  418| def population(year: int = 1920) -> pd.DataFrame:
+  419|     """Cells state × sex × group. adults20 = adults at the election (the name is
+  420|     1920's); adults16 = adults20 for general years."""
+  421|     if year in LEGACY:
+  422|         return _population_legacy(year)
+  423|     return _pop_general(year)[0]
+  424| 
+  425| 
+  426| def _other_citizen(year: int, sts: list) -> dict:
+  427|     """Citizen (legally voting) share of 'other' adults, mostly American Indians [I]:
+  428|     before the 1887 Dawes Act few were citizens; by 1924 about two-thirds were;
+  429|     the 1924 Indian Citizenship Act made all citizens, but AZ and NM barred
+  430|     reservation Indians until 1948. 1916/1920/1924 keep the legacy (none)."""
+  431|     if year < 1888:
+  432|         v = 0.2
+  433|     elif year < 1924:
+  434|         v = 0.6
+  435|     else:
+  436|         v = 1.0
+  437|     out = {s: v for s in sts} if v < 1 else {}
+  438|     if 1924 <= year < 1948:
+  439|         out.update({s: 0.2 for s in ('AZ', 'NM') if s in sts})
+  440|     return out
+  441| 
+  442| 
+  443| def franchise(year: int = 1920) -> dict:
+  444|     if year in LEGACY:
+  445|         return _franchise_legacy(year)
+  446|     sts = states(year)
+  447|     try:
+  448|         f = _year_rows(FRANCHISE_FILES, year, 'franchise')
+  449|         fallback = False
+  450|     except FileNotFoundError:
+  451|         if year < 1972:
+  452|             raise
+  453|         # Modern rules are uniform enough to default [I]: all adults 18+, no tests.
+  454|         f = pd.DataFrame({'poll_tax': 0, 'literacy_test': 0, 'alien_voting': 0, 'women_vote': 1, 'white_can': 1.0,
+  455|                           'black_can': 1.0, 'felony_disenfranchised_share': np.nan, 'voting_age': 18,
+  456|                           'chosen_by': 'popular', 'source': 'default [I]', 'note': ''}, index=pd.Index(sts, name='state'))
+  457|         fallback = True
+  458|     f = f.reindex(sts)
+  459|     w = pd.read_csv(CACHE / 'franchise/women_suffrage_pre19th.csv').set_index('state')
+  460|     pres = w.presidential_suffrage_year.combine_first(w.full_suffrage_year) if 'full_suffrage_year' in w else w.presidential_suffrage_year
+  461|     women16 = {s for s, y in pres.items() if pd.notna(y) and float(y) <= 1916}
+  462|     women_pre19 = {s for s, y in pres.items() if pd.notna(y) and float(y) <= 1920}
+  463| 
+  464|     def flag(col):
+  465|         return set(f.index[f[col].fillna(0).astype(float) == 1]) if col in f else set()
+  466|     rows = _returns_rows(year)
+  467|     slots = rows[['ev_rep', 'ev_dem', 'ev_other']].fillna(0).astype(int)
+  468|     leg = rows.chosen_by == 'legislature'
+  469|     # Electors by party where the legislature chose them, and where a popular-vote
+  470|     # state divided them (district plans, split slates, faithless electors).
+  471|     # A popular-vote state with no surviving count (KY 1792, PA 1812…) keeps its history's electors too.
+  472|     novote = rows.total.fillna(0) <= 0
+  473|     ev_fixed = {s: tuple(int(v) for v in slots.loc[s]) for s in rows.index[leg | novote] if slots.loc[s].sum() > 0}
+  474|     # A divided state, or one whose electors went against the recorded plurality (before
+  475|     # 1824 voters often chose slates, not candidates: MA 1820's "other" slate voted Monroe),
+  476|     # keeps the historical division while the recorded plurality winner holds.
+  477|     v = rows[['rep', 'dem']].fillna(0).astype(float)
+  478|     oth, thr = rows.other.fillna(0).astype(float), rows.third.fillna(0).astype(float).clip(upper=rows.other.fillna(0))
+  479|     vote_win = pd.concat([v.rep, v.dem, pd.concat([thr, oth - thr], axis=1).max(axis=1)], axis=1).to_numpy().argmax(axis=1)
+  480|     ev_split = {s: tuple(int(x) for x in slots.loc[s]) for i, s in enumerate(rows.index)
+  481|                 if not leg.iloc[i] and not novote.iloc[i] and slots.loc[s].sum() > 0
+  482|                 and ((slots.loc[s] > 0).sum() > 1 or int(slots.loc[s].to_numpy().argmax()) != int(vote_win[i]))}
+  483|     felony = {}
+  484|     if 'felony_disenfranchised_share' in f:
+  485|         felony = {s: float(v) for s, v in f.felony_disenfranchised_share.items() if pd.notna(v)}
+  486|     return {'table': f, 'women16': women16, 'women_pre19': women_pre19, 'alien_voting': flag('alien_voting'),
+  487|             'closed_1920': set(), 'pres_year': pres.to_dict(), 'women_vote': flag('women_vote'),
+  488|             'fallback': fallback, 'ev_fixed': ev_fixed, 'ev_split': ev_split, 'felony_share': felony,
+  489|             'enslaved_share': _enslaved_share(year)}
+  490| 
+  491| 
+  492| def _enslaved_share(year: int) -> dict:
+  493|     """state → enslaved share of Black adults, from the last census before the
+  494|     election (1790–1860); empty from 1868 on."""
+  495|     if year >= 1866:
+  496|         return {}
+  497|     c = max([1790] + [c for c in range(1790, 1861, 10) if c <= year])
+  498|     f = CACHE / f'population/adults_{c}_by_state_nhgis.csv'
+  499|     if not f.exists():
+  500|         return {}
+  501|     p = pd.read_csv(f)
+  502|     b = p[p.group.isin(['enslaved', 'free_colored'])].pivot_table(index='state', columns='group', values='count', aggfunc='sum').fillna(0)
+  503|     if 'enslaved' not in b:
+  504|         return {}
+  505|     tot = b.sum(axis=1)
+  506|     return {s: float(b.enslaved[s] / tot[s]) for s in b.index if tot[s] > 0}
+  507| 
+  508| 
+  509| def urban_share() -> dict:
+  510|     f = CACHE / 'population/urban_rural_1920_by_state.csv'
+  511|     if not f.exists():
+  512|         return {}
+  513|     u = pd.read_csv(f)
+  514|     u = u[(u.year == 1920) & u.state.isin(STATES_1920)].pivot_table(index='state', columns='area', values='count', aggfunc='sum')
+  515|     return (u['urban'] / u['total']).to_dict()
+  516| 
+  517| 
+  518| NAMES = re.compile(r'\b(Harding|Cox|Coolidge|Roosevelt|Debs|Christensen|Republican|Democrat|G\.\s?O\.\s?P|Wilson)', re.I)
+  519| 
+  520| 
+  521| def corpus(cutoff: str, rel: str | None = 'sources/corpus_1920.jsonl', names=NAMES) -> list[dict]:
+  522|     rows = []
+  523|     path = CACHE / rel if rel else None
+  524|     if not path or not path.exists():
+  525|         return rows
+  526|     for line in path.read_text().splitlines():
+  527|         if not line.strip():
+  528|             continue
+  529|         it = json.loads(line)
+  530|         if it['date'] > cutoff:
+  531|             continue
+  532|         text = it['excerpt'].strip()
+  533|         it['identifying'] = bool(it.get('mentions_candidates')) or bool(names.search(text))
+  534|         it['text'] = ' '.join(text.split()[:120])
+  535|         rows.append(it)
+  536|     return rows
+  537| 
+  538| 
+  539| def platforms(rel: str = 'context/platforms_1920.json') -> dict:
+  540|     path = CACHE / rel
+  541|     return json.loads(path.read_text()) if path.exists() else {}
+  542| 
+  543| 
+  544| def inputs(year: int) -> tuple[Inputs, dict]:
+  545|     ret, ev = returns(year)
+  546|     cells = population(year)
+  547|     fr = franchise(year)
+  548|     if year in LEGACY:
+  549|         return Inputs(cells=cells, returns=ret, women16=fr['women16'], women_pre19=fr['women_pre19'],
+  550|                       closed_1920=fr['closed_1920'], alien_voting=fr['alien_voting'], ev=ev, year=year), fr
+  551|     t = fr['table']
+  552|     sts = list(ret.index)
+  553| 
+  554|     def can(col):
+  555|         v = t[col].astype(float) if col in t else pd.Series(1.0, index=t.index)
+  556|         return {s: float(x) for s, x in v.items() if pd.notna(x) and float(x) < 1}
+  557|     no_pop = set(t.index[t.chosen_by == 'legislature']) if 'chosen_by' in t else set()
+  558|     rows = _returns_rows(year)
+  559|     no_pop |= set(rows.index[rows.chosen_by == 'legislature'])
+  560|     return Inputs(cells=cells, returns=ret, women16=fr['women16'], women_pre19=fr['women_pre19'],
+  561|                   closed_1920=set(), alien_voting=fr['alien_voting'], ev=ev,
+  562|                   other_citizen=_other_citizen(year, sts), year=year, women_vote=fr['women_vote'],
+  563|                   voting_age=18 if year >= 1972 else 21, black_can=can('black_can'), white_can=can('white_can'),
+  564|                   no_popular=no_pop), fr
+  565| 
+  566| 
+  567| def _files(year: int) -> list:
+  568|     """Cache files a general year reads (for the manifest)."""
+  569|     out = [RETURNS_FILES[0] if year < 1868 else RETURNS_FILES[1],
+  570|            FRANCHISE_FILES[0] if year < 1868 else FRANCHISE_FILES[1] if year < 1972 else FRANCHISE_FILES[2]]
+  571|     out = [f for f in out if (CACHE / f).exists()]
+  572|     try:
+  573|         out += _pop_general(year)[1]
+  574|     except FileNotFoundError:
+  575|         pass
+  576|     return out + ['franchise/women_suffrage_pre19th.csv']
+  577| 
+  578| 
+  579| def load(cfg) -> tuple[Inputs, dict]:
+  580|     from . import profiles
+  581|     prof = profiles.get(cfg.election)
+  582|     inp, fr = inputs(cfg.election)
+  583|     files = ['labels/state_pres_1916_1920_1924.csv', 'population/adults_1920_by_state.csv',
+  584|              'population/adults_1910_by_state.csv', 'franchise/state_franchise_1920.csv',
+  585|              'franchise/women_suffrage_pre19th.csv', 'sources/corpus_1920.jsonl', 'context/platforms_1920.json']
+  586|     if cfg.election not in LEGACY:
+  587|         files = _files(cfg.election) + [prof['platforms']] + ([prof['corpus']] if prof['corpus'] else [])
+  588|     elif cfg.election != 1920:
+  589|         files += ['franchise/grayjenkins_state_franchise_1916_1920_1924.csv', prof['platforms']] + ([prof['corpus']] if prof['corpus'] else [])
+  590|         files.remove('sources/corpus_1920.jsonl')
+  591|         files.remove('context/platforms_1920.json')
+  592|     extras = {
+  593|         'franchise': fr,
+  594|         'urban': urban_share(),
+  595|         'corpus': corpus(cfg.context_cutoff, prof['corpus'], profiles.names_re(cfg.election)),
+  596|         'platforms': platforms(prof['platforms']),
+  597|         'profile': prof,
+  598|         # A carried-forward year fits its base year first (backbone.carry_forward).
+  599|         'base_inp': inputs(prof['base'])[0] if prof['base'] else None,
+  600|         'manifest': manifest(files),
+  601|     }
+  602|     return inp, extras
+```
 
 ## `simharness/evaluate.py`
 
@@ -156,1722 +1910,4 @@ Files `simharness/evaluate.py` to `simharness/paired.py`. Lines are numbered as 
   148|     old = fit.diagnostics['old_states']
   149|     nw = nw.where(~nw.index.isin(old), 0.0)
   150|     return {'black': blk.to_numpy(), 'foreign': fb.to_numpy(), 'new_women': nw.to_numpy()}
-```
-
-## `simharness/evidence.py`
-
-```python
-    1| """Historical evidence for a what-if: what reliable sources say about how the
-    2| same people behaved in the same situation, or the nearest one on record.
-    3| 
-    4| Two model calls per what-if, both logged with their cost:
-    5| 
-    6| 1. **Research** (web search): a historian's research assistant looks for
-    7|    peer-reviewed work, academic books, official statistics and archives on
-    8|    (a) the change itself, if it happened or nearly did, (b) the same
-    9|    populations in the most similar situations, nearest in time first, and
-   10|    (c) what any named real person actually said or did on or before the
-   11|    context date. Answers carry citations to pages the search returned.
-   12| 2. **Extraction** (structured output): the notes become findings. A finding
-   13|    may cite only sources the search actually returned (`S1`…); anything else
-   14|    is dropped. Structured outputs can't be combined with web-search
-   15|    citations in one call, hence two calls.
-   16| 
-   17| Evidence never enters a voter's brief. The agents stay blind to it, and to
-   18| anything dated after the context cutoff. It is used after the interviews:
-   19| 
-   20| - **evaluate**: does the interviews' effect agree with the historical
-   21|   record in direction and size?
-   22| - **blend** (exploratory what-ifs only): the evidence becomes a prior on
-   23|   each cohort's effect, combined with the interview effect by precision.
-   24| - **confidence**: a tier from high to very low ("extremely low"), with the
-   25|   reasons shown to the reader.
-   26| 
-   27| Hand-written what-ifs use evidence only to evaluate and grade confidence.
-   28| Their numbers follow METHOD.md.
-   29| """
-   30| from __future__ import annotations
-   31| 
-   32| import json
-   33| import re
-   34| import time
-   35| from urllib.parse import urlparse
-   36| 
-   37| import numpy as np
-   38| 
-   39| from .stats import expit, logit
-   40| 
-   41| EVIDENCE_VERSION = 'e1'
-   42| 
-   43| # ── Source reliability ──
-   44| # A: peer-reviewed, academic press, official statistics, archives.
-   45| # B: reputable reference works and public history.
-   46| # C: tertiary or unknown: a pointer to evidence, not evidence.
-   47| TIER_A = (
-   48|     'jstor.org', 'doi.org', 'muse.jhu.edu', 'cambridge.org', 'academic.oup.com', 'global.oup.com', 'oup.com',
-   49|     'tandfonline.com', 'journals.uchicago.edu', 'onlinelibrary.wiley.com', 'journals.sagepub.com',
-   50|     'link.springer.com', 'sciencedirect.com', 'nber.org', 'dataverse.harvard.edu', 'icpsr.umich.edu',
-   51|     'presidency.ucsb.edu', 'millercenter.org', 'history.house.gov', 'senate.gov', 'loc.gov', 'archives.gov',
-   52|     'census.gov', 'nps.gov', 'press.princeton.edu', 'press.uchicago.edu', 'escholarship.org', 'historians.org', 'oah.org', 'aeaweb.org', 'apsanet.org',
-   53|     'journalofamericanhistory.org', 'americanhistory.si.edu', 'fraser.stlouisfed.org', 'hathitrust.org',
-   54|     'archive.org', 'chroniclingamerica.loc.gov', 'jhu.edu', 'harvard.edu', 'yale.edu', 'stanford.edu',
-   55| )
-   56| TIER_A_SUFFIX = ('.edu', '.gov', '.ac.uk')
-   57| TIER_A_PREFIX = ('upress.', 'scholarship.', 'journals.', 'press.')  # university presses and journal hosts
-   58| TIER_B = (
-   59|     'britannica.com', 'smithsonianmag.com', 'si.edu', 'pbs.org', 'npr.org', 'gilderlehrman.org',
-   60|     'americanyawp.com', 'ncpedia.org', 'tshaonline.org', 'mnopedia.org', 'encyclopediavirginia.org',
-   61|     'georgiaencyclopedia.org', 'encyclopediaofalabama.org', 'ohiohistory.org', 'wisconsinhistory.org',
-   62|     'history.state.gov', 'nytimes.com', 'theatlantic.com', 'washingtonpost.com', 'newyorker.com',
-   63|     'bbc.co.uk', 'bbc.com', 'historynet.com', 'americanheritage.com', 'blackpast.org', 'womenshistory.org',
-   64|     'mnhs.org', 'kshs.org', 'indianahistory.org', 'historycooperative.org', 'uselectionatlas.org',
-   65| )
-   66| TIER_WEIGHT = {'A': 1.0, 'B': 0.6, 'C': 0.25}
-   67| 
-   68| # Never worth a search result.
-   69| BLOCKED = ['reddit.com', 'quora.com', 'pinterest.com', 'youtube.com', 'tiktok.com', 'facebook.com', 'x.com',
-   70|            'twitter.com', 'answers.com', 'coursehero.com', 'studocu.com', 'chegg.com', 'brainly.com',
-   71|            'enotes.com', 'gradesaver.com', 'ipl.org', 'bartleby.com', 'ukessays.com', 'studymoose.com']
-   72| 
-   73| MATCH_WEIGHT = {'same-event': 1.0, 'same-period-similar': 0.7, 'other-period-similar': 0.45, 'distant': 0.2}
-   74| 
-   75| FLIP = {'toward-R': 'toward-D', 'toward-D': 'toward-R', 'more-turnout': 'less-turnout', 'less-turnout': 'more-turnout',
-   76|         'toward-other': 'mixed'}
-   77| 
-   78| SEARCH_DOLLARS = 10 / 1000  # web search: $10 per 1,000 searches
-   79| 
-   80| 
-   81| def tier_of(url: str) -> str:
-   82|     host = (urlparse(url).hostname or '').lower().removeprefix('www.')
-   83|     if 'wikipedia.org' in host:
-   84|         return 'C'
-   85|     if any(host == d or host.endswith('.' + d) for d in TIER_A) or host.endswith(TIER_A_SUFFIX) or host.startswith(TIER_A_PREFIX):
-   86|         return 'A'
-   87|     if any(host == d or host.endswith('.' + d) for d in TIER_B):
-   88|         return 'B'
-   89|     return 'C'
-   90| 
-   91| 
-   92| # ── 1. Research: web search, citations kept ──
-   93| 
-   94| RESEARCH_SYSTEM = """You are a research assistant to a historian of American elections. You search the web for reliable evidence and report it with citations.
-   95| 
-   96| What counts as reliable, best first:
-   97| 1. Peer-reviewed journal articles and academic books by historians or political scientists.
-   98| 2. Official statistics and archival collections: the Census Bureau, the Clerk of the House, the Library of Congress, the National Archives, state archives.
-   99| 3. Reputable reference works: Britannica, university-hosted or state-historical-society encyclopedias.
-  100| Use Wikipedia only to find sources of the first three kinds; never rest a finding on it alone. Ignore forums, content farms, homework and essay sites.
-  101| 
-  102| Report, in this order:
-  103| 1. Direct evidence. If this change happened, or nearly happened, what scholars say about its effect on voters and turnout.
-  104| 2. Analogues. The same populations in the most similar situations on record, nearest in time and place first. Give numbers wherever the sources do: turnout, vote shares, swings, by group. Say when and where each happened.
-  105| 3. Named people. For any real person the scenario names, what they actually said or did about the relevant questions on or before the scenario's date, with dates. Describe it; don't quote at length.
-  106| 4. Limits. Why each analogue might not carry over.
-  107| 
-  108| Search before you write: run at least two searches, and more for anything you'd otherwise state from memory. A claim without a citation will be thrown away, however well you know it. Cite every factual sentence. Give changes in percentage points where you can. If you find nothing reliable, say so plainly. Don't stretch a weak source into a strong claim."""
-  109| 
-  110| 
-  111| def research_prompt(spec: dict, election: dict) -> str:
-  112|     reach = spec.get('reach') or {}
-  113|     who = ', '.join(f'{k}: {", ".join(v)}' for k, v in reach.items() if v) or 'every voter'
-  114|     lines = [
-  115|         f'Scenario for the {election["year"]} United States presidential election (election day {election["day"]}).',
-  116|         f'A reader asked: "{spec.get("source_text") or spec["label"]}".',
-  117|         f'As modelled: {spec["detail"]}',
-  118|         f'Kind of change: {spec["kind"]}. Populations it reaches first: {who}.',
-  119|     ]
-  120|     if (spec.get('candidate') or {}).get('name'):
-  121|         c = spec['candidate']
-  122|         lines.append(f'Named person on the ballot: {c["name"]} ({c.get("descriptor", "")}).')
-  123|     hint = {
-  124|         'candidate': 'Include the strongest third-party and independent runs nearest in time (1912 and 1924 above all), '
-  125|                      'which groups they drew from and what share they took; and any run by a famous non-politician.',
-  126|         'franchise': 'Include how newly enfranchised or newly barred groups actually turned out and voted the first times '
-  127|                      'the rules changed for them.',
-  128|         'population': 'Include how the groups whose numbers change turned out and voted in nearby elections.',
-  129|     }.get(spec['kind'], 'Include how the same groups swung, by how much, when comparable issues or shocks hit nearby elections.')
-  130|     lines.append(hint)
-  131|     qs = spec.get('research_questions') or []
-  132|     if qs:
-  133|         lines += ['', 'Questions to answer:'] + [f'- {q}' for q in qs]
-  134|     from .agentlayer import groups_for
-  135|     phrase = groups_for(int(election['year']))['phrase']
-  136|     lines += ['', f'Groups the simulation distinguishes: men and women; {phrase} adults; '
-  137|                   f'the Northeast, Midwest, South (the eleven former '
-  138|                   f'Confederate states), border states and West. Evidence by these groups is most useful.']
-  139|     return '\n'.join(lines)
-  140| 
-  141| 
-  142| def research(client, spec: dict, election: dict, model: str, max_uses: int = 4, effort: str = 'low',
-  143|              max_tokens: int = 6000) -> dict:
-  144|     """One web-search research turn (continuing through pause_turn). Returns
-  145|     {text (with [S#] markers), sources: [{id, url, title, tier, cited, page_age}], queries, usage, dollars}."""
-  146|     from . import llm
-  147|     tools = [{'type': 'web_search_20250305', 'name': 'web_search', 'max_uses': max_uses, 'blocked_domains': BLOCKED}]
-  148|     user = research_prompt(spec, election)
-  149|     params = {'model': model, 'max_tokens': max_tokens, 'system': RESEARCH_SYSTEM, 'tools': tools}
-  150|     if 'haiku' not in model:
-  151|         params['output_config'] = {'effort': effort}
-  152|     usage, searches = {'input_tokens': 0, 'output_tokens': 0, 'cache_read_input_tokens': 0, 'cache_creation_input_tokens': 0}, 0
-  153|     for attempt in range(2):
-  154|         assistant = []
-  155|         ask = user if attempt == 0 else user + ('\n\nSearch first. Your last answer ran no searches, so none of it could be '
-  156|                                                 'used: every claim needs a citation to a page the search returns.')
-  157|         for _ in range(4):
-  158|             messages = [{'role': 'user', 'content': ask}] + ([{'role': 'assistant', 'content': assistant}] if assistant else [])
-  159|             msg = _create(client, messages=messages, **params)
-  160|             assistant += list(msg.content)
-  161|             u = msg.usage
-  162|             for k in usage:
-  163|                 usage[k] += getattr(u, k, 0) or 0
-  164|             stu = getattr(u, 'server_tool_use', None)
-  165|             searches += (getattr(stu, 'web_search_requests', 0) or 0) if stu else 0
-  166|             if msg.stop_reason != 'pause_turn':
-  167|                 break
-  168|         if any(getattr(b, 'type', None) == 'web_search_tool_result' for b in assistant):
-  169|             break  # a turn without a single search is retried once, then kept as it is
-  170|     sources, by_url, queries, parts = [], {}, [], []
-  171| 
-  172|     def src(url, title, page_age=None):
-  173|         if url not in by_url:
-  174|             by_url[url] = f'S{len(sources) + 1}'
-  175|             sources.append({'id': by_url[url], 'url': url, 'title': title or url, 'tier': tier_of(url),
-  176|                             'cited': [], 'page_age': page_age})
-  177|         return by_url[url]
-  178| 
-  179|     for b in assistant:
-  180|         t = getattr(b, 'type', None)
-  181|         if t == 'server_tool_use':
-  182|             queries.append((getattr(b, 'input', None) or {}).get('query'))
-  183|         elif t == 'web_search_tool_result':
-  184|             content = getattr(b, 'content', None)
-  185|             if isinstance(content, list):
-  186|                 for r in content:
-  187|                     if getattr(r, 'type', None) == 'web_search_result':
-  188|                         src(r.url, r.title, getattr(r, 'page_age', None))
-  189|         elif t == 'text':
-  190|             ids = []
-  191|             for c in getattr(b, 'citations', None) or []:
-  192|                 url = getattr(c, 'url', None)
-  193|                 if not url:
-  194|                     continue
-  195|                 sid = src(url, getattr(c, 'title', None))
-  196|                 cited = (getattr(c, 'cited_text', '') or '').strip()
-  197|                 if cited and cited not in sources[int(sid[1:]) - 1]['cited']:
-  198|                     sources[int(sid[1:]) - 1]['cited'].append(cited[:400])
-  199|                 ids.append(sid)
-  200|             parts.append(b.text + (' [' + ', '.join(dict.fromkeys(ids)) + ']' if ids else ''))
-  201|     dollars = llm.cost(model, usage) + searches * SEARCH_DOLLARS
-  202|     return {'text': ''.join(parts).strip(), 'sources': sources, 'queries': [q for q in queries if q],
-  203|             'usage': usage | {'web_search_requests': searches}, 'dollars': round(dollars, 4), 'model': model,
-  204|             'prompt': user}
-  205| 
-  206| 
-  207| def research_estimate(model: str, max_uses: int, max_tokens: int = 6000) -> dict:
-  208|     """Search results are the bulk of a research call's input: about 8k tokens a
-  209|     search, re-read on each server-side step."""
-  210|     from . import llm
-  211|     typical = llm.cost(model, {'input_tokens': 15000 * max_uses, 'output_tokens': 2500}) + max(1, max_uses - 1) * SEARCH_DOLLARS
-  212|     worst = llm.cost(model, {'input_tokens': 12000 * max_uses * (max_uses + 1) // 2 + 3000, 'output_tokens': max_tokens}) + max_uses * SEARCH_DOLLARS
-  213|     return {'typical': round(typical, 4), 'worst': round(worst, 4)}
-  214| 
-  215| 
-  216| # ── 2. Extraction: notes → findings, grounded in the returned sources ──
-  217| 
-  218| EXTRACT_SYSTEM = """You turn a research assistant's notes into structured findings for an election simulation.
-  219| 
-  220| Rules:
-  221| - Extract every claim in the notes that carries a source marker like [S3] and says something about how people voted or turned out, including the loose analogues. Don't judge reliability yourself: the pipeline grades each source and each match afterwards and weights them. A finding resting on Wikipedia is still a finding.
-  222| - Copy the source ids exactly. Add nothing from your own knowledge.
-  223| - At most 12 findings, the most informative first; merge claims about the same situation. Keep each claim under 35 words, situation and limits under 20.
-  224| - Keep loose analogues too, graded by match ("distant" when the situation only loosely resembles the scenario): they are weighted down, not thrown away. Leave out only claims that say nothing about how people voted or turned out.
-  225| - population: the group the finding is about. Use "any" where the finding doesn't narrow it.
-  226| - match: how close the finding's situation is to the scenario. "same-event": this very change, in this very election. "same-period-similar": a similar situation within about a dozen years. "other-period-similar": a similar situation further away. "distant": a loose analogy.
-  227| - effects: numbers only when the notes give them, as percentage-point changes caused by the situation: "turnout" (share of eligible adults voting), "r2" (the Republican share of the two-party vote; positive means more Republican), "other" (the share of all votes going to a third candidate or party). pm is the plus-or-minus the notes give or imply; use half the effect's size when they give none. Leave effects empty when the notes give no number.
-  228| - direction and effects describe what happened in the finding's own situation, as the sources report it. Never flip them yourself.
-  229| - relation says how that situation maps onto the scenario: "like-scenario" when the scenario would bring about the same kind of situation (a third-party run, for a third-party scenario); "reverses-scenario" when the scenario removes or undoes it (the scenario settles an issue that in fact cost a party votes); "context" when it only describes the election or its setting without showing how people responded to a comparable change (who won, overall turnout). The pipeline flips reversed findings and sets context aside.
-  230| - direction: the finding's direction even without numbers, in that election's own party terms.
-  231| - role_direction: when the scenario concerns one nominee (the affected candidate, named below), which way the finding's voters moved relative to the candidate who stood in the same role in the finding's own situation (the scandal-hit candidate, say), whatever his party: "toward-affected" or "away-from-affected". "none" when there is no such role. Give its size, when the notes do, as the effect measure "affected": the change in that candidate's share of the two-party vote, in points.
-  232| - actor_positions: for a named real person, what they said or did on or before the scenario's date, in a neutral dated paraphrase (never a quotation), with its source ids.
-  233| - no_reliable_evidence: true only when there are no findings at all, or every one is a loose ("distant") analogy."""
-  234| 
-  235| POP = {'type': 'object', 'properties': {
-  236|     'sex': {'type': 'string', 'enum': ['any', 'M', 'F']},
-  237|     'group': {'type': 'string', 'enum': ['any', 'native_white', 'foreign_white_naturalized', 'foreign_white_alien', 'black']},
-  238|     'region': {'type': 'string', 'enum': ['any', 'northeast', 'midwest', 'south', 'border', 'west']},
-  239| }, 'required': ['sex', 'group', 'region'], 'additionalProperties': False}
-  240| 
-  241| EXTRACT_SCHEMA = {
-  242|     'type': 'object',
-  243|     'properties': {
-  244|         'summary': {'type': 'string'},
-  245|         'findings': {'type': 'array', 'items': {'type': 'object', 'properties': {
-  246|             'claim': {'type': 'string'},
-  247|             'source_ids': {'type': 'array', 'items': {'type': 'string'}},
-  248|             'population': POP,
-  249|             'situation': {'type': 'string'},
-  250|             'when': {'type': 'string'},
-  251|             'match': {'type': 'string', 'enum': list(MATCH_WEIGHT)},
-  252|             'relation': {'type': 'string', 'enum': ['like-scenario', 'reverses-scenario', 'context']},
-  253|             'role_direction': {'type': 'string', 'enum': ['toward-affected', 'away-from-affected', 'none']},
-  254|             'direction': {'type': 'string', 'enum': ['toward-R', 'toward-D', 'toward-other', 'more-turnout',
-  255|                                                      'less-turnout', 'mixed', 'none', 'unclear']},
-  256|             'effects': {'type': 'array', 'items': {'type': 'object', 'properties': {
-  257|                 'measure': {'type': 'string', 'enum': ['turnout', 'r2', 'other', 'affected']},
-  258|                 'pp': {'type': 'number'}, 'pm': {'type': 'number'},
-  259|             }, 'required': ['measure', 'pp', 'pm'], 'additionalProperties': False}},
-  260|             'limits': {'type': 'string'},
-  261|         }, 'required': ['claim', 'source_ids', 'population', 'situation', 'when', 'match', 'relation', 'role_direction', 'direction',
-  262|                         'effects', 'limits'],
-  263|             'additionalProperties': False}},
-  264|         'actor_positions': {'type': 'array', 'items': {'type': 'object', 'properties': {
-  265|             'text': {'type': 'string'}, 'date': {'type': 'string'},
-  266|             'source_ids': {'type': 'array', 'items': {'type': 'string'}},
-  267|         }, 'required': ['text', 'date', 'source_ids'], 'additionalProperties': False}},
-  268|         'caveats': {'type': 'array', 'items': {'type': 'string'}},
-  269|         'no_reliable_evidence': {'type': 'boolean'},
-  270|     },
-  271|     'required': ['summary', 'findings', 'actor_positions', 'caveats', 'no_reliable_evidence'],
-  272|     'additionalProperties': False,
-  273| }
-  274| 
-  275| 
-  276| def extract_request(spec: dict, notes: dict, model: str) -> dict:
-  277|     table = '\n'.join(f'{s["id"]}: {s["title"]} ({urlparse(s["url"]).hostname}, reliability {s["tier"]})' for s in notes['sources'])
-  278|     from .profiles import get
-  279|     full = get(spec.get('year', 1920))['full_names']
-  280|     role = {'R': f'the Republican nominee ({full["R"]})', 'D': f'the Democratic nominee ({full["D"]})'}.get(spec.get('about'))
-  281|     who = f'\nThe affected candidate: {role}.' if role else '\nThe scenario concerns neither nominee personally: role_direction is "none".'
-  282|     user = (f'Scenario: {spec["detail"]}{who}\n\nSources the search returned:\n{table or "(none)"}\n\n'
-  283|             f'Research notes:\n{notes["text"] or "(the assistant found nothing)"}')
-  284|     return {'id': f'extract|{spec["key"]}', 'model': model, 'system': EXTRACT_SYSTEM, 'user': user,
-  285|             'schema': EXTRACT_SCHEMA, 'meta': {'kind': 'extract', 'what_if': spec['key']}}
-  286| 
-  287| 
-  288| def ground(extracted: dict, notes: dict, about: str | None = None) -> dict:
-  289|     """Keep only findings whose sources the search returned; grade each. about: the nominee
-  290|     ('R' or 'D') the scenario concerns; findings from other elections then count by role
-  291|     (toward the scandal-hit candidate, say), not by that year's party labels (D22)."""
-  292|     by_id = {s['id']: s for s in notes['sources']}
-  293|     findings, dropped = [], 0
-  294|     for f in extracted.get('findings', []):
-  295|         ids = [i for i in f.get('source_ids', []) if i in by_id]
-  296|         if not ids:
-  297|             dropped += 1
-  298|             continue
-  299|         tier = min((by_id[i]['tier'] for i in ids), key='ABC'.index)
-  300|         # A finding resting only on tertiary sources is kept as a pointer, down-weighted.
-  301|         grade = TIER_WEIGHT[tier] * MATCH_WEIGHT.get(f['match'], 0.2)
-  302|         effects = [e for e in f.get('effects', []) if abs(e.get('pp', 0)) <= 60]
-  303|         direction = f['direction']
-  304|         if about in ('R', 'D'):
-  305|             sign = 1 if about == 'R' else -1
-  306|             rd = f.get('role_direction', 'none')
-  307|             if rd != 'none':
-  308|                 toward = about if rd == 'toward-affected' else ('D' if about == 'R' else 'R')
-  309|                 direction = f'toward-{toward}'
-  310|             # the affected candidate's two-party share, as the Republican two-party share
-  311|             effects = [e for e in effects if e['measure'] != 'r2'] + \
-  312|                       [e | {'measure': 'r2', 'pp': sign * e['pp']} for e in effects if e['measure'] == 'affected']
-  313|         effects = [e for e in effects if e['measure'] != 'affected']
-  314|         rel = f.get('relation', 'like-scenario')
-  315|         if rel == 'reverses-scenario':  # the scenario undoes this situation: its effect runs the other way
-  316|             direction = FLIP.get(direction, direction)
-  317|             effects = [e | {'pp': -e['pp']} for e in effects if e['measure'] != 'other']
-  318|         elif rel == 'context':
-  319|             direction, effects = 'none', []
-  320|         findings.append({**f, 'source_ids': ids, 'tier': tier, 'grade': round(grade, 3), 'effects': effects,
-  321|                          'direction': direction, 'reported_direction': f['direction']})
-  322|     positions = [p | {'source_ids': [i for i in p['source_ids'] if i in by_id]} for p in extracted.get('actor_positions', [])]
-  323|     positions = [p for p in positions if p['source_ids']]
-  324|     return {'summary': extracted.get('summary', ''), 'findings': findings, 'actor_positions': positions,
-  325|             'caveats': extracted.get('caveats', []), 'dropped_ungrounded': dropped,
-  326|             'no_reliable_evidence': bool(extracted.get('no_reliable_evidence')) or not findings}
-  327| 
-  328| 
-  329| def strength(ev: dict | None) -> dict:
-  330|     """strong ≥ 0.7, moderate ≥ 0.4, weak > 0, none. The best informative
-  331|     finding's grade, plus a little for corroboration (others graded ≥ 0.3)."""
-  332|     # Only findings that say which way people moved, or by how much, speak to the change;
-  333|     # context (turnout that year, who went to the pictures) informs the reader but not the strength.
-  334|     fs = [f for f in (ev or {}).get('findings', []) if f['effects'] or f['direction'] not in ('none', 'unclear', 'mixed')]
-  335|     if not fs:
-  336|         return {'level': 'none', 'score': 0.0, 'best': None}
-  337|     fs = sorted(fs, key=lambda f: -f['grade'])
-  338|     score = fs[0]['grade'] + 0.1 * sum(1 for f in fs[1:4] if f['grade'] >= 0.3)
-  339|     score = min(score, 1.0)
-  340|     level = 'strong' if score >= 0.7 else 'moderate' if score >= 0.4 else 'weak'
-  341|     return {'level': level, 'score': round(score, 3), 'best': fs[0]['claim']}
-  342| 
-  343| 
-  344| # ── 3. Evidence as a prior on cohort effects ──
-  345| 
-  346| def _applies(pop: dict, cohort: dict) -> bool:
-  347|     if pop['sex'] != 'any' and pop['sex'] != cohort['sex']:
-  348|         return False
-  349|     if pop['group'] != 'any' and pop['group'] != cohort['group']:
-  350|         return False
-  351|     if pop['region'] != 'any' and pop['region'] not in cohort.get('regions', [cohort.get('region')]):
-  352|         return False
-  353|     return True
-  354| 
-  355| 
-  356| def prior(ev: dict, cohort: dict, base: dict) -> dict:
-  357|     """{dt, dr, do: (mean, sd) on the logit scale} for one cohort, from the
-  358|     graded, quantified findings that apply to it. base: the cohort's backbone
-  359|     {turnout, r2, o}. A specific finding (group or region named) counts twice
-  360|     a general one. Weak evidence gives a wide prior: sd ∝ 1/√grade."""
-  361|     out = {}
-  362|     for measure, key, b in (('turnout', 'dt', base['turnout']), ('r2', 'dr', base['r2']), ('other', 'do', base['o'])):
-  363|         rows = []
-  364|         for f in ev.get('findings', []):
-  365|             if not _applies(f['population'], cohort):
-  366|                 continue
-  367|             specific = 2.0 if (f['population']['group'] != 'any' or f['population']['region'] != 'any') else 1.0
-  368|             for e in f['effects']:
-  369|                 if e['measure'] == measure:
-  370|                     rows.append((e['pp'], max(abs(e['pm']), 2.0), f['grade'] * specific))
-  371|         if not rows:
-  372|             continue
-  373|         w = np.array([r[2] for r in rows])
-  374|         pp = float(np.average([r[0] for r in rows], weights=w))
-  375|         spread = float(np.sqrt(np.average([(r[0] - pp) ** 2 for r in rows], weights=w)))
-  376|         pm = float(np.average([r[1] for r in rows], weights=w))
-  377|         g = float(min(1.0, w.max()))
-  378|         sd_pp = np.sqrt(pm ** 2 + spread ** 2 + 3.0 ** 2) / np.sqrt(max(g, 0.05))
-  379|         b = float(np.clip(b, 0.01, 0.99))
-  380|         new = float(np.clip(b + pp / 100, 0.005, 0.995))
-  381|         out[key] = (float(logit(new) - logit(b)), float(sd_pp / 100 / (b * (1 - b))), len(rows))
-  382|     return out
-  383| 
-  384| 
-  385| def blend(cohort_eff: dict, pri: dict) -> dict:
-  386|     """Precision-weighted combination of a cohort's interview draws with the
-  387|     evidence prior. The draws keep their shape, rescaled to the posterior sd."""
-  388|     draws = {k: np.asarray(v, float).copy() for k, v in cohort_eff['draws'].items()}
-  389|     used = {}
-  390|     for key, (mu_e, sd_e, n) in pri.items():
-  391|         d = draws[key]
-  392|         # A bootstrap over two or three people understates how wrong the model can be;
-  393|         # floor it near the Sonnet–Opus disagreement on the same people (D8, ~0.15 logit).
-  394|         mu_a, sd_a = float(d.mean()), max(float(d.std()), 0.2)
-  395|         prec_a, prec_e = 1 / sd_a ** 2, 1 / sd_e ** 2
-  396|         mu_p = (mu_a * prec_a + mu_e * prec_e) / (prec_a + prec_e)
-  397|         sd_p = (prec_a + prec_e) ** -0.5
-  398|         draws[key] = mu_p + (d - mu_a) * (sd_p / sd_a)
-  399|         used[key] = {'agents': round(mu_a, 3), 'evidence': round(mu_e, 3), 'evidence_sd': round(sd_e, 3),
-  400|                      'evidence_weight': round(prec_e / (prec_a + prec_e), 3), 'posterior': round(mu_p, 3), 'findings': n}
-  401|     return {**cohort_eff, 'draws': draws, 'evidence_blend': used}
-  402| 
-  403| 
-  404| # ── 4. Agreement and confidence ──
-  405| 
-  406| def _agree_one(ev: dict, national: dict, measure: str, key: str, b: float) -> dict | None:
-  407|     """One measure: the interviews' national effect (logit, 80% interval) against the findings, in points."""
-  408|     agent_pp = (float(expit(logit(b) + national[key]['mean'])) - b) * 100
-  409|     lo = (float(expit(logit(b) + national[key]['lo'])) - b) * 100
-  410|     hi = (float(expit(logit(b) + national[key]['hi'])) - b) * 100
-  411|     what = {'other': 'the third candidate\'s share', 'r2': 'the Republican two-party share', 'turnout': 'turnout'}[measure]
-  412|     rows = [(e['pp'], abs(e['pm']), f['grade']) for f in ev['findings'] for e in f['effects'] if e['measure'] == measure]
-  413|     if not rows:
-  414|         want = {'r2': ('toward-R', 'toward-D'), 'other': ('toward-other', None), 'turnout': ('more-turnout', 'less-turnout')}[measure]
-  415|         signs = [1 if f['direction'] == want[0] else -1 for f in ev['findings'] if f['grade'] >= 0.1 and f['direction'] in want]
-  416|         if not signs:
-  417|             return None
-  418|         s = np.sign(np.mean(signs))
-  419|         ok = np.sign(agent_pp) == s or abs(agent_pp) < 0.5
-  420|         return {'verdict': 'consistent' if ok else 'contradicted', 'measure': measure, 'agents_pp': round(agent_pp, 1),
-  421|                 'detail': f'On {what}, the sources point {"the same way as" if ok else "the other way from"} the interviews '
-  422|                           f'({agent_pp:+.1f} points), without numbers.'}
-  423|     w = np.array([r[2] for r in rows])
-  424|     ev_pp = float(np.average([r[0] for r in rows], weights=w))
-  425|     spread = float(np.sqrt(np.average([(r[0] - ev_pp) ** 2 for r in rows], weights=w)))
-  426|     ev_pm = float(np.hypot(np.average([max(r[1], 2.0) for r in rows], weights=w), spread))  # the analogues disagree too
-  427|     overlap = not (hi < ev_pp - ev_pm or lo > ev_pp + ev_pm)
-  428|     same_sign = np.sign(ev_pp) == np.sign(agent_pp) or abs(ev_pp) < 1 or abs(agent_pp) < 0.5
-  429|     verdict = 'corroborated' if overlap and same_sign else 'consistent' if same_sign else 'contradicted'
-  430|     return {'verdict': verdict, 'measure': measure, 'agents_pp': round(agent_pp, 1), 'agents_range_pp': [round(lo, 1), round(hi, 1)],
-  431|             'evidence_pp': round(ev_pp, 1), 'evidence_pm': round(ev_pm, 1),
-  432|             'detail': f'Interviews move {what} {agent_pp:+.1f} points ({lo:+.1f} to {hi:+.1f}); the closest historical '
-  433|                       f'cases moved it {ev_pp:+.1f} ± {ev_pm:.1f}.'}
-  434| 
-  435| 
-  436| def agreement(ev: dict | None, national: dict, base: dict, kind: str) -> dict:
-  437|     """Does the record agree with the interviews? Checked on the vote measure
-  438|     (the third candidate's share for a candidate, else the two-party share)
-  439|     and on turnout. Any contradiction wins; then corroboration; then consistency."""
-  440|     if not ev or not ev.get('findings') or not national:
-  441|         return {'verdict': 'untested', 'detail': 'No historical evidence to compare with.', 'measures': []}
-  442|     vote = ('other', 'do', base['o']) if kind == 'candidate' else ('r2', 'dr', base['r2'])
-  443|     got = [x for x in (_agree_one(ev, national, m, k, b) for m, k, b in (vote, ('turnout', 'dt', base['turnout']))) if x]
-  444|     if not got:
-  445|         return {'verdict': 'untested', 'measures': [],
-  446|                 'detail': 'The sources describe the situation but give no number or direction to compare with.'}
-  447|     for v in ('contradicted', 'corroborated', 'consistent'):
-  448|         if any(x['verdict'] == v for x in got):
-  449|             return {'verdict': v, 'measures': got, 'detail': ' '.join(x['detail'] for x in got)}
-  450| 
-  451| 
-  452| TIERS = ['very-low', 'low', 'medium', 'high']
-  453| TIER_LABEL = {'high': 'High confidence', 'medium': 'Medium confidence', 'low': 'Low confidence',
-  454|               'very-low': 'Extremely low confidence'}
-  455| BASE_TIER = {'franchise': 3, 'population': 2, 'issue': 1, 'event': 1, 'candidate': 1}
-  456| 
-  457| 
-  458| def confidence(spec: dict, ev: dict | None, agree: dict | None, agent: dict | None, generated: bool) -> dict:
-  459|     """A tier and the reasons for it. Agent-driven changes start at low; the
-  460|     record can lift one to medium only when strong evidence corroborates it.
-  461|     Fantasy, anachronism, contradiction or unstable interviews push it down."""
-  462|     kind = spec['kind']
-  463|     t = BASE_TIER.get(kind, 1)
-  464|     if generated and kind == 'franchise':
-  465|         t = 2  # borrowed behaviour chosen by the compiler, not written by hand
-  466|     flags, reasons = [], []
-  467|     st = strength(ev) if ev is not None else {'level': 'not-researched'}
-  468|     plaus = spec.get('plausibility', 'documented')
-  469|     if plaus == 'fantastical' or spec.get('anachronism'):
-  470|         t = 0
-  471|         flags.append('fantastical' if plaus == 'fantastical' else 'anachronism')
-  472|         reasons.append(spec.get('anachronism_note') or f'Nothing like this was possible in {spec.get("year", 1920)}, so no one\'s behaviour on record speaks to it.')
-  473|     elif plaus == 'a-stretch':
-  474|         t -= 1
-  475|         flags.append('far-from-record')
-  476|         reasons.append('The change is far from anything that happened, so behaviour on record only loosely applies.')
-  477|     if ev is None:
-  478|         flags.append('not-researched')
-  479|     elif st['level'] == 'none':
-  480|         if kind in ('issue', 'event', 'candidate'):
-  481|             t -= 1
-  482|         flags.append('no-evidence')
-  483|         reasons.append('I found no reliable historical work on how people behaved in this or a similar situation.')
-  484|     elif st['level'] == 'weak':
-  485|         flags.append('weak-evidence')
-  486|         reasons.append('Historical evidence is thin: loose analogies or weak sources only.')
-  487|     verdict = (agree or {}).get('verdict')
-  488|     if verdict == 'contradicted':
-  489|         t -= 1
-  490|         flags.append('contradicts-record')
-  491|         reasons.append('The interviews point the other way from the historical record.')
-  492|     elif verdict == 'corroborated' and st['level'] == 'strong' and kind in ('issue', 'event', 'candidate'):
-  493|         t += 1
-  494|         reasons.append('Strong historical evidence agrees with the interviews.')
-  495|     if agent and spec.get('mode') == 'agents':  # backbone-mode interviews are a cross-check; they move no numbers
-  496|         unstable = agent.get('spans_zero') and agent.get('paraphrase_flip')
-  497|         backed = verdict == 'corroborated' or (verdict == 'consistent' and st['level'] == 'strong')
-  498|         if unstable and not backed:
-  499|             t -= 1
-  500|             flags.append('unstable-interviews')
-  501|             reasons.append('The interviews\' answer changes sign with the question\'s wording.')
-  502|         elif unstable:
-  503|             flags.append('unstable-interviews')
-  504|             reasons.append('The interviews\' answer changes sign with the question\'s wording, though the record points the same way.')
-  505|         checked, wrong = agent.get('checked') or 0, agent.get('misread') or 0
-  506|         if checked and wrong:
-  507|             flags.append('misread-change')
-  508|             reasons.append(f'{wrong} of {checked} people interviewed took the news to be about the other candidate; '
-  509|                            'their answers were left out.')
-  510|             if wrong / checked >= 0.5:
-  511|                 t = 0
-  512|             elif wrong / checked > 0.25:
-  513|                 t -= 1
-  514|         # D33: the belief check and the reasoning audit. Every failure counts here, including bulk-model
-  515|         # answers later re-asked on a stronger model; only answers that failed on every model are dropped.
-  516|         bc, bf = agent.get('belief_checked') or 0, agent.get('belief_failed') or 0
-  517|         if bc and bf:
-  518|             flags.append('disbelieved-change')
-  519|             q = agent.get('question')
-  520|             reasons.append(f'{bf} of {bc} interviews didn\'t take the change as true'
-  521|                            + (f' (asked first: "{q}")' if q else '') + '; their answers were left out'
-  522|                            + (f', and {agent.get("escalated")} re-asked on a stronger model were kept instead.' if agent.get('escalated') else '.'))
-  523|             if bf / bc >= 0.5:
-  524|                 t -= 1
-  525|         ac, af = agent.get('audit_checked') or 0, agent.get('audit_failed') or 0
-  526|         if ac and af:
-  527|             flags.append('reasoned-off-premise')
-  528|             reasons.append(f'{af} of {ac} answers reasoned from the world as it really was; they were left out.')
-  529|             if af / ac >= 0.5:
-  530|                 t -= 1
-  531|         if agent.get('borrowed'):
-  532|             flags.append('borrowed-groups')
-  533|             reasons.append(f'{agent["borrowed"]} group{"s" if agent["borrowed"] != 1 else ""} the change reaches weren\'t interviewed; '
-  534|                            'they borrow the interviewed groups\' effect, with extra uncertainty.')
-  535|         if agent.get('n', 99) < 6:
-  536|             t -= 1
-  537|             flags.append('few-interviews')
-  538|             reasons.append(f'Only {agent.get("n")} people were interviewed on it.')
-  539|         if agent.get('exposed'):
-  540|             flags.append('model-knows-outcome')
-  541|     cand = spec.get('candidate') or {}
-  542|     if cand.get('name') and cand.get('positions_source') == 'inferred':
-  543|         flags.append('positions-inferred')
-  544|         reasons.append(f'{cand["name"]}\'s positions are inferred, not documented.')
-  545|     if cand.get('name') and cand.get('eligibility_note'):
-  546|         flags.append('ineligible-candidate')
-  547|         reasons.append(cand['eligibility_note'])
-  548|     if generated:
-  549|         flags.append('exploratory')
-  550|     cap = 2 if kind in ('issue', 'event', 'candidate') else 3
-  551|     t = int(max(0, min(cap, t)))
-  552|     return {'tier': TIERS[t], 'label': TIER_LABEL[TIERS[t]], 'flags': flags, 'reasons': reasons,
-  553|             'evidence': st['level']}
-  554| 
-  555| 
-  556| def combine_tiers(tiers: list[dict]) -> dict:
-  557|     if not tiers:
-  558|         return {'tier': 'high', 'label': TIER_LABEL['high'], 'flags': [], 'reasons': [], 'evidence': None}
-  559|     worst = min(tiers, key=lambda c: TIERS.index(c['tier']))
-  560|     flags = list(dict.fromkeys(f for c in tiers for f in c['flags']))
-  561|     reasons = list(dict.fromkeys(r for c in tiers for r in c['reasons']))
-  562|     return {**worst, 'flags': flags, 'reasons': reasons}
-  563| 
-  564| 
-  565| def page_evidence(key: str, ev: dict | None, agree: dict | None, sources_limit: int = 4) -> dict | None:
-  566|     """What the page shows: the summary, the agreement, and the best findings with their sources."""
-  567|     if not ev:
-  568|         return None
-  569|     by_id = {s['id']: s for s in ev.get('sources', [])}
-  570|     fs = sorted(ev.get('findings', []), key=lambda f: -f['grade'])[:sources_limit]
-  571|     return {
-  572|         'whatIf': key, 'strength': strength(ev)['level'], 'summary': ev.get('summary', ''),
-  573|         'agreement': (agree or {}).get('verdict', 'untested'), 'agreementDetail': (agree or {}).get('detail'),
-  574|         'findings': [{'claim': f['claim'], 'when': f['when'], 'match': f['match'], 'tier': f['tier'],
-  575|                       'sources': [{'title': by_id[i]['title'], 'url': by_id[i]['url'], 'tier': by_id[i]['tier']}
-  576|                                   for i in f['source_ids'] if i in by_id]} for f in fs],
-  577|         'caveats': ev.get('caveats', [])[:3],
-  578|         **({'researchedAt': ev['researched_at']} if ev.get('researched_at') else {}),
-  579|     }
-  580| 
-  581| 
-  582| def _create(client, **params):
-  583|     """messages.create with the harness's retry rules (rate limits, 5xx)."""
-  584|     import anthropic
-  585|     for attempt in range(5):
-  586|         try:
-  587|             return client.messages.create(**params)
-  588|         except anthropic.RateLimitError:
-  589|             time.sleep(2 ** attempt + 1)
-  590|         except anthropic.APIStatusError as e:
-  591|             if e.status_code < 500:
-  592|                 raise
-  593|             time.sleep(2 ** attempt)
-  594|         except anthropic.APIConnectionError:
-  595|             time.sleep(2 ** attempt)
-  596|     raise RuntimeError('retries exhausted')
-  597| 
-  598| 
-  599| def slug(text: str, n: int = 40) -> str:
-  600|     s = re.sub(r'[^a-z0-9]+', '-', text.lower()).strip('-')
-  601|     return s[:n].rstrip('-') or 'what-if'
-  602| 
-  603| 
-  604| def dumps(x) -> str:
-  605|     return json.dumps(x, indent=1, default=float)
-```
-
-## `simharness/geo.py`
-
-```python
-    1| """States, regions and 1920 electoral votes (and AK, HI, DC for 1960 on).
-    2| 
-    3| The electoral votes are checked at load time against the certified count in
-    4| the labels (NARA); see data.load_labels.
-    5| """
-    6| 
-    7| STATE_NAME = {
-    8|     'AL': 'Alabama', 'AZ': 'Arizona', 'AR': 'Arkansas', 'CA': 'California', 'CO': 'Colorado',
-    9|     'CT': 'Connecticut', 'DE': 'Delaware', 'FL': 'Florida', 'GA': 'Georgia', 'ID': 'Idaho',
-   10|     'IL': 'Illinois', 'IN': 'Indiana', 'IA': 'Iowa', 'KS': 'Kansas', 'KY': 'Kentucky',
-   11|     'LA': 'Louisiana', 'ME': 'Maine', 'MD': 'Maryland', 'MA': 'Massachusetts', 'MI': 'Michigan',
-   12|     'MN': 'Minnesota', 'MS': 'Mississippi', 'MO': 'Missouri', 'MT': 'Montana', 'NE': 'Nebraska',
-   13|     'NV': 'Nevada', 'NH': 'New Hampshire', 'NJ': 'New Jersey', 'NM': 'New Mexico', 'NY': 'New York',
-   14|     'NC': 'North Carolina', 'ND': 'North Dakota', 'OH': 'Ohio', 'OK': 'Oklahoma', 'OR': 'Oregon',
-   15|     'PA': 'Pennsylvania', 'RI': 'Rhode Island', 'SC': 'South Carolina', 'SD': 'South Dakota',
-   16|     'TN': 'Tennessee', 'TX': 'Texas', 'UT': 'Utah', 'VT': 'Vermont', 'VA': 'Virginia',
-   17|     'WA': 'Washington', 'WV': 'West Virginia', 'WI': 'Wisconsin', 'WY': 'Wyoming', 'DC': 'District of Columbia',
-   18|     'AK': 'Alaska', 'HI': 'Hawaii',
-   19| }
-   20| CODE_OF = {v: k for k, v in STATE_NAME.items()}
-   21| 
-   22| # The eleven former Confederate states: where the 1890–1908 constitutions and
-   23| # laws (poll taxes, literacy and "understanding" tests, white primaries) kept
-   24| # most Black citizens from voting. Border states are separate.
-   25| SOUTH = ['VA', 'NC', 'SC', 'GA', 'FL', 'AL', 'MS', 'LA', 'TX', 'AR', 'TN']
-   26| BORDER = ['KY', 'MD', 'DE', 'MO', 'WV', 'OK', 'DC']
-   27| NORTHEAST = ['ME', 'NH', 'VT', 'MA', 'RI', 'CT', 'NY', 'NJ', 'PA']
-   28| MIDWEST = ['OH', 'IN', 'IL', 'MI', 'WI', 'MN', 'IA', 'ND', 'SD', 'NE', 'KS']
-   29| WEST = ['MT', 'ID', 'WY', 'CO', 'NM', 'AZ', 'UT', 'NV', 'WA', 'OR', 'CA', 'AK', 'HI']
-   30| 
-   31| REGIONS = {'northeast': NORTHEAST, 'midwest': MIDWEST, 'south': SOUTH, 'border': BORDER, 'west': WEST}
-   32| REGION_OF = {s: r for r, ss in REGIONS.items() for s in ss}
-   33| # The 48 states of 1920, listed explicitly so adding AK, HI and DC to REGIONS
-   34| # (for 1960 on) can't change it. DC had no electors until 1964.
-   35| STATES_1920 = ['AL', 'AR', 'AZ', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'IA', 'ID', 'IL', 'IN', 'KS', 'KY', 'LA',
-   36|                'MA', 'MD', 'ME', 'MI', 'MN', 'MO', 'MS', 'MT', 'NC', 'ND', 'NE', 'NH', 'NJ', 'NM', 'NV', 'NY',
-   37|                'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX', 'UT', 'VA', 'VT', 'WA', 'WI', 'WV', 'WY']
-   38| ALL_STATES = sorted(STATE_NAME)  # 50 states + DC
-   39| # Every state and DC; which ones vote in a given year comes from the returns
-   40| # (data.states). 1789–1868 needs no extra codes: only states choose electors,
-   41| # and every state that ever did is one of today's 50 (VA before WV's 1863 split
-   42| # is VA; MA before ME's 1820 split is MA).
-   43| 
-   44| # Merge order for agent cohorts: a too-small cohort folds into the same sex
-   45| # and group in the nearest region.
-   46| NEAREST_REGION = {
-   47|     'northeast': ['midwest', 'border', 'west', 'south'],
-   48|     'midwest': ['northeast', 'west', 'border', 'south'],
-   49|     'west': ['midwest', 'northeast', 'border', 'south'],
-   50|     'border': ['south', 'midwest', 'northeast', 'west'],
-   51|     'south': ['border', 'midwest', 'northeast', 'west'],
-   52| }
-```
-
-## `simharness/intake.py`
-
-```python
-    1| """Typed what-if intake: a reader's words → a what-if the page can serve.
-    2| 
-    3|     python -m simharness.run whatif --text "charlie chaplin ran as an independent" --config configs/live-1920.json
-    4|     python -m simharness.run whatif --queue --config configs/live-1920.json    # what the router queued as unknown
-    5|     python -m simharness.run research --config configs/live-1920.json          # evidence for the config's what-ifs
-    6| 
-    7| Stages, each priced before it is sent and recorded in sessions/spend.jsonl:
-    8| 
-    9| 1. compile   (research.compile_model, structured): the words become a spec;
-   10|              or `same_as` an existing what-if, in which case only its keywords
-   11|              grow and the bundle is republished; or not modelable.
-   12| 2. research  (research.research_model + web search): notes with citations.
-   13| 3. extract   (research.extract_model, structured): graded findings, each
-   14|              grounded in a source the search returned.
-   15| 4. stage     (research.world_model, structured; D33, world.py): the year's
-   16|              newspaper items the change makes false, in-world news, downstream
-   17|              facts, a belief check, and the groups to interview.
-   18| 5. register  whatifs/<key>.json and whatifs/evidence/<key>.json; the key
-   19|              joins the config's what_ifs.
-   20| 6. run       backbone → plan → ask (identical earlier requests reused) →
-   21|              refine (audit, escalate) → analyze → publish → serve/bundles/<year>.json.
-   22| 
-   23| Model and effort (D33): the once-per-what-if calls (compile, extract, stage,
-   24| audit) are where a stronger model buys the most per dollar: each runs once,
-   25| and each decides whether the interviews measure the change at all. The live
-   26| configs run them on Opus at high effort; the per-voter interviews stay on the
-   27| bulk model, with only the answers that fail a check re-asked on a stronger one.
-   28| 
-   29| Money: every stage is priced before it is sent and recorded after, with the
-   30| name of the access key that queued the text, if any (llm.SPEND_WHO). Queued
-   31| text is modelled only while the spend ledger is under both caps, counted across
-   32| every visitor together: DAILY_USD per UTC day (SIMULACRA_DAILY_USD, default 20)
-   33| and MONTHLY_USD per UTC month (SIMULACRA_MONTHLY_USD, default 200). The router
-   34| (serve/guard.ts) checks the same caps before it queues; the worker checks again
-   35| before each text, and a text's Budget stops at the first stage that crosses
-   36| what is left. A stage is priced when it finishes, so a cap can be passed by at
-   37| most the one stage that crosses it.
-   38| 
-   39| Failures: a text that fails is retried once. After MAX_ATTEMPTS failures it is
-   40| settled as given up (queue-done.jsonl, status `gave-up`) and copied to
-   41| queue-dead.jsonl, so one bad text can't be re-billed forever or hold up the
-   42| texts queued behind it.
-   43| """
-   44| from __future__ import annotations
-   45| 
-   46| import datetime as dt
-   47| import json
-   48| import os
-   49| import re
-   50| import shutil
-   51| import time
-   52| from pathlib import Path
-   53| 
-   54| from . import evidence, llm, scenario
-   55| from .config import ROOT, RunConfig
-   56| from .whatifs import REGISTRY
-   57| 
-   58| SESSIONS = ROOT / 'sessions'
-   59| QUEUE = SESSIONS / 'queue.jsonl'
-   60| DONE = SESSIONS / 'queue-done.jsonl'
-   61| FAILED = SESSIONS / 'queue-failed.jsonl'
-   62| DEAD = SESSIONS / 'queue-dead.jsonl'
-   63| LOCK = SESSIONS / 'intake.lock'
-   64| SERVE_BUNDLES = ROOT / 'serve/bundles'
-   65| STATUS = SESSIONS / 'intake-status.json'
-   66| DAILY_USD = float(os.environ.get('SIMULACRA_DAILY_USD') or 20)
-   67| MONTHLY_USD = float(os.environ.get('SIMULACRA_MONTHLY_USD') or 200)
-   68| OVER_CAP = 'The budget for new what-ifs is spent for now. Try again tomorrow.'
-   69| MAX_ATTEMPTS = 2
-   70| GAVE_UP = 'I couldn’t model that, after two tries.'
-   71| 
-   72| 
-   73| class Progress:
-   74|     """What the worker is doing, for the router to show while the page waits
-   75|     (sessions/intake-status.json: {text, steps: [{text, state}], ts})."""
-   76| 
-   77|     def __init__(self, text: str | None):
-   78|         self.text, self.steps = (_norm(text) if text else None), []
-   79| 
-   80|     def step(self, label: str):
-   81|         if not self.text:
-   82|             return
-   83|         for s in self.steps:
-   84|             s['state'] = 'done'
-   85|         self.steps.append({'text': label, 'state': 'doing'})
-   86|         self._write()
-   87| 
-   88|     def finish(self):
-   89|         for s in self.steps:
-   90|             s['state'] = 'done'
-   91|         self._write()
-   92| 
-   93|     def _write(self):
-   94|         if not self.text:
-   95|             return
-   96|         SESSIONS.mkdir(exist_ok=True)
-   97|         tmp = STATUS.with_suffix(f'.{os.getpid()}.tmp')
-   98|         tmp.write_text(json.dumps({'text': self.text, 'steps': self.steps, 'ts': dt.datetime.now().isoformat(timespec='seconds')}))
-   99|         tmp.replace(STATUS)
-  100| 
-  101| 
-  102| class Budget:
-  103|     """What a typed what-if has spent, stage by stage, and the most it may (None: no ceiling)."""
-  104| 
-  105|     def __init__(self, ceiling: float | None = None):
-  106|         self.spent, self.lines, self.ceiling = 0.0, [], ceiling
-  107| 
-  108|     def add(self, dollars: float, stage: str, typical: float | None = None, note: str = '', record: bool = True):
-  109|         self.spent += dollars
-  110|         self.lines.append({'stage': stage, 'dollars': round(dollars, 4), 'typical': typical})
-  111|         if record:
-  112|             llm.record_spend(stage, dollars, note=note)
-  113|         if self.ceiling is not None and self.spent >= self.ceiling:
-  114|             raise SystemExit(OVER_CAP)
-  115| 
-  116| 
-  117| # Typical output tokens by call (measured: a compile answer ran ~1,300 tokens on Sonnet 5.5).
-  118| TYPICAL_OUT = {'compile': 1600, 'compile-retry': 1600, 'extract': 3000, 'stage': 2500}
-  119| # Thinking at higher effort multiplies output [I].
-  120| EFFORT_OUT = {'low': 1.0, 'medium': 3.0, 'high': 6.0, 'xhigh': 7.0, 'max': 8.0}
-  121| 
-  122| 
-  123| def typical_out(stage: str, effort: str, max_tokens: int) -> int:
-  124|     return int(min(TYPICAL_OUT.get(stage, 600) * EFFORT_OUT.get(effort, 1.0), 0.75 * max_tokens))
-  125| 
-  126| 
-  127| def _structured(req: dict, max_tokens: int, budget: Budget, stage: str, note: str = '') -> dict:
-  128|     from .config import RUNS
-  129|     cache = llm.AnswerCache(RUNS)
-  130|     hit = cache.get(req)
-  131|     if hit:
-  132|         print(f'{stage}: reused an identical earlier answer', flush=True)
-  133|         return hit['data']
-  134|     effort = req.get('effort') or 'low'
-  135|     est = llm.estimate([req], max_tokens, typical_out=typical_out(stage, effort, max_tokens))
-  136|     print(f'{stage}: ~${est["typical"]} typical, ${est["worst"]} worst ({req["model"]}, {effort} effort)', flush=True)
-  137|     ans = llm.AnthropicBackend(effort=effort, max_tokens=max_tokens)._one(req)
-  138|     cache.put(req, ans | {'backend': 'anthropic'})
-  139|     budget.add(llm.cost(req['model'], ans.get('usage') or {}), stage, est['typical'], note)
-  140|     if not ans.get('ok'):
-  141|         raise SystemExit(f'{stage} failed: {ans.get("error")}')
-  142|     return ans['data']
-  143| 
-  144| 
-  145| def _with_effort(req: dict, effort: str, fast: bool = False) -> dict:
-  146|     # 'low' keeps the request byte-identical to before D33, so its cached answers still match.
-  147|     # Fast mode changes only how quickly the answer comes (and its price), so it isn't part of the cache key.
-  148|     out = req | {'effort': effort} if effort and effort != 'low' else dict(req)
-  149|     return out | {'speed': 'fast'} if fast and llm.fast_ok(req['model']) else out
-  150| 
-  151| 
-  152| def compile_text(text: str, cfg: RunConfig, budget: Budget) -> dict:
-  153|     from . import profiles
-  154|     rc, prof = cfg.research, profiles.get(cfg.election)
-  155|     mt = max(3000, rc.pass_max_tokens)
-  156|     raw = _structured(_with_effort(scenario.compile_request(text, REGISTRY, cfg.context_cutoff, rc.compile_model, prof=prof),
-  157|                                    rc.compile_effort, rc.fast), mt, budget, 'compile', text)
-  158|     bad = scenario.naming_violations(raw, cfg.election) if raw.get('modelable') else []
-  159|     if bad:
-  160|         note = ('These sentences name a nominee, a party or the President, which the blinded briefs cannot show. '
-  161|                 'Rewrite them with the descriptions given: ' + json.dumps(bad))
-  162|         raw = _structured(_with_effort(scenario.compile_request(text, REGISTRY, cfg.context_cutoff, rc.compile_model, note, prof),
-  163|                                        rc.compile_effort, rc.fast), mt, budget, 'compile-retry', text)
-  164|     return raw
-  165| 
-  166| 
-  167| def stage(spec: dict, cfg: RunConfig, budget: Budget, ev: dict | None = None) -> dict | None:
-  168|     """D33: stage the what-if's world (world.py) and keep it on the spec. Agent-mode what-ifs only:
-  169|     a backbone-mode change's interviews are a cross-check and move no numbers."""
-  170|     from . import data, profiles, world
-  171|     rc = cfg.research
-  172|     if not rc.world_model or spec.get('mode') != 'agents':
-  173|         return None
-  174|     prof = profiles.get(cfg.election)
-  175|     rel = prof.get('corpus') or ('sources/corpus_1920.jsonl' if cfg.election == 1920 else None)
-  176|     corpus = data.corpus(cfg.context_cutoff, rel, profiles.names_re(cfg.election)) if rel else []
-  177|     req = _with_effort(world.stage_request(spec, prof, cfg.context_cutoff, corpus, rc.world_model, rc.world_effort, ev),
-  178|                        rc.world_effort, rc.fast)
-  179|     raw = _structured(req, max(4000, rc.pass_max_tokens), budget, 'stage', spec['key'])
-  180|     spec['world'] = world.finalize(raw, spec, prof, cfg.context_cutoff, corpus, rc.world_model, rc.world_effort)
-  181|     return spec['world']
-  182| 
-  183| 
-  184| def stage_config(config_path: str | Path, only: str | None = None, refresh: bool = False) -> dict:
-  185|     """Stage every compiled agent-mode what-if in a config that hasn't been (D33), and save its spec."""
-  186|     cfg = RunConfig.load(config_path)
-  187|     keys = [k for k in cfg.what_ifs if (not only or k == only) and REGISTRY.get(k, {}).get('generated')
-  188|             and REGISTRY[k].get('mode') == 'agents' and (refresh or not REGISTRY[k].get('world'))]
-  189|     budget = Budget()
-  190|     out = {}
-  191|     for k in keys:
-  192|         spec = {kk: v for kk, v in REGISTRY[k].items() if kk not in ('apply', 'facts')}
-  193|         w = stage(spec, cfg, budget, scenario.load_evidence(k))
-  194|         if w is None:
-  195|             continue
-  196|         scenario.save_spec(spec)
-  197|         REGISTRY[k] = scenario.bind(spec)
-  198|         out[k] = {'contradicted': len(w['contradicted']), 'items': len(w['items']), 'check': (w['check'] or {}).get('question'),
-  199|                   'focus': [f['why'] for f in w['focus']]}
-  200|     return {'staged': out, 'dollars': round(budget.spent, 4)}
-  201| 
-  202| 
-  203| def reextract(spec: dict, cfg: RunConfig, budget: Budget, have: dict) -> dict:
-  204|     """Extraction again from the saved notes (no new search)."""
-  205|     notes = {'text': have['notes'], 'sources': have['sources']}
-  206|     rc = cfg.research
-  207|     extracted = _structured(_with_effort(evidence.extract_request(spec, notes, rc.extract_model), rc.extract_effort, rc.fast),
-  208|                             max(8000, rc.pass_max_tokens), budget, 'extract', spec['key'])
-  209|     ev = {**have, **evidence.ground(extracted, notes, spec.get('about')), 'models': {**have.get('models', {}), 'extract': rc.extract_model},
-  210|           'reextracted_at': dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds')}
-  211|     scenario.save_evidence(spec['key'], ev)
-  212|     return ev
-  213| 
-  214| 
-  215| def research(spec: dict, cfg: RunConfig, budget: Budget, refresh: bool = False, again: bool = False) -> dict:
-  216|     """Evidence for one what-if (cached in whatifs/evidence/<key>.json). again: re-extract the saved notes."""
-  217|     import anthropic
-  218|     key = spec['key']
-  219|     have = scenario.load_evidence(key)
-  220|     if have and again and have.get('notes'):
-  221|         return reextract(spec, cfg, budget, have)
-  222|     if have and not refresh:
-  223|         return have
-  224|     rc = cfg.research
-  225|     est = evidence.research_estimate(rc.research_model, rc.max_searches, rc.research_max_tokens)
-  226|     print(f'research {key}: ~${est["typical"]} typical, ${est["worst"]} worst ({rc.research_model}, '
-  227|           f'≤{rc.max_searches} searches)', flush=True)
-  228|     client = anthropic.Anthropic(api_key=llm.api_key())
-  229|     notes = evidence.research(client, spec, {'year': cfg.election, 'day': cfg.election_day}, rc.research_model,
-  230|                               rc.max_searches, rc.research_effort, rc.research_max_tokens)
-  231|     budget.add(notes['dollars'], 'research', None, key)
-  232|     print(f'  {len(notes["queries"])} searches, {len(notes["sources"])} sources '
-  233|           f'({sum(s["tier"] == "A" for s in notes["sources"])} scholarly or official), ${notes["dollars"]}', flush=True)
-  234|     extracted = _structured(_with_effort(evidence.extract_request(spec, notes, rc.extract_model), rc.extract_effort, rc.fast),
-  235|                             max(8000, rc.pass_max_tokens), budget, 'extract', key)
-  236|     ev = evidence.ground(extracted, notes, spec.get('about'))
-  237|     ev.update({'key': key, 'version': evidence.EVIDENCE_VERSION,
-  238|                'researched_at': dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds'),
-  239|                'models': {'research': rc.research_model, 'extract': rc.extract_model}, 'queries': notes['queries'],
-  240|                'sources': notes['sources'], 'notes': notes['text'], 'prompt': notes['prompt'], 'usage': notes['usage'],
-  241|                'dollars': round(sum(x['dollars'] for x in budget.lines if x['stage'] in ('research', 'extract')), 4)})
-  242|     scenario.save_evidence(key, ev)
-  243|     return ev
-  244| 
-  245| 
-  246| def documented_positions(spec: dict, ev: dict, cutoff: str):
-  247|     """A candidate's positions from the record, when the research found any on
-  248|     or before the cutoff (masked like any brief text); else they stay inferred."""
-  249|     keep = []
-  250|     for p in ev.get('actor_positions', []):
-  251|         d = p.get('date', '')
-  252|         try:
-  253|             ok = dt.date.fromisoformat(d[:10]).isoformat() <= cutoff
-  254|         except ValueError:
-  255|             m = re.search(r'\b(1[6-9]\d\d)\b', d)
-  256|             ok = bool(m) and int(m.group(1)) < int(cutoff[:4])
-  257|         if ok:
-  258|             keep.append(scenario.clean_position(p['text'], int(cutoff[:4])))
-  259|     if keep:
-  260|         spec['candidate']['positions'] = keep[:3]
-  261|         spec['candidate']['positions_source'] = 'documented'
-  262| 
-  263| 
-  264| def _add_to_config(config_path: Path, key: str):
-  265|     raw = json.loads(config_path.read_text())
-  266|     if key not in raw['what_ifs']:
-  267|         raw['what_ifs'].append(key)
-  268|         config_path.write_text(json.dumps(raw, indent=2) + '\n')
-  269| 
-  270| 
-  271| def run_pipeline(config_path: Path, budget: Budget, publish_only: bool = False, progress: Progress | None = None) -> dict:
-  272|     from .run import Run
-  273|     progress = progress or Progress(None)
-  274|     run = Run(RunConfig.load(config_path))
-  275|     if not publish_only:
-  276|         if not (run.dir / 'fit.pkl').exists():
-  277|             run.backbone()
-  278|         run.plan()
-  279|         progress.step(f'Interviewing voters in your {run.cfg.election}, with the real one as a control.')
-  280|         asked = run.ask()
-  281|         budget.add(asked['dollars'], 'ask', None, record=False)  # ask records its own spend
-  282|         if run.cfg.research.audit_model or run.cfg.agents.escalate_model:
-  283|             progress.step('Checking that each voter took the change as true.')
-  284|             refined = run.refine()
-  285|             budget.add(refined['dollars'], 'refine', None, record=False)  # audit and ask record their own spend
-  286|         progress.step('Comparing the interviews with the historical record.')
-  287|         run.analyze()
-  288|     progress.step(f'Rerunning the {run.cfg.election} election 100 times.')
-  289|     run.publish()
-  290|     SERVE_BUNDLES.mkdir(parents=True, exist_ok=True)
-  291|     src = run.dir / 'published' / f'{run.cfg.election}.json'
-  292|     shutil.copyfile(src, SERVE_BUNDLES / f'{run.cfg.election}.json')
-  293|     (SERVE_BUNDLES / 'RUN_ID').write_text(run.id + '\n')
-  294|     return {'run': run.id, 'bundle': str(src)}
-  295| 
-  296| 
-  297| def report(year: int, key: str) -> dict:
-  298|     b = json.loads((SERVE_BUNDLES / f'{year}.json').read_text())
-  299|     r = b['runs'].get(key) or {}
-  300|     return {'key': key, 'label': REGISTRY[key]['label'], 'summary': r.get('summary'), 'ev': r.get('ev'),
-  301|             'confidence': r.get('confidenceTier'), 'flags': r.get('confidenceFlags'),
-  302|             'evidence': [{'strength': e['strength'], 'agreement': e['agreement'], 'detail': e.get('agreementDetail')}
-  303|                          for e in r.get('evidence', [])]}
-  304| 
-  305| 
-  306| def left(ledger: Path | None = None, daily: float | None = None, monthly: float | None = None) -> float:
-  307|     """Dollars the intake may still spend: the smaller of what's left of today's
-  308|     cap and this month's, every visitor together (llm.spent)."""
-  309|     today, month = llm.spent(ledger=ledger or llm.LEDGER)
-  310|     rest = min((DAILY_USD if daily is None else daily) - today, (MONTHLY_USD if monthly is None else monthly) - month)
-  311|     return max(rest, 0.0)
-  312| 
-  313| 
-  314| def whatif(text: str, config_path: str | Path, refresh: bool = False, ceiling: float | None = None) -> dict:
-  315|     config_path = Path(config_path)
-  316|     cfg = RunConfig.load(config_path)
-  317|     budget = Budget(ceiling)
-  318|     progress = Progress(text)
-  319|     progress.step('Turning your words into a change I can model.')
-  320|     raw = compile_text(text, cfg, budget)
-  321|     if not raw['modelable']:
-  322|         progress.finish()
-  323|         return {'status': 'not-modelable', 'why': raw['why_not'], 'dollars': round(budget.spent, 4)}
-  324|     if raw['same_as'] in REGISTRY and cfg.election in (REGISTRY[raw['same_as']].get('years') or [REGISTRY[raw['same_as']].get('year', 1920)]):
-  325|         key = raw['same_as']
-  326|         scenario.add_words(key, raw['words'] + [text.lower().strip()[:80]])
-  327|         in_config = key in cfg.what_ifs
-  328|         _add_to_config(config_path, key)
-  329|         progress.step(f'That’s {REGISTRY[key]["label"]}, which I’ve modelled already.')
-  330|         out = run_pipeline(config_path, budget, publish_only=in_config, progress=progress)
-  331|         progress.finish()
-  332|         return {'status': 'keyword', 'key': key, **out, 'dollars': round(budget.spent, 4), 'costs': budget.lines,
-  333|                 'report': report(cfg.election, key)}
-  334|     spec = scenario.finalize(raw, text, REGISTRY, cfg.research.compile_model, cfg.election)
-  335|     if spec.get('reinterpretation'):
-  336|         progress.step(spec['reinterpretation'])
-  337|     progress.step(f'Setting the scene: autumn {cfg.election}…')
-  338|     ev = research(spec, cfg, budget, refresh)
-  339|     n = len(ev.get('findings', []))
-  340|     progress.step(f'Clarifying historical context: {n or "no"} finding{"" if n == 1 else "s"}.')
-  341|     if spec['kind'] == 'candidate' and spec['candidate']['positions_source'] != 'documented':
-  342|         documented_positions(spec, ev, cfg.context_cutoff)
-  343|     if cfg.research.world_model and spec['mode'] == 'agents':
-  344|         progress.step(f'Staging the autumn of {cfg.election} so nothing in it contradicts the change.')
-  345|         w = stage(spec, cfg, budget, ev)
-  346|         if w:
-  347|             gone, new = len(w['contradicted']), len(w['items'])
-  348|             progress.step(f'Took out {gone or "no"} newspaper item{"" if gone == 1 else "s"} the change makes false; '
-  349|                           f'wrote {new} from the changed world{" and a question to check each voter believes it" if w["check"] else ""}.')
-  350|     scenario.save_spec(spec)
-  351|     REGISTRY[spec['key']] = scenario.bind(spec)
-  352|     _add_to_config(config_path, spec['key'])
-  353|     out = run_pipeline(config_path, budget, progress=progress)
-  354|     progress.finish()
-  355|     return {'status': 'modelled', 'key': spec['key'], **out, 'dollars': round(budget.spent, 4), 'costs': budget.lines,
-  356|             'report': report(cfg.election, spec['key'])}
-  357| 
-  358| 
-  359| def research_config(config_path: str | Path, refresh: bool = False, only: str | None = None, again: bool = False) -> dict:
-  360|     """Evidence for every what-if in a config that lacks it (hand-written ones included: there it grades confidence only)."""
-  361|     cfg = RunConfig.load(config_path)
-  362|     keys = [k for k in cfg.what_ifs if not only or k == only]
-  363|     budget = Budget()
-  364|     out = {}
-  365|     for k in keys:
-  366|         ev = research({**REGISTRY[k], 'key': k}, cfg, budget, refresh, again)
-  367|         out[k] = {'strength': evidence.strength(ev)['level'], 'findings': len(ev['findings']), 'summary': ev['summary'][:200]}
-  368|     return {'what_ifs': out, 'dollars': round(budget.spent, 4)}
-  369| 
-  370| 
-  371| # ── The router's queue ──
-  372| 
-  373| def _norm(text: str) -> str:
-  374|     return ' '.join(text.lower().split())
-  375| 
-  376| 
-  377| def _pid_alive(pid: int) -> bool:
-  378|     try:
-  379|         os.kill(pid, 0)
-  380|         return True
-  381|     except OSError:
-  382|         return False
-  383| 
-  384| 
-  385| def _config_for(year: int, fallback: Path | None = None) -> Path | None:
-  386|     """configs/live-<year>.json for any simulated year (one with a profile), or the
-  387|     worker's own config when it is that year's; None when the year isn't simulated."""
-  388|     from . import profiles
-  389|     if year not in profiles.years():
-  390|         return None
-  391|     p = ROOT / f'configs/live-{year}.json'
-  392|     if p.exists():
-  393|         return p
-  394|     return fallback if fallback and Path(fallback).exists() and RunConfig.load(fallback).election == year else None
-  395| 
-  396| 
-  397| def _settle(year: int, text: str, status: str, why: str | None = None, key: str | None = None,
-  398|             dollars: float | None = None):
-  399|     with open(DONE, 'a') as f:
-  400|         f.write(json.dumps({'text': text, 'year': year, 'ts': dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds'),
-  401|                             'status': status, 'key': key, 'why': why, 'dollars': dollars}) + '\n')
-  402| 
-  403| 
-  404| def process_queue(config_path: str | Path, limit: int = 3) -> list[dict]:
-  405|     """Model up to `limit` distinct queued (year, text) pairs, oldest first, within the caps.
-  406|     Each is modelled in its own year's live config, its spend recorded against the key that queued it, if any.
-  407|     A text that has failed MAX_ATTEMPTS times is given up (queue-dead.jsonl) instead of retried."""
-  408|     SESSIONS.mkdir(exist_ok=True)
-  409|     if LOCK.exists() and _pid_alive(int(LOCK.read_text().strip() or 0)):
-  410|         return [{'status': 'busy', 'pid': LOCK.read_text().strip()}]
-  411|     LOCK.write_text(str(os.getpid()))
-  412|     try:
-  413|         done = set()
-  414|         for l in DONE.read_text().splitlines() if DONE.exists() else []:
-  415|             if l.strip():
-  416|                 x = json.loads(l)
-  417|                 done.add((x.get('year', 1920), x['text']))
-  418|         attempts: dict[tuple[int, str], int] = {}
-  419|         for l in FAILED.read_text().splitlines() if FAILED.exists() else []:
-  420|             if l.strip():
-  421|                 x = json.loads(l)
-  422|                 k = (int(x.get('year') or 1920), x['text'])
-  423|                 attempts[k] = attempts.get(k, 0) + 1
-  424|         pending, who = [], {}
-  425|         for l in QUEUE.read_text().splitlines() if QUEUE.exists() else []:
-  426|             if l.strip():
-  427|                 q = json.loads(l)
-  428|                 key = (int(q.get('year') or 1920), _norm(q['text']))
-  429|                 if key not in done and key not in pending:
-  430|                     pending.append(key)
-  431|                     who[key] = q.get('who')
-  432|         results = []
-  433|         for year, t in pending[:limit]:
-  434|             if attempts.get((year, t), 0) >= MAX_ATTEMPTS:
-  435|                 # Failed before, every time: settled, not retried again.
-  436|                 with open(DEAD, 'a') as f:
-  437|                     f.write(json.dumps({'text': t, 'year': year, 'attempts': attempts[(year, t)], 'at': time.time()}) + '\n')
-  438|                 _settle(year, t, 'gave-up', GAVE_UP)
-  439|                 results.append({'text': t, 'year': year, 'status': 'gave-up', 'why': GAVE_UP})
-  440|                 continue
-  441|             cfg_path = _config_for(year, Path(config_path))
-  442|             llm.SPEND_WHO = who[(year, t)]
-  443|             budget_left = left()
-  444|             if budget_left <= 0:
-  445|                 # Settled, not retried: later budget isn't spent on text nobody is waiting for.
-  446|                 _settle(year, t, 'over-cap', OVER_CAP)
-  447|                 results.append({'text': t, 'year': year, 'status': 'over-cap', 'why': OVER_CAP})
-  448|                 continue
-  449|             try:
-  450|                 if cfg_path is None:
-  451|                     r = {'status': 'not-modelable', 'why': f'I haven’t simulated {year} yet.'}
-  452|                 else:
-  453|                     r = whatif(t, cfg_path, ceiling=budget_left)
-  454|             except (SystemExit, Exception) as e:
-  455|                 why = str(e) or repr(e)
-  456|                 if isinstance(e, SystemExit) and why == OVER_CAP:
-  457|                     # The cap was reached mid-text: settled. The texts after it find nothing left
-  458|                     # and are settled the same way, so no waiting page times out.
-  459|                     _settle(year, t, 'over-cap', OVER_CAP)
-  460|                     results.append({'text': t, 'year': year, 'status': 'over-cap', 'why': OVER_CAP})
-  461|                     continue
-  462|                 # A stop or a bug: recorded (FAILED, read by the router, which tells the waiting
-  463|                 # page why). The text stays queued for one more try, then is given up.
-  464|                 r = {'text': t, 'year': year, 'status': 'stopped' if isinstance(e, SystemExit) else 'error', 'why': why}
-  465|                 with open(FAILED, 'a') as f:
-  466|                     f.write(json.dumps(r | {'at': time.time()}) + '\n')
-  467|                 attempts[(year, t)] = attempts.get((year, t), 0) + 1
-  468|                 if attempts[(year, t)] >= MAX_ATTEMPTS:
-  469|                     with open(DEAD, 'a') as f:
-  470|                         f.write(json.dumps({'text': t, 'year': year, 'attempts': attempts[(year, t)], 'why': why,
-  471|                                             'at': time.time()}) + '\n')
-  472|                     _settle(year, t, 'gave-up', GAVE_UP)
-  473|                 results.append(r)
-  474|                 continue
-  475|             _settle(year, t, r['status'], r.get('why'), r.get('key'), r.get('dollars'))
-  476|             results.append({'text': t, **r})
-  477|         return results
-  478|     finally:
-  479|         llm.SPEND_WHO = None
-  480|         LOCK.unlink(missing_ok=True)
-```
-
-## `simharness/llm.py`
-
-```python
-    1| """The voice layer's model calls, behind one interface with three backends.
-    2| 
-    3| - anthropic        one Messages API call per request (Anthropic Python SDK >= 1.0)
-    4| - anthropic-batch  the Message Batches API: half price, asynchronous; the
-    5|                    production path for precomputed runs
-    6| - transcript       writes requests to a JSONL file and reads answers from
-    7|                    another, so any external runner can answer them (the
-    8|                    prototype used Claude Code subagents this way; see EVAL.md)
-    9| 
-   10| Every request is a dict: {id, model, system, user, schema, meta}. Every answer
-   11| is {id, model, backend, ok, data, usage, raw, error}.
-   12| 
-   13| Model notes: Sonnet 5.5 rejects non-default
-   14| sampling parameters, so variance is added by persona diversity, not
-   15| temperature. Opus 5.5 can't disable thinking; both run at a low effort here.
-   16| Structured outputs go through output_config.format (json_schema).
-   17| """
-   18| from __future__ import annotations
-   19| 
-   20| import hashlib
-   21| import json
-   22| import os
-   23| import random
-   24| import time
-   25| from pathlib import Path
-   26| 
-   27| from .config import ROOT
-   28| 
-   29| # $ per million tokens: input, output, cache read. Batch is half of each; fast mode (Opus 5.5 only) twice.
-   30| FAST_BETA = 'fast-mode-2026-02-01'
-   31| PRICES = {
-   32|     'claude-sonnet-5-5': (2.00, 10.00, 0.20),
-   33|     'claude-opus-5-5': (4.00, 20.00, 0.20),
-   34|     'claude-haiku-4-5': (1.00, 5.00, 0.10),
-   35| }
-   36| 
-   37| 
-   38| def cost(model: str, usage: dict, batch: bool = False) -> float:
-   39|     p_in, p_out, p_cache = PRICES.get(model, PRICES['claude-sonnet-5-5'])
-   40|     fresh = usage.get('input_tokens', 0)
-   41|     cached = usage.get('cache_read_input_tokens', 0)
-   42|     written = usage.get('cache_creation_input_tokens', 0)
-   43|     out = usage.get('output_tokens', 0)
-   44|     dollars = (fresh * p_in + written * p_in * 1.25 + cached * p_cache + out * p_out) / 1e6
-   45|     return dollars * (0.5 if batch else 1.0) * (2.0 if usage.get('speed') == 'fast' else 1.0)
-   46| 
-   47| 
-   48| def fast_ok(model: str) -> bool:
-   49|     """Fast mode runs on Opus 5.5 only (Claude API, not batches)."""
-   50|     return model == 'claude-opus-5-5'
-   51| 
-   52| 
-   53| KEY_FILE = Path.home() / '.config/simulacra/anthropic.env'
-   54| 
-   55| 
-   56| def api_key() -> str | None:
-   57|     """ANTHROPIC_API_KEY if set, else ~/.config/simulacra/anthropic.env. Never printed or logged."""
-   58|     if os.environ.get('ANTHROPIC_API_KEY'):
-   59|         return os.environ['ANTHROPIC_API_KEY']
-   60|     if KEY_FILE.exists():
-   61|         for line in KEY_FILE.read_text().splitlines():
-   62|             if line.startswith('ANTHROPIC_API_KEY='):
-   63|                 return line.split('=', 1)[1].strip()
-   64|     return None
-   65| 
-   66| 
-   67| def estimate(requests: list[dict], max_tokens: int, batch: bool = False, typical_out: int = 600) -> dict:
-   68|     """Dry-run dollars: input at ~4 chars/token (system uncached, to be safe),
-   69|     output at a typical `typical_out` tokens (600 fits an interview answer) and
-   70|     at the max_tokens worst case."""
-   71|     typical = worst = 0.0
-   72|     for r in requests:
-   73|         tin = (len(r['system']) + len(r['user']) + len(json.dumps(r['schema']))) / 4
-   74|         speed = {'speed': r.get('speed')} if r.get('speed') else {}
-   75|         typical += cost(r['model'], {'input_tokens': tin, 'output_tokens': min(typical_out, max_tokens), **speed}, batch)
-   76|         worst += cost(r['model'], {'input_tokens': tin, 'output_tokens': max_tokens, **speed}, batch)
-   77|     return {'requests': len(requests), 'typical': round(typical, 4), 'worst': round(worst, 4)}
-   78| 
-   79| 
-   80| def _parse(text: str):
-   81|     text = text.strip()
-   82|     if text.startswith('```'):
-   83|         text = text.strip('`').split('\n', 1)[-1]
-   84|     start, end = text.find('{'), text.rfind('}')
-   85|     return json.loads(text[start:end + 1])
-   86| 
-   87| 
-   88| class Backend:
-   89|     name = 'base'
-   90| 
-   91|     def run(self, requests: list[dict]) -> list[dict]:
-   92|         raise NotImplementedError
-   93| 
-   94| 
-   95| class AnthropicBackend(Backend):
-   96|     name = 'anthropic'
-   97| 
-   98|     def __init__(self, effort: str = 'low', max_tokens: int = 4000):
-   99|         import anthropic  # imported lazily: the backbone needs no SDK
-  100|         self.anthropic = anthropic
-  101|         self.client = anthropic.Anthropic(api_key=api_key())
-  102|         self.effort = effort
-  103|         self.max_tokens = max_tokens
-  104| 
-  105|     def params(self, r: dict) -> dict:
-  106|         out = {
-  107|             'model': r['model'],
-  108|             'max_tokens': self.max_tokens,
-  109|             # The system prompt is identical across every agent in a run, so it
-  110|             # is the cache prefix.
-  111|             'system': [{'type': 'text', 'text': r['system'], 'cache_control': {'type': 'ephemeral'}}],
-  112|             'messages': [{'role': 'user', 'content': r['user']}],
-  113|             'output_config': {
-  114|                 # A request may carry its own effort (the once-per-what-if passes run higher than the voices).
-  115|                 'effort': r.get('effort') or self.effort,
-  116|                 'format': {'type': 'json_schema', 'schema': r['schema']},
-  117|             },
-  118|         }
-  119|         if 'haiku' in r['model']:
-  120|             del out['output_config']['effort']  # Haiku 4.5 rejects effort
-  121|         return out
-  122| 
-  123|     def _one(self, r: dict) -> dict:
-  124|         a = self.anthropic
-  125|         # Fast mode (a request's speed: "fast"): the beta endpoint, Opus 5.5 only. It has its own rate
-  126|         # limit; a 429 there falls back to standard speed rather than waiting.
-  127|         fast = r.get('speed') == 'fast' and fast_ok(r['model'])
-  128|         for attempt in range(5):
-  129|             try:
-  130|                 if fast:
-  131|                     msg = self.client.beta.messages.create(**self.params(r), speed='fast', betas=[FAST_BETA])
-  132|                 else:
-  133|                     msg = self.client.messages.create(**self.params(r))
-  134|                 if msg.stop_reason == 'refusal':
-  135|                     return {'id': r['id'], 'model': r['model'], 'backend': self.name, 'ok': False,
-  136|                             'error': f'refusal: {getattr(msg.stop_details, "category", None)}', 'usage': msg.usage.model_dump()}
-  137|                 text = next(b.text for b in msg.content if b.type == 'text')
-  138|                 try:
-  139|                     data = json.loads(text)
-  140|                 except json.JSONDecodeError as e:  # truncated at max_tokens: paid for, so keep the usage
-  141|                     return {'id': r['id'], 'model': r['model'], 'backend': self.name, 'ok': False,
-  142|                             'error': f'{msg.stop_reason}: {e}', 'usage': msg.usage.model_dump()}
-  143|                 return {'id': r['id'], 'model': r['model'], 'backend': self.name, 'ok': True,
-  144|                         'data': data, 'usage': msg.usage.model_dump(), 'raw': text}
-  145|             except a.RateLimitError:
-  146|                 if fast:
-  147|                     fast = False
-  148|                     continue
-  149|                 time.sleep(2 ** attempt + random.random())
-  150|             except a.BadRequestError as e:
-  151|                 return {'id': r['id'], 'model': r['model'], 'backend': self.name, 'ok': False, 'error': str(e)}
-  152|             except a.APIStatusError as e:
-  153|                 if e.status_code < 500:
-  154|                     return {'id': r['id'], 'model': r['model'], 'backend': self.name, 'ok': False, 'error': str(e)}
-  155|                 time.sleep(2 ** attempt)
-  156|             except a.APIConnectionError:
-  157|                 time.sleep(2 ** attempt)
-  158|         return {'id': r['id'], 'model': r['model'], 'backend': self.name, 'ok': False, 'error': 'retries exhausted'}
-  159| 
-  160|     def run(self, requests):
-  161|         from concurrent.futures import ThreadPoolExecutor
-  162|         with ThreadPoolExecutor(max_workers=8) as pool:
-  163|             return list(pool.map(self._one, requests))
-  164| 
-  165| 
-  166| class AnthropicBatchBackend(AnthropicBackend):
-  167|     name = 'anthropic-batch'
-  168| 
-  169|     def run(self, requests, poll_seconds: int = 30):
-  170|         from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
-  171|         from anthropic.types.messages.batch_create_params import Request
-  172|         batch = self.client.messages.batches.create(requests=[
-  173|             Request(custom_id=r['id'], params=MessageCreateParamsNonStreaming(**self.params(r))) for r in requests
-  174|         ])
-  175|         while self.client.messages.batches.retrieve(batch.id).processing_status != 'ended':
-  176|             time.sleep(poll_seconds)
-  177|         by_id = {r['id']: r for r in requests}
-  178|         out = []
-  179|         for res in self.client.messages.batches.results(batch.id):
-  180|             r = by_id[res.custom_id]
-  181|             if res.result.type != 'succeeded':
-  182|                 out.append({'id': r['id'], 'model': r['model'], 'backend': self.name, 'ok': False, 'error': res.result.type})
-  183|                 continue
-  184|             msg = res.result.message
-  185|             text = next((b.text for b in msg.content if b.type == 'text'), '')
-  186|             try:
-  187|                 data = json.loads(text)
-  188|                 out.append({'id': r['id'], 'model': r['model'], 'backend': self.name, 'ok': True,
-  189|                             'data': data, 'usage': msg.usage.model_dump(), 'raw': text})
-  190|             except json.JSONDecodeError as e:
-  191|                 out.append({'id': r['id'], 'model': r['model'], 'backend': self.name, 'ok': False, 'error': str(e)})
-  192|         return out
-  193| 
-  194| 
-  195| class TranscriptBackend(Backend):
-  196|     """Hands requests to an external runner through files.
-  197| 
-  198|     `run` writes every request without an answer to `requests.jsonl` and returns
-  199|     the answers already present in `responses.jsonl` (one JSON object per line:
-  200|     {"id", "model", "answer": <text or object>}). Call it again after the runner
-  201|     has written its answers.
-  202|     """
-  203|     name = 'transcript'
-  204| 
-  205|     def __init__(self, folder: Path):
-  206|         self.folder = Path(folder)
-  207|         self.folder.mkdir(parents=True, exist_ok=True)
-  208| 
-  209|     def answers(self) -> dict:
-  210|         path = self.folder / 'responses.jsonl'
-  211|         got = {}
-  212|         if path.exists():
-  213|             for line in path.read_text().splitlines():
-  214|                 if line.strip():
-  215|                     row = json.loads(line)
-  216|                     got[row['id']] = row
-  217|         return got
-  218| 
-  219|     def run(self, requests):
-  220|         got = self.answers()
-  221|         pending = [r for r in requests if r['id'] not in got]
-  222|         if pending:
-  223|             with open(self.folder / 'requests.jsonl', 'w') as f:
-  224|                 for r in pending:
-  225|                     f.write(json.dumps(r) + '\n')
-  226|         out = []
-  227|         for r in requests:
-  228|             row = got.get(r['id'])
-  229|             if row is None:
-  230|                 continue
-  231|             try:
-  232|                 data = row['answer'] if isinstance(row['answer'], dict) else _parse(row['answer'])
-  233|                 out.append({'id': r['id'], 'model': row.get('model', r['model']), 'backend': self.name, 'ok': True,
-  234|                             'data': data, 'usage': row.get('usage', {}), 'raw': row['answer']})
-  235|             except Exception as e:  # a malformed answer is logged, not guessed at
-  236|                 out.append({'id': r['id'], 'model': r['model'], 'backend': self.name, 'ok': False, 'error': repr(e)})
-  237|         return out
-  238| 
-  239| 
-  240| def merge_answers(folder: Path, requests: list[dict]) -> dict:
-  241|     """Fold answers/<batch>.jsonl files into responses.jsonl, checking each
-  242|     answer against its request's schema (required keys, enums, p_choice)."""
-  243|     folder = Path(folder)
-  244|     by_id = {r['id']: r for r in requests}
-  245|     good, bad = {}, []
-  246|     for f in sorted((folder / 'answers').glob('*.jsonl')):
-  247|         for line in f.read_text().splitlines():
-  248|             if not line.strip():
-  249|                 continue
-  250|             try:
-  251|                 row = json.loads(line)
-  252|                 req = by_id[row['id']]
-  253|                 ans = row['answer'] if isinstance(row['answer'], dict) else _parse(row['answer'])
-  254|                 sch = req['schema']
-  255|                 missing = [k for k in sch['required'] if k not in ans]
-  256|                 if missing:
-  257|                     raise ValueError(f'missing {missing}')
-  258|                 for k, spec in sch['properties'].items():
-  259|                     if 'enum' in spec and ans.get(k) not in spec['enum']:
-  260|                         raise ValueError(f'{k}={ans.get(k)!r} not in enum')
-  261|                 row['answer'] = ans
-  262|                 good[row['id']] = row
-  263|             except Exception as e:
-  264|                 bad.append({'file': f.name, 'line': line[:120], 'error': repr(e)})
-  265|     with open(folder / 'responses.jsonl', 'w') as out:
-  266|         for row in good.values():
-  267|             out.write(json.dumps(row) + '\n')
-  268|     return {'merged': len(good), 'rejected': bad, 'missing': sorted(set(by_id) - set(good))}
-  269| 
-  270| 
-  271| def backend(name: str, folder: Path | None = None, effort: str = 'low', max_tokens: int = 4000) -> Backend:
-  272|     if name == 'anthropic':
-  273|         return AnthropicBackend(effort=effort, max_tokens=max_tokens)
-  274|     if name == 'anthropic-batch':
-  275|         return AnthropicBatchBackend(effort=effort, max_tokens=max_tokens)
-  276|     if name == 'transcript':
-  277|         return TranscriptBackend(folder)
-  278|     raise ValueError(name)
-  279| 
-  280| 
-  281| # ── Answer cache: an identical request is the same instrument ──
-  282| # Keyed on model, system, user and schema (never on meta, run or prompt-version
-  283| # labels), so a run that adds one what-if pays only for its new briefs. Only
-  284| # live API answers are cached; transcript (subagent) answers never are.
-  285| 
-  286| def request_key(r: dict) -> str:
-  287|     # A request's own effort is part of the instrument; requests without one keep their old keys.
-  288|     blob = json.dumps([r['model'], r['system'], r['user'], r['schema']] + ([r['effort']] if r.get('effort') else []), sort_keys=True)
-  289|     return hashlib.sha256(blob.encode()).hexdigest()
-  290| 
-  291| 
-  292| class AnswerCache:
-  293|     LIVE = ('anthropic', 'anthropic-batch')
-  294| 
-  295|     def __init__(self, runs_dir: Path):
-  296|         self.runs = Path(runs_dir)
-  297|         self.file = self.runs / '_cache/answers.jsonl'
-  298|         self.index = {}
-  299|         if self.file.exists():
-  300|             for line in self.file.read_text().splitlines():
-  301|                 if line.strip():
-  302|                     row = json.loads(line)
-  303|                     self.index[row['key']] = row['answer']
-  304|         # Backfill from earlier runs' requests and live answers.
-  305|         for req_file in self.runs.glob('*/agents/all_requests.jsonl'):
-  306|             ans_file = req_file.parent / 'answers.jsonl'
-  307|             if not ans_file.exists():
-  308|                 continue
-  309|             answers = {}
-  310|             for line in ans_file.read_text().splitlines():
-  311|                 if line.strip():
-  312|                     g = json.loads(line)
-  313|                     if g.get('ok') and g.get('backend') in self.LIVE:
-  314|                         answers[g['id']] = g | {'cached_from': req_file.parent.parent.name}
-  315|             for line in req_file.read_text().splitlines():
-  316|                 if line.strip():
-  317|                     r = json.loads(line)
-  318|                     if r['id'] in answers:
-  319|                         self.index.setdefault(request_key(r), answers[r['id']])
-  320| 
-  321|     def get(self, r: dict) -> dict | None:
-  322|         hit = self.index.get(request_key(r))
-  323|         if not hit:
-  324|             return None
-  325|         return {**hit, 'id': r['id'], 'cached': True, 'usage': {}}
-  326| 
-  327|     def put(self, r: dict, answer: dict):
-  328|         if not answer.get('ok') or answer.get('backend') not in self.LIVE:
-  329|             return
-  330|         k = request_key(r)
-  331|         self.index[k] = answer
-  332|         self.file.parent.mkdir(parents=True, exist_ok=True)
-  333|         with open(self.file, 'a') as f:
-  334|             f.write(json.dumps({'key': k, 'answer': answer}) + '\n')
-  335| 
-  336| 
-  337| # ── Spend ledger: every paid call, for the record (sessions-report) ──
-  338| 
-  339| LEDGER = ROOT / 'sessions/spend.jsonl'
-  340| # Who the spend is for: the access key's name while the intake worker models
-  341| # that key's text (intake.process_queue), else None. For the record only: the
-  342| # caps count every line, whoever's it was.
-  343| SPEND_WHO: str | None = None
-  344| 
-  345| 
-  346| def record_spend(stage: str, dollars: float, run: str = '', note: str = ''):
-  347|     if dollars <= 0:
-  348|         return
-  349|     LEDGER.parent.mkdir(parents=True, exist_ok=True)
-  350|     now = time.gmtime()
-  351|     with open(LEDGER, 'a') as f:
-  352|         f.write(json.dumps({'ts': time.strftime('%Y-%m-%dT%H:%M:%SZ', now), 'day': time.strftime('%Y-%m-%d', now),
-  353|                             'stage': stage, 'dollars': round(dollars, 5), 'run': run, 'note': note, 'who': SPEND_WHO}) + '\n')
-  354| 
-  355| 
-  356| def spent(day: str | None = None, ledger: Path = LEDGER) -> tuple[float, float]:
-  357|     """(dollars recorded on `day`, UTC, default today; dollars recorded in that day's
-  358|     calendar month), counting every line whoever's text it was. These are what the
-  359|     intake's caps are measured against (intake.left). serve/guard.ts `spent` reads
-  360|     the ledger the same way before it queues text."""
-  361|     day = day or time.strftime('%Y-%m-%d', time.gmtime())
-  362|     month = day[:7]
-  363|     today, this_month = 0.0, 0.0
-  364|     for line in ledger.read_text().splitlines() if ledger.exists() else []:
-  365|         try:
-  366|             r = json.loads(line)
-  367|             d = float(r['dollars'])
-  368|             line_day = str(r['day'])
-  369|         except (ValueError, KeyError, TypeError):
-  370|             continue
-  371|         if line_day.startswith(month):
-  372|             this_month += d
-  373|         if line_day == day:
-  374|             today += d
-  375|     return today, this_month
-  376| 
-```
-
-## `simharness/paired.py`
-
-```python
-    1| """Paired control/counterfactual answers → per-cohort effects on the backbone.
-    2| 
-    3| For agent i in cohort k, the same persona, seed, paraphrase and model answer
-    4| the control brief (the world as it was) and the counterfactual brief (the
-    5| world with one settled fact changed). The counterfactual effect is the
-    6| within-cohort difference, on the logit scale:
-    7| 
-    8|     Δt_k = logit(E[p_vote | cf])  − logit(E[p_vote | control])
-    9|     Δr_k = logit(R2 | cf)         − logit(R2 | control)
-   10|     Δo_k = logit(O  | cf)         − logit(O  | control)
-   11| 
-   12| where R2 is the Republican share of the two-party vote the cohort's agents
-   13| expect to cast (Σ p_vote·p_R / Σ p_vote·(p_R+p_D)) and O the minor-party share
-   14| of all votes. A bias common to both arms (the model knowing who won, a lean
-   15| in the model) cancels in the difference; what doesn't cancel is measured by
-   16| the control's distance from the calibrated backbone:
-   17| 
-   18|     b_k = logit(R2 | control) − logit(r_k backbone)
-   19| 
-   20| and the effect is shrunk by the fixed rule in METHOD.md (shrinkage).
-   21| """
-   22| from __future__ import annotations
-   23| 
-   24| import numpy as np
-   25| 
-   26| from .stats import logit
-   27| 
-   28| N0 = 8.0          # shrinkage pseudo-count
-   29| BIAS_SCALE = 1.0  # logit scale for bias shrinkage
-   30| 
-   31| 
-   32| def normalize(ans: dict, label_to_party: dict) -> dict | None:
-   33|     """One structured answer → {p_vote, R, D, O, choice, able} in party terms."""
-   34|     if not ans:
-   35|         return None
-   36|     able = ans.get('able_to_vote', 'yes')
-   37|     pv = max(0.0, min(1.0, float(ans.get('p_vote', 0)) / 100))
-   38|     if able == 'no':
-   39|         pv = 0.0
-   40|     pc = ans.get('p_choice') or {}
-   41|     shares = {'R': 0.0, 'D': 0.0, 'O': 0.0}
-   42|     for label, v in pc.items():
-   43|         party = label_to_party.get(label, 'O') if label != 'other' else 'O'
-   44|         shares[party] += max(0.0, float(v))
-   45|     tot = sum(shares.values())
-   46|     if tot <= 0:
-   47|         # An answer with no leanings is kept for turnout only.
-   48|         shares = {'R': np.nan, 'D': np.nan, 'O': np.nan}
-   49|     else:
-   50|         shares = {k: v / tot for k, v in shares.items()}
-   51|     c = ans.get('choice', 'none')
-   52|     choice = 'home' if (c == 'none' or pv < 0.5) else ('O' if c == 'other' else label_to_party.get(c, 'O'))
-   53|     if able == 'no':
-   54|         choice = 'barred'
-   55|     return {'p_vote': pv, **shares, 'choice': choice, 'able': able}
-   56| 
-   57| 
-   58| def cohort_stats(rows: list[dict]) -> dict:
-   59|     pv = np.array([r['p_vote'] for r in rows])
-   60|     R = np.array([r['R'] for r in rows])
-   61|     D = np.array([r['D'] for r in rows])
-   62|     O = np.array([r['O'] for r in rows])
-   63|     ok = ~np.isnan(R)
-   64|     w = pv[ok]
-   65|     # Half-count smoothing (Jeffreys-style): a cohort of four who all say 0
-   66|     # can't produce an infinite logit difference.
-   67|     turnout = float((pv.sum() + 0.5) / (len(pv) + 1)) if len(pv) else np.nan
-   68|     if w.sum() <= 0.05:
-   69|         return {'turnout': turnout, 'R2': np.nan, 'O': np.nan, 'n': len(rows)}
-   70|     r_votes, d_votes, o_votes = (w * R[ok]).sum(), (w * D[ok]).sum(), (w * O[ok]).sum()
-   71|     return {
-   72|         'turnout': turnout,
-   73|         'R2': float((r_votes + 0.5) / (r_votes + d_votes + 1)),
-   74|         'O': float((o_votes + 0.5) / (r_votes + d_votes + o_votes + 1)),
-   75|         'n': len(rows),
-   76|     }
-   77| 
-   78| 
-   79| def diff(cf: dict, ctl: dict) -> dict:
-   80|     out = {}
-   81|     for key, name in (('turnout', 'dt'), ('R2', 'dr'), ('O', 'do')):
-   82|         a, b = cf.get(key), ctl.get(key)
-   83|         out[name] = float(logit(a) - logit(b)) if (a is not None and b is not None and not np.isnan(a) and not np.isnan(b)) else 0.0
-   84|     return out
-   85| 
-   86| 
-   87| def floor_spread(boot: dict, point: dict, pairs: dict, draws: int, rng: np.random.Generator) -> dict:
-   88|     """D33: who was interviewed is part of the uncertainty. Resampling a cohort's own one or
-   89|     two people says almost nothing about the people who might have been drawn instead (one
-   90|     person resampled is always that person: no spread at all). So each cohort's draws get at
-   91|     least the spread of a mean of n people, with the person-to-person spread estimated from
-   92|     every pair in the run: sd_k >= s / sqrt(n_k), where s is the national bootstrap sd
-   93|     times sqrt(N). Draws keep their shape where they have one; otherwise normal noise."""
-   94|     rows = [(p[0], p[1]) for ps in pairs.values() for p in ps if p[0] and p[1]]
-   95|     N = len(rows)
-   96|     if N < 2:
-   97|         return boot
-   98|     nat = {'dt': np.empty(draws), 'dr': np.empty(draws), 'do': np.empty(draws)}
-   99|     for j in range(draws):
-  100|         s = rng.choice(N, size=N, replace=True)
-  101|         dd = diff(cohort_stats([rows[i][1] for i in s]), cohort_stats([rows[i][0] for i in s]))
-  102|         for key in nat:
-  103|             nat[key][j] = dd[key]
-  104|     out = {}
-  105|     for k, bd in boot.items():
-  106|         n = max(1, point[k]['n'])
-  107|         out[k] = {}
-  108|         for key, d in bd.items():
-  109|             target = float(np.std(nat[key])) * np.sqrt(N / n)
-  110|             sd, mu = float(np.std(d)), float(point[k][key])
-  111|             if sd >= target or target <= 0:
-  112|                 out[k][key] = d
-  113|             elif sd > 1e-9:
-  114|                 out[k][key] = mu + (d - float(np.mean(d))) * (target / sd)
-  115|             else:
-  116|                 out[k][key] = mu + rng.normal(0.0, target, len(d))
-  117|     return out
-  118| 
-  119| 
-  120| def effects(pairs: dict, backbone_r2: dict, region_of: dict, draws: int, rng: np.random.Generator,
-  121|             exposed: set | None = None, weights: dict | None = None, floor: bool = False) -> dict:
-  122|     """pairs: {cohort: [(control_row, cf_row, paraphrase, model), ...]}.
-  123|     floor: widen each cohort's draws to the sampling spread of who was interviewed (D33;
-  124|     compiled what-ifs only, so hand-written what-ifs' numbers are unchanged).
-  125| 
-  126|     Returns {'cohorts': {k: {...point estimates, bias, weight, draws: {dt, dr, do: [draws]}}},
-  127|              'national': {...}, 'regions': {...}}.
-  128|     """
-  129|     exposed = exposed or set()
-  130|     point, boot = {}, {}
-  131|     for k, ps in pairs.items():
-  132|         ctl = [p[0] for p in ps if p[0] and p[1]]
-  133|         cf = [p[1] for p in ps if p[0] and p[1]]
-  134|         if not ctl:
-  135|             continue
-  136|         c_stats, f_stats = cohort_stats(ctl), cohort_stats(cf)
-  137|         d = diff(f_stats, c_stats)
-  138|         bias = float(logit(c_stats['R2']) - logit(backbone_r2[k])) if not np.isnan(c_stats['R2']) and k in backbone_r2 else 0.0
-  139|         point[k] = {'control': c_stats, 'counterfactual': f_stats, **d, 'bias': bias, 'n': len(ctl)}
-  140|         idx = np.arange(len(ctl))
-  141|         bd = {'dt': np.empty(draws), 'dr': np.empty(draws), 'do': np.empty(draws)}
-  142|         for j in range(draws):
-  143|             s = rng.choice(idx, size=len(idx), replace=True)
-  144|             dd = diff(cohort_stats([cf[i] for i in s]), cohort_stats([ctl[i] for i in s]))
-  145|             for key in bd:
-  146|                 bd[key][j] = dd[key]
-  147|         boot[k] = bd
-  148| 
-  149|     if floor:
-  150|         boot = floor_spread(boot, point, pairs, draws, rng)
-  151|     national_bias = float(np.mean([v['bias'] for v in point.values()])) if point else 0.0
-  152| 
-  153|     def weight(n, bias):
-  154|         return (n / (n + N0)) * (1.0 / (1.0 + (bias / BIAS_SCALE) ** 2))
-  155| 
-  156|     # National effect: adult-weighted mean of cohort effects (per draw).
-  157|     ks = list(point)
-  158|     wts = np.array([(weights or {}).get(k, 1.0) for k in ks], float)
-  159|     nat = {key: np.average([boot[k][key] for k in ks], axis=0, weights=wts) if ks else np.zeros(draws) for key in ('dt', 'dr', 'do')}
-  160|     regions = {}
-  161|     for r in sorted({region_of[k] for k in ks}):
-  162|         rk = [k for k in ks if region_of[k] == r]
-  163|         n_r = sum(point[k]['n'] for k in rk)
-  164|         b_r = float(np.mean([point[k]['bias'] for k in rk]))
-  165|         w_r = weight(n_r, b_r)
-  166|         rw = np.array([(weights or {}).get(k, 1.0) for k in rk], float)
-  167|         regions[r] = {'weight': w_r, 'bias': b_r, 'n': n_r,
-  168|                       'draws': {key: w_r * np.average([boot[k][key] for k in rk], axis=0, weights=rw) + (1 - w_r) * nat[key]
-  169|                                 for key in ('dt', 'dr', 'do')}}
-  170|     cohorts = {}
-  171|     for k in ks:
-  172|         b = national_bias if k in exposed else point[k]['bias']
-  173|         w = weight(point[k]['n'], b)
-  174|         reg = regions[region_of[k]]['draws']
-  175|         cohorts[k] = {**point[k], 'bias_used': b, 'weight': w, 'exposed': k in exposed,
-  176|                       'draws': {key: w * boot[k][key] + (1 - w) * reg[key] for key in ('dt', 'dr', 'do')}}
-  177|     return {'cohorts': cohorts, 'regions': regions,
-  178|             'national': {key: {'mean': float(np.mean(v)), 'lo': float(np.quantile(v, 0.1)), 'hi': float(np.quantile(v, 0.9))}
-  179|                          for key, v in nat.items()},
-  180|             'national_bias': national_bias}
 ```

@@ -1,2088 +1,1826 @@
-# synthetic-electorate-toy: source and docs, part 10 of 16
+# synthetic-electorate-toy: source and docs, part 10 of 17
 
-Generated from commit `5fc0a9e54bc9` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
-Files `simharness/scenario.py` to `src/lib/robot/blast.ts`. Lines are numbered as in the repository.
+Generated from commit `4a07108d3ae4` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Files `simharness/pipeline.py` to `simharness/run.py`. Lines are numbered as in the repository.
 
-## `simharness/scenario.py`
-
-```python
-    1| """Any typed what-if → a what-if the pipeline can run.
-    2| 
-    3| `compile_text` asks the model to turn a reader's words into a structured
-    4| change of one of five kinds, each with generic mechanics:
-    5| 
-    6| - franchise   backbone only: bar a group, enfranchise it (it turns out and
-    7|               chooses like a named observed group), or give it another
-    8|               group's turnout.
-    9| - population  backbone only: scale a group's adults (no reapportionment).
-   10| - issue       agents: settled facts in every reached person's brief, dated
-   11| - event       topics and platform planks the change contradicts removed.
-   12| - candidate   agents: a third labelled line on the ballot for a named
-   13|               person, with neutral dated positions; the third choice counts
-   14|               in O (other), and publish applies the effect there.
-   15| 
-   16| A compiled what-if is written to `harness/whatifs/<key>.json` (the spec,
-   17| exploratory) with its evidence in
-   18| `harness/whatifs/evidence/<key>.json`. Both are hashed into a run's id.
-   19| `load_generated` merges the specs into `whatifs.REGISTRY` at import.
-   20| 
-   21| Nothing a compiler writes reaches a brief unchecked: facts that name a
-   22| nominee or party (data.NAMES) are sent back once for rewording, then
-   23| masked.
-   24| """
-   25| from __future__ import annotations
-   26| 
-   27| import datetime as dt
-   28| import hashlib
-   29| import json
-   30| import re
-   31| from pathlib import Path
-   32| 
-   33| import numpy as np
-   34| 
-   35| from .aggregate import World
-   36| from .config import ROOT
-   37| from .geo import REGIONS, SOUTH
-   38| 
-   39| WHATIFS_DIR = ROOT / 'whatifs'
-   40| EVIDENCE_DIR = WHATIFS_DIR / 'evidence'
-   41| COMPILER_VERSION = 'c4'  # c4: as asked, never a silent substitute (D34)  # c3: about + nominee_news (D21)  # c2: drop_topics only for contradicted topics (DISCLOSURES D17)
-   42| 
-   43| KINDS = ['franchise', 'population', 'issue', 'event', 'candidate']
-   44| GROUPS = ['native_white', 'foreign_white_naturalized', 'foreign_white_alien', 'black']
-   45| REGION_KEYS = ['northeast', 'midwest', 'south', 'border', 'west']
-   46| TOPICS = {
-   47|     'T1': 'women registering or voting for the first time', 'T2': 'the League of Nations and the peace treaty',
-   48|     'T3': 'cost of living, prices, wages, strikes, farm prices', 'T4': 'Prohibition in the campaign',
-   49|     'T5': 'Black citizens registering or kept from registering', 'T6': 'immigrant and ethnic grievances (Irish, German, Italian)',
-   50|     'T7': 'whether Georgia and Mississippi women could register in time', 'T8': 'Western states where women already voted',
-   51| }
-   52| PLANK_TOPICS = ['League of Nations', 'cost of living', 'labor', 'agriculture', 'women', 'immigration', 'Prohibition']
-   53| R_DESC = 'the party that has held a majority in Congress since the 1918 elections'
-   54| D_DESC = 'the party of the administration in office since 1913'
-   55| 
-   56| COMPILE_SYSTEM = f"""You turn a reader's what-if about the 1920 United States presidential election into a change a simulation can model.
-   57| 
-   58| The simulation has two layers. A calibrated backbone knows, for every state, how many adults of each census group (men and women; native-born white, naturalized immigrant, non-citizen immigrant and Black; plus region) could vote, turned out, and chose each candidate in 1920. Invented voters are interviewed with a brief dated on the context date: their circumstances, a few dated newspaper items, and the ballot. The two major nominees are blinded in those briefs: never name them or their parties.
-   59| 
-   60| Kinds of change:
-   61| - franchise: who may vote (bar a group, enfranchise one, or change a group's turnout). Say whose observed behaviour the newly able borrow.
-   62| - population: how many adults of a group live in the country (scale).
-   63| - issue: a policy question settled or changed, or another year's issue in the campaign.
-   64| - event: something that happened or didn't: a scandal, war, strike, economic shock, a person acting differently.
-   65| - candidate: a named person on the ballot as an independent or third-party candidate.
-   66| 
-   67| Model what the reader asked, as they asked it. If their words describe something that could not have happened by the context date (it needs events that in reality came later, or a different course of history), never swap in a nearer or more plausible change. Write the world in which it did happen by the context date: state as settled fact the earlier departures from history it requires (a war entered sooner and lost sooner, a law passed years early), and grade it "a-stretch" or "fantastical". Choose another reading only when the words genuinely allow several, and then the one closest to them.
-   68| 
-   69| Write:
-   70| - fidelity: "as-asked" when the change you model is the one the reader's words describe; "reinterpreted" when it is a different change (another reading, a narrower or a substitute change). reinterpretation: when reinterpreted, one sentence the reader sees first, saying what they asked, what is modelled instead, and why; otherwise "".
-   71| - withdraws: "O" when the change is that the labelled third candidate on this year's ballot (if there is one) does not run or withdraws; otherwise "none". Then kind is "candidate", and facts say when and how he left the race, without naming him.
-   72| - about: "R" or "D" when the change concerns one of the two major nominees personally (something he did, said, revealed or suffered); otherwise "none".
-   73| - nominee_news (only when about is R or D): one or two sentences of recent news about that nominee, in the third person ("He announced…", "Editors have denounced him…"), never naming him or his party. They are printed on his own line of the ballot, so no reader has to work out whom they concern. Then facts carry only the wider world, and never refer to the nominee again; facts may be empty.
-   74| - facts: one to three sentences stating the change as settled fact in the world on the context date, dated on or before it, in plain, neutral wording of the period. Never phrase it as a hypothesis ("what if", "imagine", "suppose", "would have"). Never name Harding, Cox, Coolidge, Franklin Roosevelt, Debs, Christensen or Wilson, and never write "Republican", "Democrat", "Democratic" or "G.O.P.". Call the Republicans "{R_DESC}" and the Democrats "{D_DESC}"; call Wilson "the President".
-   75| - candidate (kind candidate only): the person's name as known in 1920; descriptor: a neutral one-line identity on the context date; positions: up to three neutral, dated paraphrases of stances the person actually held or voiced by the context date (positions_source "documented"), or plausible ones when nothing is on record (positions_source "inferred"). Each position is a plain statement of the stance as voters would read it on the ballot, with no notes, brackets, hedges or "would likely". Never quote a real person or put words in their mouth. eligibility_note: if the Constitution would bar the person from the office (under 35, not a natural-born citizen, fewer than 14 years resident), say so in one sentence; otherwise "".
-   76| - reach: the sexes, groups and regions the change touches directly. Empty lists mean everyone.
-   77| - drop_topics: dated newspaper topics the settled facts would make false, from: {json.dumps(TOPICS)}. Only those: never drop a topic because the change would crowd it out of the news. Usually this list is empty.
-   78| - drop_planks: platform plank topics the change would remove, from {PLANK_TOPICS}. add_planks: a plank a party would add, in a neutral paraphrase.
-   79| - plausibility: "documented" (it nearly happened, or it did in some form), "within-reach" (plausible in 1920), "a-stretch" (possible only with large changes), "fantastical" (impossible in 1920). anachronism: true if it needs things that didn't exist in 1920; say what in anachronism_note.
-   80| - label: a Title Case name of three to six words, naming the change you model. detail: one sentence a reader sees. assumption: the modelling assumption, plainly.
-   81| - words: three to eight lowercase words or phrases a reader might type for this change.
-   82| - research_questions: two to four questions a historian could answer about how these people behaved in the same or the most similar situation.
-   83| - same_as: the key of an existing what-if if the reader asked for exactly that change in other words; otherwise "".
-   84| - modelable: false only if the text isn't a change to the 1920 election at all, or asks for something hateful or harmful; then give why_not. A fantastical change is still modelable: it will be flagged as extremely low confidence."""
-   85| 
-   86| GROUPS_PHRASE = 'native-born white, naturalized immigrant, non-citizen immigrant and Black'
-   87| 
-   88| 
-   89| def party_names(prof: dict) -> dict | None:
-   90|     """What people called the parties in slots R and D before 1856 (a profile's
-   91|     'party_names' wins); None from 1856, when they are the Republicans and Democrats."""
-   92|     if prof.get('party_names'):
-   93|         return prof['party_names']
-   94|     y = prof.get('year', 1920)
-   95|     if y >= 1856:
-   96|         return None
-   97|     if y <= 1792:
-   98|         return {'R': 'Federalists', 'D': 'Anti-Federalists'}
-   99|     if y <= 1820:
-  100|         return {'R': 'Federalists', 'D': 'Republicans'}
-  101|     if y == 1824:
-  102|         return {'R': 'Adams faction', 'D': 'Jackson faction'}
-  103|     if y <= 1832:
-  104|         return {'R': 'National Republicans', 'D': 'Democrats'}
-  105|     return {'R': 'Whigs', 'D': 'Democrats'}
-  106| 
-  107| 
-  108| def third_phrase(prof: dict) -> str:
-  109|     """How compiled text and masks call the labelled third candidate: compile_desc['O'],
-  110|     else 1924's wording, else "the " + the profile's ballot descriptor."""
-  111|     cd = prof.get('compile_desc') or {}
-  112|     if cd.get('O'):
-  113|         return cd['O']
-  114|     if prof.get('year') == 1924:
-  115|         return 'the independent Progressive candidate'
-  116|     d = (prof.get('descriptors') or {}).get('O')
-  117|     return f'the {re.split(r"[;:]|, an? ", d)[0].rstrip(".")}' if d else 'the third candidate'
-  118| 
-  119| 
-  120| def compile_system(prof: dict | None = None) -> str:
-  121|     """COMPILE_SYSTEM (1920) with another year's names, descriptors, groups, topics and planks.
-  122|     1924's text is exactly what it was when its compiled what-ifs were cached."""
-  123|     if not prof or prof['year'] == 1920:
-  124|         return COMPILE_SYSTEM
-  125|     from .agentlayer import groups_for
-  126|     y, cd = str(prof['year']), prof['compile_desc']
-  127|     s = COMPILE_SYSTEM.replace('1920', y)
-  128|     s = s.replace(GROUPS_PHRASE, groups_for(prof['year'])['phrase'])
-  129|     s = s.replace('Harding, Cox, Coolidge, Franklin Roosevelt, Debs, Christensen or Wilson', prof['never_name'])
-  130|     parties = party_names(prof)  # e.g. {"R": "Whigs", "D": "Democrats"} before 1856; None from 1856
-  131|     if parties:
-  132|         s = s.replace('never write "Republican", "Democrat", "Democratic" or "G.O.P.". Call the Republicans',
-  133|                       f'never write a party\'s name ({", ".join(chr(34) + v + chr(34) for v in parties.values())}). '
-  134|                       f'Call the {parties["R"]}').replace('and the Democrats "', f'and the {parties["D"]} "')
-  135|     s = s.replace(R_DESC, cd['R']).replace(D_DESC, cd['D']).replace('call Wilson "the President"', f'call {cd["president"]} "the President"')
-  136|     if prof.get('third'):
-  137|         third = third_phrase(prof)
-  138|         s = s.replace('call ' + cd['president'] + ' "the President".',
-  139|                       f'call {cd["president"]} "the President"; call {prof["names"]["O"]} "{third}".')
-  140|     s = s.replace(json.dumps(TOPICS), '[] (this year has no dated newspaper items: always an empty list)')
-  141|     return s.replace(str(PLANK_TOPICS), str(prof['plank_order']))
-  142| 
-  143| 
-  144| def compile_schema(prof: dict | None = None) -> dict:
-  145|     if not prof or prof['year'] == 1920:
-  146|         return COMPILE_SCHEMA
-  147|     s = json.loads(json.dumps(COMPILE_SCHEMA))
-  148|     s['properties']['drop_topics']['items']['enum'] = ['none']
-  149|     s['properties']['drop_planks']['items']['enum'] = list(prof['plank_order'])
-  150|     if prof['year'] >= 1972:  # 'other' (US-born Hispanic, Asian, American Indian…) is interviewed and reachable
-  151|         for r in (s['properties']['reach'], s['properties']['franchise']['properties']['borrow']):
-  152|             r['properties']['group']['items']['enum'] = GROUPS + ['other']
-  153|     return s
-  154| 
-  155| 
-  156| REACH = {'type': 'object', 'properties': {
-  157|     'sex': {'type': 'array', 'items': {'type': 'string', 'enum': ['M', 'F']}},
-  158|     'group': {'type': 'array', 'items': {'type': 'string', 'enum': GROUPS}},
-  159|     'region': {'type': 'array', 'items': {'type': 'string', 'enum': REGION_KEYS}},
-  160| }, 'required': ['sex', 'group', 'region'], 'additionalProperties': False}
-  161| 
-  162| COMPILE_SCHEMA = {
-  163|     'type': 'object',
-  164|     'properties': {
-  165|         'modelable': {'type': 'boolean'}, 'why_not': {'type': 'string'}, 'same_as': {'type': 'string'},
-  166|         'fidelity': {'type': 'string', 'enum': ['as-asked', 'reinterpreted']}, 'reinterpretation': {'type': 'string'},
-  167|         'kind': {'type': 'string', 'enum': KINDS},
-  168|         'about': {'type': 'string', 'enum': ['R', 'D', 'none']},
-  169|         'withdraws': {'type': 'string', 'enum': ['O', 'none']},
-  170|         'nominee_news': {'type': 'array', 'items': {'type': 'string'}},
-  171|         'label': {'type': 'string'}, 'detail': {'type': 'string'}, 'assumption': {'type': 'string'},
-  172|         'plausibility': {'type': 'string', 'enum': ['documented', 'within-reach', 'a-stretch', 'fantastical']},
-  173|         'anachronism': {'type': 'boolean'}, 'anachronism_note': {'type': 'string'},
-  174|         'facts': {'type': 'array', 'items': {'type': 'string'}},
-  175|         'reach': REACH,
-  176|         'drop_topics': {'type': 'array', 'items': {'type': 'string', 'enum': list(TOPICS)}},
-  177|         'drop_planks': {'type': 'array', 'items': {'type': 'string', 'enum': PLANK_TOPICS}},
-  178|         'add_planks': {'type': 'array', 'items': {'type': 'object', 'properties': {
-  179|             'party': {'type': 'string', 'enum': ['R', 'D']}, 'text': {'type': 'string'}},
-  180|             'required': ['party', 'text'], 'additionalProperties': False}},
-  181|         'candidate': {'type': 'object', 'properties': {
-  182|             'name': {'type': 'string'}, 'descriptor': {'type': 'string'},
-  183|             'positions': {'type': 'array', 'items': {'type': 'string'}},
-  184|             'positions_source': {'type': 'string', 'enum': ['documented', 'inferred', 'none']},
-  185|             'eligibility_note': {'type': 'string'}},
-  186|             'required': ['name', 'descriptor', 'positions', 'positions_source', 'eligibility_note'], 'additionalProperties': False},
-  187|         'franchise': {'type': 'object', 'properties': {
-  188|             'action': {'type': 'string', 'enum': ['none', 'bar', 'enfranchise', 'turnout']},
-  189|             'borrow': REACH},
-  190|             'required': ['action', 'borrow'], 'additionalProperties': False},
-  191|         'population_scale': {'type': 'number'},
-  192|         'words': {'type': 'array', 'items': {'type': 'string'}},
-  193|         'research_questions': {'type': 'array', 'items': {'type': 'string'}},
-  194|     },
-  195|     'required': ['modelable', 'why_not', 'same_as', 'fidelity', 'reinterpretation', 'kind', 'about', 'withdraws', 'nominee_news', 'label', 'detail', 'assumption', 'plausibility', 'anachronism',
-  196|                  'anachronism_note', 'facts', 'reach', 'drop_topics', 'drop_planks', 'add_planks', 'candidate', 'franchise',
-  197|                  'population_scale', 'words', 'research_questions'],
-  198|     'additionalProperties': False,
-  199| }
-  200| 
-  201| 
-  202| def compile_request(text: str, registry: dict, cutoff: str, model: str, retry_note: str | None = None, prof: dict | None = None) -> dict:
-  203|     year = prof['year'] if prof else 1920
-  204|     existing = '\n'.join(f'- {k}: {v["label"]}. {v["detail"]}' for k, v in registry.items() if year in (v.get('years') or [v.get('year', 1920)]))
-  205|     day = prof['day_phrase'] if prof else 'Tuesday, 2 November'
-  206|     user = f'Context date: {cutoff}. Election day: {day} {year}.\n\nExisting what-ifs:\n{existing}\n\nThe reader typed: "{text}"'
-  207|     if retry_note:
-  208|         user += f'\n\n{retry_note}'
-  209|     return {'id': f'compile|{year}|{hashlib.sha256(text.encode()).hexdigest()[:10]}', 'model': model, 'system': compile_system(prof),
-  210|             'user': user, 'schema': compile_schema(prof), 'meta': {'kind': 'compile', 'compiler_version': COMPILER_VERSION, 'year': year}}
-  211| 
-  212| 
-  213| def naming_violations(spec: dict, year: int = 1920) -> list[str]:
-  214|     from .profiles import names_re
-  215|     NAMES = names_re(year)
-  216|     texts = list(spec.get('facts', [])) + list(spec.get('nominee_news', [])) + [p['text'] for p in spec.get('add_planks', [])]
-  217|     c = spec.get('candidate') or {}
-  218|     texts += [c.get('descriptor', '')] + list(c.get('positions', []))
-  219|     return [t for t in texts if NAMES.search(t)]
-  220| 
-  221| 
-  222| MASKS = {
-  223|     1920: ((r'\bPresident Wilson\b|\bWilson\b', 'the President'), (r'\bG\.\s?O\.\s?P\.?', 'the congressional majority party'),
-  224|            (r'\bRepublicans?\b', 'the congressional majority party'), (r'\bDemocrat(?:s|ic)?\b', 'the administration party'),
-  225|            (r'\bHarding\b', 'the majority party\'s nominee'), (r'\bCox\b', 'the administration party\'s nominee'),
-  226|            (r'\b(?:Coolidge|Roosevelt|Debs|Christensen)\b', 'a nominee')),
-  227|     1924: ((r'\bPresident Coolidge\b|\bCoolidge\b', 'the President'), (r'\bLa ?Follette\b', 'the independent Progressive candidate'),
-  228|            (r'\bG\.\s?O\.\s?P\.?', 'the administration party'), (r'\bRepublicans?\b', 'the administration party'),
-  229|            (r'\bDemocrat(?:s|ic)?\b', 'the party out of power'), (r'\bDavis\b', 'the nominee of the party out of power'),
-  230|            (r'\bHarding\b', 'the late President'), (r'\bWilson\b', 'the former President'),
-  231|            (r'\b(?:Dawes|Bryan|Wheeler)\b', 'a running mate')),
-  232| }
-  233| 
-  234| 
-  235| def auto_masks(prof: dict) -> tuple:
-  236|     """Masks from a profile's names when it lists none: the President, each nominee's
-  237|     names, the third candidate, and the two parties by their descriptions."""
-  238|     cd, out = prof.get('compile_desc') or {}, []
-  239|     pres = cd.get('president')
-  240|     if pres:
-  241|         out.append((rf'\bPresident {re.escape(pres)}\b|\b{re.escape(pres)}\b', 'the President'))
-  242|     for k, rep in (('R', f"the nominee of {cd.get('R', 'one party')}"), ('D', f"the nominee of {cd.get('D', 'the other party')}"),
-  243|                    ('O', third_phrase(prof))):
-  244|         names = {n for n in (prof.get('names', {}).get(k), prof.get('full_names', {}).get(k)) if n and n != 'another candidate'}
-  245|         names |= {n.split()[-1] for n in names}
-  246|         if names:
-  247|             out.append((r'\b(?:' + '|'.join(re.escape(n) for n in sorted(names, key=len, reverse=True)) + r')\b', rep))
-  248|     parties = party_names(prof) or {'R': 'Republicans', 'D': 'Democrats'}
-  249|     if parties.get('R') and cd.get('R'):
-  250|         out.append((r'\bG\.\s?O\.\s?P\.?', cd['R']))
-  251|         out.append((rf'\b{re.escape(parties["R"].rstrip("s"))}s?\b', cd['R']))
-  252|     if parties.get('D') and cd.get('D'):
-  253|         out.append((rf'\b{re.escape(parties["D"].rstrip("s"))}(?:s|ic)?\b', cd['D']))
-  254|     return tuple(out)
-  255| 
-  256| 
-  257| def mask_names(text: str, year: int = 1920) -> str:
-  258|     if year in MASKS:
-  259|         masks = MASKS[year]
-  260|     else:
-  261|         from . import profiles
-  262|         masks = profiles.get(year).get('masks') or auto_masks(profiles.get(year))
-  263|     for pat, rep in masks:
-  264|         text = re.sub(pat, rep, text)
-  265|     # "the Republicans" → "the the administration party": keep one article.
-  266|     return re.sub(r'\b([Tt]he) the\b', r'\1', text)
-  267| 
-  268| 
-  269| ANNOTATION = re.compile(r'\s*\((?:documented|inferred|source|note)[^)]*\)', re.I)
-  270| 
-  271| 
-  272| def clean_position(text: str, year: int = 1920) -> str:
-  273|     """A ballot position as voters read it: names masked, modelling notes stripped."""
-  274|     return ANNOTATION.sub('', mask_names(text, year)).strip()
-  275| 
-  276| 
-  277| def _third(year: int) -> bool:
-  278|     from . import profiles
-  279|     try:
-  280|         return bool(profiles.get(year).get('third'))
-  281|     except SystemExit:
-  282|         return year != 1920
-  283| 
-  284| 
-  285| def finalize(raw: dict, text: str, registry: dict, model: str, year: int = 1920) -> dict:
-  286|     """Compiled answer → a registry-shaped spec (JSON-safe; `apply`/`facts` are bound at load)."""
-  287|     from .evidence import slug
-  288|     kind = raw['kind']
-  289|     base = slug(raw['candidate']['name'] + ' runs') if kind == 'candidate' and raw['candidate']['name'] else slug(raw['label'])
-  290|     key, n = base, 2
-  291|     while key in registry:
-  292|         key, n = f'{base}-{n}', n + 1
-  293|     reach = {k: v for k, v in raw['reach'].items() if v}
-  294|     mode = 'backbone' if kind in ('franchise', 'population') else 'agents'
-  295|     spec = {
-  296|         'key': key, 'label': raw['label'], 'kind': 'issue' if kind == 'event' else kind, 'subkind': kind, 'mode': mode,
-  297|         'detail': raw['detail'], 'assumption': raw['assumption'], 'plausibility': raw['plausibility'],
-  298|         'anachronism': raw['anachronism'], 'anachronism_note': raw['anachronism_note'],
-  299|         'year': year, 'years': [year],
-  300|         'withdraws': 'O' if raw.get('withdraws') == 'O' and _third(year) else None,
-  301|         'facts_text': [mask_names(f, year) for f in raw['facts']], 'reach': reach,
-  302|         'about': raw.get('about') if raw.get('about') in ('R', 'D') else None,
-  303|         'nominee_news': [mask_names(n, year) for n in raw.get('nominee_news', [])] if raw.get('about') in ('R', 'D') else [],
-  304|         'drop_topics': [t for t in raw['drop_topics'] if t in TOPICS] if year == 1920 else [], 'drop_planks': raw['drop_planks'],
-  305|         'add_planks': [p | {'text': mask_names(p['text'], year)} for p in raw['add_planks']],
-  306|         'candidate': (raw['candidate'] | {'descriptor': mask_names(raw['candidate']['descriptor'], year),
-  307|                                           'positions': [clean_position(p, year) for p in raw['candidate']['positions']][:3]})
-  308|         if kind == 'candidate' else None,
-  309|         'franchise': raw['franchise'] if kind == 'franchise' else None,
-  310|         'population_scale': raw['population_scale'] if kind == 'population' else None,
-  311|         # D34: a reinterpreted change never claims the reader's own words, so typing them again
-  312|         # reaches the compiler instead of being served the substitute.
-  313|         'fidelity': raw.get('fidelity', 'as-asked'),
-  314|         'reinterpretation': (raw.get('reinterpretation') or '') if raw.get('fidelity') == 'reinterpreted' else '',  # reader-facing: unmasked
-  315|         'words': sorted({w.lower().strip() for w in raw['words'] if len(w.strip()) >= 3
-  316|                          and not (raw.get('fidelity') == 'reinterpreted' and _same_words(w, text))}),
-  317|         'research_questions': raw['research_questions'],
-  318|         'slices': slices_reached(reach),
-  319|         'borrowed': describe_reach(raw['franchise']['borrow'], year) if kind == 'franchise' and raw['franchise']['action'] == 'enfranchise' else None,
-  320|         'source_text': text, 'generated': True, 'exploratory': True, 'evidence_mode': 'blend',
-  321|         'compiled': {'model': model, 'version': COMPILER_VERSION, 'at': dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds')},
-  322|     }
-  323|     return spec
-  324| 
-  325| 
-  326| def _same_words(a: str, b: str) -> bool:
-  327|     norm = lambda t: ' '.join(re.sub(r'[^a-z0-9 ]', ' ', t.lower()).split())
-  328|     return norm(a) == norm(b) or norm(a) in norm(b)
-  329| 
-  330| 
-  331| def slices_reached(reach: dict) -> list[str]:
-  332|     out = []
-  333|     sex, grp, reg = reach.get('sex') or ['M', 'F'], reach.get('group') or GROUPS, reach.get('region') or REGION_KEYS
-  334|     nonsouth = any(r != 'south' for r in reg)
-  335|     if 'foreign_white_alien' in grp:
-  336|         out.append('immigrants')
-  337|     citizen = [g for g in grp if g != 'foreign_white_alien']
-  338|     if citizen and nonsouth:
-  339|         out += [s for s, x in (('men', 'M'), ('women', 'F')) if x in sex]
-  340|     if 'south' in reg and any(g != 'black' for g in citizen):
-  341|         out.append('south-white')
-  342|     if 'south' in reg and 'black' in grp:
-  343|         out.append('black-south')
-  344|     return out
-  345| 
-  346| 
-  347| def describe_reach(r: dict, year: int = 1920) -> str:
-  348|     from .cohorts import GROUP_LABEL, SEX_LABEL
-  349|     labels = GROUP_LABEL
-  350|     if not 1868 <= year < 1972:
-  351|         from .agentlayer import groups_for
-  352|         labels = groups_for(year)['labels']
-  353|     g = ' and '.join(labels[x] for x in r.get('group', [])) or 'all'
-  354|     s = ' and '.join(SEX_LABEL[x] for x in r.get('sex', [])) or 'adults'
-  355|     where = f' in the {", ".join(r["region"])}' if r.get('region') else ''
-  356|     return f'{g} {s}{where}'
-  357| 
-  358| 
-  359| # ── Mechanics ──
-  360| 
-  361| def cell_mask(cells, reach: dict) -> np.ndarray:
-  362|     m = np.ones(len(cells), bool)
-  363|     if reach.get('sex'):
-  364|         m &= cells.sex.isin(reach['sex']).to_numpy()
-  365|     if reach.get('group'):
-  366|         m &= cells.group.isin(reach['group']).to_numpy()
-  367|     if reach.get('region'):
-  368|         states = [s for r in reach['region'] for s in REGIONS.get(r, [])]
-  369|         m &= cells.state.isin(states).to_numpy()
-  370|     if reach.get('state'):
-  371|         m &= cells.state.isin(reach['state']).to_numpy()
-  372|     return m
-  373| 
-  374| 
-  375| def _borrowed(world: World, m: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-  376|     """[D] turnout and [D, 3] shares of the borrowed group, vote-weighted."""
-  377|     can_vote = world.adults[:, m] * world.can[:, m]
-  378|     t = (can_vote * world.t[:, m]).sum(axis=1) / np.maximum(can_vote.sum(axis=1), 1e-9)
-  379|     v = can_vote * world.t[:, m]
-  380|     share = (v[..., None] * world.share[:, m, :]).sum(axis=1) / np.maximum(v.sum(axis=1), 1e-9)[:, None]
-  381|     return t, share
-  382| 
-  383| 
-  384| def make_apply(spec: dict):
-  385|     reach = spec.get('reach') or {}
-  386| 
-  387|     def franchise(fit, world: World, inp) -> World:
-  388|         w = world.copy()
-  389|         m = cell_mask(fit.cells, reach)
-  390|         f = spec['franchise'] or {'action': 'none'}
-  391|         share = float(np.clip(f.get('share') or 1.0, 0.0, 1.0))
-  392|         if f['action'] == 'bar' and share < 1.0:
-  393|             # Part of every reached cell (an age band the cells don't split: 18–20 of 18+),
-  394|             # barred with the cell's own behaviour [I].
-  395|             w.barred_by['legal'][:, m] += share * world.can[:, m]
-  396|             w.can[:, m] *= (1.0 - share)
-  397|             return w
-  398|         if f['action'] == 'enfranchise' and f.get('reason') == 'felony':
-  399|             # Lift only the felony bar (Inputs.black_can / white_can for 1972+): the newly
-  400|             # eligible vote like the rest of their cell [I].
-  401|             c = fit.cells
-  402|             for i in np.flatnonzero(m):
-  403|                 if c.group.iloc[i] == 'foreign_white_alien':
-  404|                     continue
-  405|                 st = c.state.iloc[i]
-  406|                 fel = (inp.black_can if c.group.iloc[i] == 'black' else inp.white_can).get(st, 1.0)
-  407|                 if fel < 1.0:
-  408|                     new = np.minimum(1.0, world.can[:, i] / fel)
-  409|                     w.barred_by['legal'][:, i] = np.maximum(0.0, w.barred_by['legal'][:, i] - (new - world.can[:, i]))
-  410|                     w.can[:, i] = new
-  411|             return w
-  412|         if f['action'] == 'bar':
-  413|             w.barred_by['legal'][:, m] = 1.0
-  414|             for k in w.barred_by:
-  415|                 if k != 'legal':
-  416|                     w.barred_by[k][:, m] = 0.0
-  417|             w.can[:, m] = 0.0
-  418|             return w
-  419|         b = cell_mask(fit.cells, f.get('borrow') or {})
-  420|         if not b.any():
-  421|             b = ~m
-  422|         t_b, share_b = _borrowed(world, b)
-  423|         if f['action'] == 'enfranchise':
-  424|             w.can[:, m] = 1.0
-  425|             for k in w.barred_by:
-  426|                 w.barred_by[k][:, m] = 0.0
-  427|             w.t[:, m] = t_b[:, None]
-  428|             w.share[:, m, :] = share_b[:, None, :]
-  429|         elif f['action'] == 'turnout':
-  430|             w.t[:, m] = t_b[:, None]
-  431|         return w
-  432| 
-  433|     def population(fit, world: World, inp) -> World:
-  434|         w = world.copy()
-  435|         m = cell_mask(fit.cells, reach)
-  436|         w.adults[:, m] *= float(np.clip(spec.get('population_scale') or 1.0, 0.0, 5.0))
-  437|         return w
-  438| 
-  439|     return franchise if spec['kind'] == 'franchise' else population if spec['kind'] == 'population' else None
-  440| 
-  441| 
-  442| def make_facts(spec: dict):
-  443|     reach = spec.get('reach') or {}
-  444| 
-  445|     def facts(agent: dict, inp, year: int = 1920) -> dict:
-  446|         # A staged world (world.py) adds its consequences to the settled facts and drops,
-  447|         # by id, the dated items the change makes false.
-  448|         world = spec.get('world') or {}
-  449|         out = {'facts': list(spec.get('facts_text') or []) + list(world.get('consequences') or []), 'eligibility': None,
-  450|                'drop_items': {c['id'] for c in world.get('contradicted') or []}, 'world': world or None,
-  451|                'about': spec.get('about'), 'nominee_news': list(spec.get('nominee_news') or []),
-  452|                'withdraws': spec.get('withdraws'),
-  453|                'drop_topics': set(spec.get('drop_topics') or []), 'drop_planks': set(spec.get('drop_planks') or []),
-  454|                'add_planks': spec.get('add_planks') or []}
-  455|         if spec['kind'] == 'candidate' and spec.get('candidate') and not spec.get('withdraws'):
-  456|             out['candidate'] = spec['candidate']
-  457|         if spec['kind'] == 'franchise' and agent_reached(spec, agent):
-  458|             f = spec.get('franchise') or {}
-  459|             if float(f.get('share') or 1.0) < 1.0 or f.get('reason'):
-  460|                 pass  # a slice of each cell (an age band, people with felony records): most agents unaffected
-  461|             elif f.get('action') == 'bar':
-  462|                 out['eligibility'] = 'This person cannot vote for president this year.'
-  463|             elif f.get('action') == 'enfranchise':
-  464|                 out['eligibility'] = 'This person is registered and can vote this year.'
-  465|         return out
-  466|     return facts
-  467| 
-  468| 
-  469| def agent_reached(spec: dict, a: dict) -> bool:
-  470|     reach = spec.get('reach') or {}
-  471|     if reach.get('sex') and a['sex'] not in reach['sex']:
-  472|         return False
-  473|     if reach.get('group') and a['group'] not in reach['group']:
-  474|         return False
-  475|     if reach.get('region'):
-  476|         region = 'south' if a['state'] in SOUTH else a['region']
-  477|         if region not in reach['region']:
-  478|             return False
-  479|     if reach.get('state') and a['state'] not in reach['state']:
-  480|         return False
-  481|     return True
-  482| 
-  483| 
-  484| # ── Storage ──
-  485| 
-  486| def spec_path(key: str) -> Path:
-  487|     return WHATIFS_DIR / f'{key}.json'
-  488| 
-  489| 
-  490| def evidence_path(key: str) -> Path:
-  491|     return EVIDENCE_DIR / f'{key}.json'
-  492| 
-  493| 
-  494| def save_spec(spec: dict):
-  495|     WHATIFS_DIR.mkdir(exist_ok=True)
-  496|     spec_path(spec['key']).write_text(json.dumps(spec, indent=1))
-  497| 
-  498| 
-  499| def load_evidence(key: str) -> dict | None:
-  500|     p = evidence_path(key)
-  501|     return json.loads(p.read_text()) if p.exists() else None
-  502| 
-  503| 
-  504| def save_evidence(key: str, ev: dict):
-  505|     EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
-  506|     evidence_path(key).write_text(json.dumps(ev, indent=1, default=float))
-  507| 
-  508| 
-  509| WORDS_FILE = WHATIFS_DIR / 'words.json'
-  510| 
-  511| 
-  512| def extra_words() -> dict:
-  513|     """Keywords learned from typed requests that meant an existing what-if (the cheapest fix: republish only)."""
-  514|     return json.loads(WORDS_FILE.read_text()) if WORDS_FILE.exists() else {}
-  515| 
-  516| 
-  517| def add_words(key: str, words: list[str]):
-  518|     cur = extra_words()
-  519|     cur[key] = sorted(set(cur.get(key, [])) | {w.lower().strip() for w in words if len(w.strip()) >= 3})
-  520|     WHATIFS_DIR.mkdir(exist_ok=True)
-  521|     WORDS_FILE.write_text(json.dumps(cur, indent=1))
-  522| 
-  523| 
-  524| def bind(spec: dict) -> dict:
-  525|     """A stored spec → a live registry entry."""
-  526|     return {**spec, 'apply': make_apply(spec), 'facts': make_facts(spec)}
-  527| 
-  528| 
-  529| def load_generated(registry: dict) -> dict:
-  530|     """Every compiled what-if, whatever its year: a spec without `years` applies to its
-  531|     `year` (1920 for the oldest specs); an unreadable file is skipped, not fatal."""
-  532|     if WHATIFS_DIR.exists():
-  533|         for p in sorted(WHATIFS_DIR.glob('*.json')):
-  534|             if p.name == 'words.json':
-  535|                 continue
-  536|             try:
-  537|                 spec = json.loads(p.read_text())
-  538|             except (OSError, ValueError):
-  539|                 continue
-  540|             if not isinstance(spec, dict) or not spec.get('key') or spec['key'] in registry:
-  541|                 continue
-  542|             if not spec.get('years'):
-  543|                 spec['years'] = [int(spec.get('year') or 1920)]
-  544|             registry[spec['key']] = bind(spec)
-  545|     return registry
-  546| 
-  547| 
-  548| def manifest(keys: list[str]) -> dict:
-  549|     """Hashes of the spec and evidence files a run depends on (its id changes with them)."""
-  550|     out = {}
-  551|     for k in keys:
-  552|         for p in (spec_path(k), evidence_path(k)):
-  553|             if p.exists():
-  554|                 out[str(p.relative_to(ROOT))] = hashlib.sha256(p.read_bytes()).hexdigest()[:16]
-  555|     return out
-  556| 
-  557| 
-  558| def third_label(rng, taken: list[str], name: str, pool: list[str]) -> str:
-  559|     initials = {w[0].upper() for w in name.split() if w}
-  560|     free = [l for l in pool if l not in taken and l not in initials] or [l for l in pool if l not in taken]
-  561|     return rng.choice(free)
-  562| 
-```
-
-## `simharness/serialize.py`
+## `simharness/pipeline.py`
 
 ```python
-    1| """The page's contract (api.js), plus additive fields the page may ignore.
-    2| 
-    3| Candidate keys follow history.js: A is the winner (1920: Harding, R), B the
-    4| runner-up (Cox, D), O everyone else.
-    5| 
-    6| Page slices (a partition: every adult 21+ is in exactly one):
-    7|   men          Men outside the South (citizens; all races)
-    8|   women        Women outside the South (citizens; all races)
-    9|   south-white  White Southerners (citizens; includes the few American Indian
-   10|                and Asian adults counted in the eleven Southern states)
-   11|   black-south  Black Southerners
-   12|   immigrants   Immigrants not yet citizens (every region)
-   13| """
-   14| from __future__ import annotations
-   15| 
-   16| from dataclasses import MISSING, asdict, dataclass, field, fields
-   17| from typing import Any
-   18| 
-   19| import numpy as np
-   20| 
-   21| PARTY_TO_KEY = {0: 'A', 1: 'B', 2: 'O'}   # R → A (Harding), D → B (Cox)
-   22| DEM_WON = {0: 'B', 1: 'A', 2: 'O'}        # a D win (1960, 1964, 1976…): D → A, R → B
-   23| 
+    1| """The pipeline's stages other than publish (publish.py): backbone, plan, ask,
+    2| refine, analyze, verify, dryrun and evaluate. Each writes into runs/<run id>/ and
+    3| can be rerun alone; run.py is the command line.
+    4| """
+    5| from __future__ import annotations
+    6| 
+    7| import json
+    8| import pickle
+    9| import random
+   10| import time
+   11| from types import SimpleNamespace
+   12| 
+   13| import numpy as np
+   14| 
+   15| from . import agentlayer, aggregate, backbone, cohorts as cohorts_mod, data, evaluate, evidence, llm, paired, quotes, scenario, serialize, world
+   16| from .config import RUNS, RunConfig
+   17| from .geo import STATE_NAME
+   18| from .publish import Publisher
+   19| from .stats import logit
+   20| from .whatifs import REGISTRY, apply_effects, for_year
+   21| 
+   22| # What analyze reports about the checks on a what-if's interviews (agent_stats; evidence.confidence reads them).
+   23| STAT_KEYS = ('checked', 'misread', 'belief_checked', 'belief_failed', 'audit_checked', 'audit_failed', 'escalated', 'dropped', 'question')
    24| 
-   25| def key_map(base_ev_point) -> dict:
-   26|     """Party index → page key: A is the historical winner (history.js), B the other major party."""
-   27|     return DEM_WON if base_ev_point[1] > base_ev_point[0] else PARTY_TO_KEY
-   28| 
-   29| 
-   30| def _abo(d: dict) -> dict:
-   31|     return {k: d[k] for k in 'ABO' if k in d}
-   32| 
-   33| SLICES = [
-   34|     ('men', 'Men outside the South'),
-   35|     ('women', 'Women outside the South'),
-   36|     ('south-white', 'White Southerners'),
-   37|     ('black-south', 'Black Southerners'),
-   38|     ('immigrants', 'Immigrants not yet citizens'),
-   39| ]
-   40| 
-   41| 
-   42| def slice_of(row) -> str:
-   43|     if row.group == 'foreign_white_alien':
-   44|         return 'immigrants'
-   45|     if row.south:
-   46|         return 'black-south' if row.group == 'black' else 'south-white'
-   47|     return 'men' if row.sex == 'M' else 'women'
-   48| 
-   49| 
-   50| def slices(fit, world, point: int, sources: dict, labels: dict | None = None, key_of: dict = PARTY_TO_KEY) -> list[dict]:
-   51|     """labels: the era's slice labels (agentlayer.groups_for(year)['slices']); default SLICES."""
-   52|     c = fit.cells
-   53|     keys = c.apply(slice_of, axis=1).to_numpy()
-   54|     out = []
-   55|     a = world.adults[point]
-   56|     can = world.can[point]
-   57|     t = world.t[point]
-   58|     sh = world.share[point]
-   59|     for key, label in SLICES:
-   60|         label = (labels or {}).get(key, label)
-   61|         m = keys == key
-   62|         n = a[m].sum()
-   63|         if n <= 0:
-   64|             continue
-   65|         barred = (a[m] * (1 - can[m])).sum() / n
-   66|         voted = a[m] * can[m] * t[m]
-   67|         home = (a[m] * can[m] * (1 - t[m])).sum() / n
-   68|         by_key = {key_of[p]: (voted * sh[m, p]).sum() / n for p in range(3)}
-   69|         A, B, O = by_key['A'], by_key['B'], by_key['O']
-   70|         out.append({
-   71|             'key': key, 'label': label, 'adults': round(n / 1e6, 3),
-   72|             'barred': round(float(barred), 4), 'home': round(float(home), 4),
-   73|             'A': round(float(A), 4), 'B': round(float(B), 4), 'O': round(float(O), 4),
-   74|             'source': sources.get(key),
-   75|         })
-   76|     return out
-   77| 
-   78| 
-   79| def states(names: list, summary: dict, base_winner: list, key_of: dict = PARTY_TO_KEY) -> list[dict]:
-   80|     out = []
-   81|     for i, code in enumerate(names):
-   82|         won = key_of[summary['state_winner_point'][i]]
-   83|         out.append({
-   84|             'code': code,
-   85|             'won': won,
-   86|             'flipped': summary['state_winner_point'][i] != base_winner[i],
-   87|             'margin': round(summary['state_margin_point'][i], 1),
-   88|             # additive
-   89|             'marginRange': [round(x, 1) for x in summary['state_margin_range'][i]],
-   90|             'pFlip': round(summary['state_p_flip'][i], 3),
-   91|         })
-   92|     return out
-   93| 
-   94| 
-   95| def result(*, names, summary, base_winner, slices_out, text, confidence, applied, extras, key_of: dict = PARTY_TO_KEY) -> dict:
-   96|     ev = _abo({key_of[i]: int(round(v)) for i, v in enumerate(summary['ev_point'])})
-   97|     nat = max(ev, key=ev.get) if max(ev.values()) > sum(ev.values()) / 2 else None
-   98|     return {
-   99|         'ev': ev,
-  100|         'winner': nat,
-  101|         'states': states(names, summary, base_winner, key_of),
-  102|         'slices': slices_out,
-  103|         'summary': text,
-  104|         'confidence': confidence,
-  105|         'applied': applied,
-  106|         'unknown': None,
-  107|         # additive
-  108|         'range': _abo({key_of[i]: [int(round(x)) for x in summary['ev_range'][p]] for i, p in enumerate('RDO')}),
-  109|         'drawsWon': _abo({key_of[i]: summary['draws_won'][p] for i, p in enumerate('RDO')}) | {
-  110|             'none': summary['draws_no_majority'], 'of': summary['draws']},
-  111|         'popular': _abo({key_of[i]: int(round(v)) for i, v in enumerate(summary['popular_point'])}),
-  112|         'popularRange': _abo({key_of[i]: [int(round(x)) for x in summary['popular_range'][i]] for i in range(3)}),
-  113|         **extras,
-  114|     }
-  115| 
-  116| 
-  117| def fmt_m(n: float) -> str:
-  118|     return f'{n / 1e6:.1f} million' if n >= 950_000 else f'{round(n / 1000):,},000'
-  119| 
-  120| 
-  121| def closest(names, state_names, summary, base_winner, flipped_only=False):
-  122|     """The state the change squeezed most: smallest point margin among states
-  123|     whose winner didn't change (or did, if flipped_only)."""
-  124|     best = None
-  125|     novote = summary.get('state_no_vote_point') or [False] * len(names)
-  126|     for i, code in enumerate(names):
-  127|         if novote[i]:
-  128|             continue  # the legislature chose the electors: no margin to speak of
-  129|         f = summary['state_winner_point'][i] != base_winner[i]
-  130|         if f != flipped_only:
-  131|             continue
-  132|         m = summary['state_margin_point'][i]
-  133|         if best is None or m < best[1]:
-  134|             best = (code, m, summary['state_winner_point'][i])
-  135|     return best
-  136| 
-  137| 
-  138| def headline_ev(summary, key_of: dict = PARTY_TO_KEY) -> str:
-  139|     """Electoral votes, the historical winner's party first (R–D(–O) when R won)."""
-  140|     by_key = {key_of[i]: int(round(x)) for i, x in enumerate(summary['ev_point'])}
-  141|     a, b, o = by_key['A'], by_key['B'], by_key['O']
-  142|     return f'{a}–{b}' + (f'–{o}' if o else '')
-  143| 
-  144| 
-  145| def winner_ev(summary, winner: int) -> str:
-  146|     """Electoral votes with the new winner first: "272–129" when the result flips."""
-  147|     ev = [int(round(x)) for x in summary['ev_point']]
-  148|     rest = sorted((i for i in range(3) if i != winner), key=lambda i: (i == 2, -ev[i]))
-  149|     out = [ev[winner]] + [ev[i] for i in rest if i != 2 or ev[i]]
-  150|     return '–'.join(str(x) for x in out)
-  151| 
-  152| 
-  153| def verdict(*, lead: str, names, state_names, cand, summary, base_summary, base_winner, key_of: dict = PARTY_TO_KEY) -> str:
-  154|     """The robot's sentence: what changed in people, then what it did."""
-  155|     flips = [names[i] for i in range(len(names)) if summary['state_winner_point'][i] != base_winner[i]]
-  156|     won = summary['draws_won']
-  157|     D = summary['draws']
-  158|     nat_point = int(np.argmax(summary['ev_point']))
-  159|     base_nat = int(np.argmax(base_summary['ev_point']))
-  160|     parts = [lead]
-  161|     if not flips and summary['ev_point'] == base_summary['ev_point'] and lead.startswith('Rerun with nothing changed'):
-  162|         near = closest(names, state_names, summary, base_winner)
-  163|         if near:
-  164|             parts.append(f'The closest state was {state_names[near[0]]}, which went to {cand[near[2]]} by {near[1]:.1f} points.')
-  165|         parts.append(f'Every one of my {D} reruns reproduces it exactly.')
-  166|         return ' '.join(parts)
-  167|     if nat_point != base_nat:
-  168|         parts.append(f'{cand[nat_point]} wins, {winner_ev(summary, nat_point)}.')
-  169|     elif flips:
-  170|         who = ', '.join(state_names[s] for s in flips[:4]) + (f' and {len(flips) - 4} more' if len(flips) > 4 else '')
-  171|         parts.append(f'{who} {"flip" if len(flips) > 1 else "flips"}, but {cand[base_nat]} still wins, {headline_ev(summary, key_of)}.')
-  172|     else:
-  173|         parts.append(f'No state flips. {cand[base_nat]} wins, {headline_ev(summary, key_of)}.')
-  174|     near = closest(names, state_names, summary, base_winner)
-  175|     if near and near[1] < 10:
-  176|         parts.append(f'The closest call is {state_names[near[0]]}, which holds for {cand[near[2]]} by {near[1]:.1f} points.')
-  177|     loser = 1 - base_nat if base_nat in (0, 1) else 1
-  178|     if cand[loser] != 'no candidate':  # an unopposed year (1789, 1792, 1820) has no runner-up
-  179|         parts.append(f'{cand[loser]} wins in {won["RDO"[loser]]} of {D} draws.')
-  180|     return ' '.join(parts)
-  181| 
-  182| 
-  183| # ── The bundle contract ──
-  184| # One per election, written by publish (runs/<id>/published/<year>.json, copied
-  185| # to serve/bundles/) and read by serve/simulacra.ts, which parses the same shape
-  186| # with zod. tests/fixtures/bundle.example.json is the shared example; both sides
-  187| # test against it. Keys are exactly what publish emits: a missing or unexpected
-  188| # key is an error, so the contract can't drift silently.
-  189| 
-  190| class BundleError(ValueError):
-  191|     pass
-  192| 
-  193| 
-  194| def _strict(cls, d: Any, where: str, **convert):
-  195|     if not isinstance(d, dict):
-  196|         raise BundleError(f'{where}: expected an object, got {type(d).__name__}')
-  197|     names = {f.name for f in fields(cls)}
-  198|     required = {f.name for f in fields(cls) if f.default is MISSING and f.default_factory is MISSING}
-  199|     missing, extra = required - d.keys(), d.keys() - names
-  200|     if missing or extra:
-  201|         raise BundleError(f'{where}: missing {sorted(missing)}, unexpected {sorted(extra)}')
-  202|     return cls(**{k: convert[k](v) if k in convert else v for k, v in d.items()})
-  203| 
-  204| 
-  205| def _list(conv, where: str):
-  206|     def go(xs):
-  207|         if not isinstance(xs, list):
-  208|             raise BundleError(f'{where}: expected a list')
-  209|         return [conv(x, f'{where}[{i}]') for i, x in enumerate(xs)]
-  210|     return go
-  211| 
-  212| 
-  213| @dataclass(frozen=True)
-  214| class Slice:
-  215|     """One page slice (`slices` above): fractions of the slice's adults; `adults` in millions."""
-  216|     key: str
-  217|     label: str
-  218|     adults: float
-  219|     barred: float
-  220|     home: float
-  221|     A: float
-  222|     B: float
-  223|     O: float  # noqa: E741
-  224|     source: Any  # the profile's source for the slice, or None
-  225| 
-  226|     @classmethod
-  227|     def from_dict(cls, d, where='slice'):
-  228|         return _strict(cls, d, where)
-  229| 
-  230| 
-  231| @dataclass(frozen=True)
-  232| class WhatIf:
-  233|     key: str
-  234|     label: str
-  235|     kind: str          # franchise | population | issue | candidate
-  236|     detail: str
-  237|     slices: list
-  238|     assumption: str
-  239|     confidenceTier: str  # high | medium | low | very-low
-  240|     evidence: str        # the evidence strength level
-  241|     exploratory: bool
-  242| 
-  243|     @classmethod
-  244|     def from_dict(cls, d, where='whatIf'):
-  245|         return _strict(cls, d, where)
-  246| 
-  247| 
-  248| @dataclass(frozen=True)
-  249| class Election:
-  250|     slices: list[Slice]
-  251|     whatIfs: list[WhatIf]
-  252| 
-  253|     @classmethod
-  254|     def from_dict(cls, d, where='election'):
-  255|         return _strict(cls, d, where, slices=_list(Slice.from_dict, f'{where}.slices'),
-  256|                        whatIfs=_list(WhatIf.from_dict, f'{where}.whatIfs'))
-  257| 
-  258| 
-  259| @dataclass(frozen=True)
-  260| class StateResult:
-  261|     code: str
-  262|     won: str            # A | B | O
-  263|     # A numpy bool written with json's default=float: published bundles carry 0.0 / 1.0.
-  264|     flipped: bool | float
-  265|     margin: float
-  266|     marginRange: list
-  267|     pFlip: float
-  268| 
-  269|     @classmethod
-  270|     def from_dict(cls, d, where='state'):
-  271|         return _strict(cls, d, where)
-  272| 
-  273| 
-  274| @dataclass(frozen=True)
-  275| class Result:
-  276|     """serialize.result plus publish's extras: one what-if combination."""
-  277|     ev: dict
-  278|     winner: str | None
-  279|     states: list[StateResult]
-  280|     slices: list[Slice]
-  281|     summary: str
-  282|     confidence: str      # the page's high | medium | low
-  283|     applied: list
-  284|     unknown: str | None
-  285|     range: dict
-  286|     drawsWon: dict
-  287|     popular: dict
-  288|     popularRange: dict
-  289|     assumptions: list
-  290|     howIGotThis: list
-  291|     sources: list
-  292|     confidenceTier: str
-  293|     confidenceLabel: str
-  294|     confidenceFlags: list
-  295|     confidenceReasons: list
-  296|     evidence: list
-  297|     mode: str
-  298|     runId: str
-  299|     validation: Any
-  300|     cohortEffects: list
-  301| 
-  302|     @classmethod
-  303|     def from_dict(cls, d, where='result'):
-  304|         return _strict(cls, d, where, states=_list(StateResult.from_dict, f'{where}.states'),
-  305|                        slices=_list(Slice.from_dict, f'{where}.slices'))
-  306| 
-  307| 
-  308| @dataclass(frozen=True)
-  309| class TableRow:
-  310|     """A state × slice row of one combination's point run (fractions of `adults`)."""
-  311|     state: str
-  312|     slice: str
-  313|     adults: float
-  314|     barred: float
-  315|     home: float
-  316|     A: float
-  317|     B: float
-  318|     O: float  # noqa: E741
-  319| 
-  320|     @classmethod
-  321|     def from_dict(cls, d, where='table'):
-  322|         return _strict(cls, d, where)
-  323| 
-  324| 
-  325| @dataclass(frozen=True)
-  326| class Words:
-  327|     key: str
-  328|     words: list
-  329| 
-  330|     @classmethod
-  331|     def from_dict(cls, d, where='words'):
-  332|         return _strict(cls, d, where)
-  333| 
-  334| 
-  335| @dataclass(frozen=True)
-  336| class Bundle:
-  337|     year: int
-  338|     runId: str
-  339|     election: Election
-  340|     runs: dict[str, Result]           # combination key ('' is history; 'a+b' sorted) → result
-  341|     tables: dict[str, list[TableRow]]  # same keys as runs
-  342|     voters: dict                       # combination key → slice key → one voter
-  343|     interviews: dict                   # {} or {questions, byWhatIf}
-  344|     ev: dict[str, int]
-  345|     historyWinner: dict[str, str]
-  346|     words: list[Words]
-  347|     # Bundles published before the briefs record (1916, 1924) lack these three.
-  348|     pre: dict | None = None
-  349|     told: dict = field(default_factory=dict)
-  350|     reading: list = field(default_factory=list)
-  351| 
-  352|     @classmethod
-  353|     def from_dict(cls, d) -> 'Bundle':
-  354|         def runs(m):
-  355|             return {k: Result.from_dict(v, f'runs[{k!r}]') for k, v in m.items()}
-  356| 
-  357|         def tables(m):
-  358|             return {k: _list(TableRow.from_dict, f'tables[{k!r}]')(v) for k, v in m.items()}
-  359|         b = _strict(cls, d, 'bundle', election=Election.from_dict, runs=runs, tables=tables,
-  360|                     words=_list(Words.from_dict, 'words'))
-  361|         if set(b.runs) != set(b.tables):
-  362|             raise BundleError('bundle: runs and tables have different combination keys')
-  363|         if '' not in b.runs:
-  364|             raise BundleError('bundle: no unchanged run (key "")')
-  365|         return b
-  366| 
-  367|     def to_dict(self) -> dict:
-  368|         return asdict(self)
-```
-
-## `simharness/stats.py`
-
-```python
-    1| """Small numeric tools: raking, apportionment, logit arithmetic, metrics."""
-    2| from __future__ import annotations
-    3| 
-    4| import math
-    5| 
-    6| import numpy as np
-    7| from scipy import stats as sps
-    8| 
-    9| EPS = 1e-6
-   10| 
-   11| 
-   12| def logit(p):
-   13|     p = np.clip(p, EPS, 1 - EPS)
-   14|     return np.log(p / (1 - p))
-   15| 
-   16| 
-   17| def expit(x):
-   18|     return 1 / (1 + np.exp(-x))
-   19| 
-   20| 
-   21| # ── Raking (iterative proportional fitting) ──
-   22| 
-   23| def ipf(seed: np.ndarray, margins: dict, tol: float = 1e-9, max_iter: int = 500) -> np.ndarray:
-   24|     """Rake `seed` (any shape) to the given margins.
    25| 
-   26|     margins: {axes tuple: target array with that shape after summing the other
-   27|     axes}. Returns the fitted table. Cells that are zero in the seed stay zero
-   28|     (structural zeros are respected), which is how an impossible combination is
-   29|     kept impossible.
-   30|     """
-   31|     table = seed.astype(float).copy()
-   32|     for _ in range(max_iter):
-   33|         worst = 0.0
-   34|         for axes, target in margins.items():
-   35|             other = tuple(i for i in range(table.ndim) if i not in axes)
-   36|             current = table.sum(axis=other)
-   37|             ratio = np.divide(target, current, out=np.zeros_like(current, dtype=float), where=current > 0)
-   38|             shape = [table.shape[i] if i in axes else 1 for i in range(table.ndim)]
-   39|             table *= ratio.reshape(shape)
-   40|             worst = max(worst, float(np.max(np.abs(current - target))))
-   41|         if worst < tol * max(1.0, float(table.sum())):
-   42|             break
-   43|     return table
-   44| 
-   45| 
-   46| # ── Apportionment (for population what-ifs) ──
-   47| 
-   48| def huntington_hill(pops: dict, seats: int = 435, minimum: int = 1) -> dict:
-   49|     """Method of equal proportions (used for the House since the 1940 apportionment)."""
-   50|     alloc = {s: minimum for s in pops}
-   51|     import heapq
-   52|     heap = [(-p / math.sqrt(minimum * (minimum + 1)), s) for s, p in pops.items()]
-   53|     heapq.heapify(heap)
-   54|     for _ in range(seats - minimum * len(pops)):
-   55|         _, s = heapq.heappop(heap)
-   56|         alloc[s] += 1
-   57|         n = alloc[s]
-   58|         heapq.heappush(heap, (-pops[s] / math.sqrt(n * (n + 1)), s))
-   59|     return alloc
-   60| 
-   61| 
-   62| def webster(pops: dict, seats: int, minimum: int = 1) -> dict:
-   63|     """Major fractions (Webster/Sainte-Laguë), for eras that used it."""
-   64|     alloc = {s: minimum for s in pops}
-   65|     import heapq
-   66|     heap = [(-p / (2 * minimum + 1), s) for s, p in pops.items()]
-   67|     heapq.heapify(heap)
-   68|     for _ in range(seats - minimum * len(pops)):
-   69|         _, s = heapq.heappop(heap)
-   70|         alloc[s] += 1
-   71|         heapq.heappush(heap, (-pops[s] / (2 * alloc[s] + 1), s))
-   72|     return alloc
-   73| 
+   26| class Run(Publisher):
+   27|     def __init__(self, cfg: RunConfig):
+   28|         self.cfg = cfg
+   29|         self.inp, self.extras = data.load(cfg)
+   30|         # Compiled what-ifs' specs and every what-if's evidence are part of the instrument.
+   31|         self.manifest = {**self.extras['manifest'], **scenario.manifest(cfg.what_ifs)}
+   32|         self.id = cfg.run_id(self.manifest)
+   33|         # Short model names in request ids; the analysis pairs on these, not on a hardcoded 'sonnet'.
+   34|         self.bulk = agentlayer.SHORT.get(cfg.agents.bulk_model, cfg.agents.bulk_model)
+   35|         self.check = agentlayer.SHORT.get(cfg.agents.check_model, cfg.agents.check_model)
+   36|         self.escalated = agentlayer.SHORT.get(cfg.agents.escalate_model, cfg.agents.escalate_model) if cfg.agents.escalate_model else None
+   37|         self.models = tuple(dict.fromkeys(m for m in (self.bulk, self.check, self.escalated) if m))
+   38|         # The election's profile: names, sources and how the robot speaks of it.
+   39|         self.prof = self.extras['profile']
+   40|         self.year = cfg.election
+   41|         n = self.prof['names']
+   42|         # An unopposed year's empty line (1789 D, 1820 R) still needs a printable name.
+   43|         self.cand = {0: n['R'] or 'no candidate', 1: n['D'] or 'no candidate', 2: n['O']}
+   44|         self.dir = RUNS / self.id
+   45|         self.dir.mkdir(parents=True, exist_ok=True)
+   46|         (self.dir / 'config.json').write_text(json.dumps({'run_id': self.id, 'config': cfg.to_dict(),
+   47|                                                           'data': self.manifest}, indent=2))
+   48| 
+   49|     # ── backbone ──
+   50|     def backbone(self):
+   51|         if self.extras.get('base_inp') is not None:
+   52|             # A carried-forward year: fit the base year, then recalibrate to this year's returns.
+   53|             base = backbone.fit(self.extras['base_inp'], self.cfg.draws, self.cfg.seed)
+   54|             fit = backbone.carry_forward(base, self.inp, self.year, self.cfg.seed)
+   55|         elif self.year != 1920:
+   56|             # Every other year: calibrated exactly to its own returns, group splits from priors (backbone.general_fit).
+   57|             fit = backbone.general_fit(self.inp, self.year, self.cfg.draws, self.cfg.seed)
+   58|         else:
+   59|             fit = backbone.fit(self.inp, self.cfg.draws, self.cfg.seed)
+   60|         with open(self.dir / 'fit.pkl', 'wb') as f:
+   61|             pickle.dump(fit, f)
+   62|         return fit
+   63| 
+   64|     def fit(self):
+   65|         p = self.dir / 'fit.pkl'
+   66|         if not p.exists():
+   67|             return self.backbone()
+   68|         with open(p, 'rb') as f:
+   69|             return pickle.load(f)
+   70| 
+   71|     def state_index(self, fit):
+   72|         states = fit.diagnostics['states']
+   73|         return states, np.array([states.index(s) for s in fit.cells.state])
    74| 
-   75| def electoral_votes(house: dict, dc: int = 0) -> dict:
-   76|     ev = {s: n + 2 for s, n in house.items()}
-   77|     if dc:
-   78|         ev['DC'] = dc
-   79|     return ev
-   80| 
-   81| 
-   82| # ── Metrics ──
-   83| 
-   84| def rmse(a, b, w=None) -> float:
-   85|     a, b = np.asarray(a, float), np.asarray(b, float)
-   86|     w = np.ones_like(a) if w is None else np.asarray(w, float)
-   87|     return float(np.sqrt(np.sum(w * (a - b) ** 2) / np.sum(w)))
-   88| 
-   89| 
-   90| def mae(a, b) -> float:
-   91|     return float(np.mean(np.abs(np.asarray(a, float) - np.asarray(b, float))))
-   92| 
-   93| 
-   94| def spearman(a, b) -> float:
-   95|     return float(sps.spearmanr(a, b).statistic)
+   75|     # ── agents ──
+   76|     def plan(self):
+   77|         fit = self.fit()
+   78|         cells = fit.cells
+   79|         cohorts, cell_to = cohorts_mod.build(cells, cap=self.cfg.agents.max_cohorts, year=self.year)
+   80|         agents, reqs = agentlayer.build_requests(self.cfg, cohorts, self.extras, self.inp, REGISTRY)
+   81|         out = self.dir / 'agents'
+   82|         out.mkdir(exist_ok=True)
+   83|         (out / 'cohorts.json').write_text(json.dumps({'cohorts': cohorts, 'cell_to': {int(k): v for k, v in cell_to.items()}}, indent=1))
+   84|         (out / 'agents.json').write_text(json.dumps(agents, indent=1, default=str))
+   85|         with open(out / 'all_requests.jsonl', 'w') as f:
+   86|             for r in reqs:
+   87|                 f.write(json.dumps(r) + '\n')
+   88|         counts = {}
+   89|         for r in reqs:
+   90|             k = (r['meta']['arm'].split(':')[0], r['model'])
+   91|             counts[str(k)] = counts.get(str(k), 0) + 1
+   92|         ag = self.cfg.agents
+   93|         return {'agents': len(agents), 'requests': len(reqs), 'by_arm_model': counts, 'cohorts': len(cohorts),
+   94|                 'cohort_keys': sorted(cohorts, key=lambda k: -cohorts[k].get('adults', 0))[:12],
+   95|                 'estimate': llm.estimate(reqs, ag.max_tokens, ag.backend == 'anthropic-batch')}
    96| 
-   97| 
-   98| def tvd(p, q) -> float:
-   99|     p, q = np.asarray(p, float), np.asarray(q, float)
-  100|     p, q = p / p.sum(), q / q.sum()
-  101|     return float(0.5 * np.abs(p - q).sum())
-  102| 
-  103| 
-  104| def brier(prob, outcome) -> float:
-  105|     prob, outcome = np.asarray(prob, float), np.asarray(outcome, float)
-  106|     return float(np.mean((prob - outcome) ** 2))
-  107| 
-  108| 
-  109| def interval(x, level: float = 0.8, axis=0):
-  110|     lo = (1 - level) / 2
-  111|     return np.quantile(x, lo, axis=axis), np.quantile(x, 1 - lo, axis=axis)
-  112| 
-  113| 
-  114| def bayes_ols(X: np.ndarray, y: np.ndarray, draws: int, rng: np.random.Generator,
-  115|               prior_mean=None, prior_sd=None):
-  116|     """Conjugate normal regression with an optional independent normal prior.
-  117| 
-  118|     Returns (beta_draws [draws × k], sigma_draws [draws], summary dict). With
-  119|     no prior this is the flat-prior posterior (a multivariate t for beta).
-  120|     """
-  121|     n, k = X.shape
-  122|     if prior_sd is None:
-  123|         P = np.zeros((k, k))
-  124|         m0 = np.zeros(k)
-  125|     else:
-  126|         P = np.diag(1 / np.asarray(prior_sd, float) ** 2)
-  127|         m0 = np.asarray(prior_mean, float)
-  128|     # Profile sigma from the flat-prior fit, then draw.
-  129|     beta_hat, *_ = np.linalg.lstsq(X, y, rcond=None)
-  130|     resid = y - X @ beta_hat
-  131|     dof = max(n - k, 1)
-  132|     s2 = float(resid @ resid) / dof
-  133|     sig2 = s2 * dof / rng.chisquare(dof, size=draws)
-  134|     betas = np.empty((draws, k))
-  135|     for i, v in enumerate(sig2):
-  136|         A = X.T @ X / v + P
-  137|         cov = np.linalg.inv(A)
-  138|         mean = cov @ (X.T @ y / v + P @ m0)
-  139|         betas[i] = rng.multivariate_normal(mean, cov)
-  140|     return betas, np.sqrt(sig2), {'beta_hat': beta_hat.tolist(), 'resid_sd': math.sqrt(s2), 'n': n, 'k': k}
+   97|     def requests(self):
+   98|         return [json.loads(l) for l in (self.dir / 'agents/all_requests.jsonl').read_text().splitlines() if l.strip()]
+   99| 
+  100|     def ask(self):
+  101|         ag = self.cfg.agents
+  102|         be = llm.backend(ag.backend, self.dir / 'agents/transcript', ag.effort, ag.max_tokens)
+  103|         reqs = self.requests()
+  104|         merged = None
+  105|         if self.cfg.agents.backend == 'transcript':
+  106|             merged = llm.merge_answers(self.dir / 'agents/transcript', reqs)
+  107|             (self.dir / 'agents/transcript/merge_report.json').write_text(json.dumps(merged, indent=1))
+  108|         path = self.dir / 'agents/answers.jsonl'
+  109|         have = set()
+  110|         if path.exists():
+  111|             have = {json.loads(l)['id'] for l in path.read_text().splitlines() if l.strip() and json.loads(l).get('ok')}
+  112|         todo = [r for r in reqs if r['id'] not in have]
+  113|         live = ag.backend in llm.AnswerCache.LIVE
+  114|         cache = llm.AnswerCache(RUNS) if live else None
+  115|         reused = [c for c in (cache.get(r) for r in todo) if c] if cache else []
+  116|         todo = [r for r in todo if r['id'] not in {c['id'] for c in reused}]
+  117|         batch = ag.backend == 'anthropic-batch'
+  118|         # Thinking (every model but Haiku) multiplies an answer's output.
+  119|         est = llm.estimate(todo, ag.max_tokens, batch,
+  120|                            typical_out=600 if 'haiku' in ag.bulk_model else int(600 * {'low': 1.5, 'medium': 3, 'high': 5}.get(ag.effort, 3)))
+  121|         print(f"estimate: {est['requests']} requests, ~${est['typical']} typical, ${est['worst']} worst case"
+  122|               f" ({len(reused)} reused from identical earlier requests)", flush=True)
+  123|         t0 = time.time()
+  124|         got = be.run(todo) if todo else []
+  125|         spent = sum(llm.cost(g['model'], g.get('usage') or {}, batch) for g in got)
+  126|         if live:
+  127|             llm.record_spend('ask', spent, self.id)
+  128|             by_id = {r['id']: r for r in todo}
+  129|             for g in got:
+  130|                 cache.put(by_id[g['id']], g)
+  131|         with open(path, 'a') as f:
+  132|             for g in got + reused:
+  133|                 f.write(json.dumps(g) + '\n')
+  134|         out = {'sent': len(todo), 'reused': len(reused), 'seconds': round(time.time() - t0, 1), 'dollars': round(spent, 4),
+  135|                'answered': sum(1 for g in got if g.get('ok')), 'failed': sum(1 for g in got if not g.get('ok')),
+  136|                'merge': None if merged is None else {'merged': merged['merged'], 'rejected': len(merged['rejected']), 'missing': len(merged['missing'])}}
+  137|         return out
+  138| 
+  139|     def answers(self) -> dict:
+  140|         path = self.dir / 'agents/answers.jsonl'
+  141|         out = {}
+  142|         if path.exists():
+  143|             for l in path.read_text().splitlines():
+  144|                 if l.strip():
+  145|                     g = json.loads(l)
+  146|                     if g.get('ok'):
+  147|                         out[g['id']] = g
+  148|         return out
+  149| 
+  150|     # ── refine (D33): audit the reasoning, re-ask failures on a stronger model ──
+  151|     def audit_verdicts(self) -> dict:
+  152|         p = self.dir / 'audit.json'
+  153|         return json.loads(p.read_text()) if p.exists() else {}
+  154| 
+  155|     @staticmethod
+  156|     def failed_check(req: dict, data: dict, audit: dict) -> str | None:
+  157|         """Why an answered counterfactual is left out, or None: it took the news to be about
+  158|         the other candidate (p5), it got the belief check wrong (p6), or its reasoning
+  159|         contradicts the change (the audit)."""
+  160|         m = req['meta']
+  161|         if m.get('news_check') and data.get('news_about') != m['news_check']['expected']:
+  162|             return 'misread'
+  163|         if m.get('world_check') and data.get('world_check') != m['world_check']['expected']:
+  164|             return 'disbelieved'
+  165|         if (audit.get(req['id']) or {}).get('verdict') == 'contradicts':
+  166|             return 'off-premise'
+  167|         return None
+  168| 
+  169|     def audit(self) -> dict:
+  170|         """One call per staged what-if: each counterfactual answer's reason and quote, without
+  171|         its vote, judged on whether it treats the change as true (world.AUDIT_SYSTEM)."""
+  172|         rc = self.cfg.research
+  173|         if not rc.audit_model:
+  174|             return {'audited': 0, 'dollars': 0.0}
+  175|         reqs, ans, done = self.requests(), self.answers(), self.audit_verdicts()
+  176|         by_wk = {}
+  177|         for r in reqs:
+  178|             if r['meta']['kind'] != 'cf' or r['id'] not in ans or r['id'] in done:
+  179|                 continue
+  180|             wk = r['meta']['change']['what_if']
+  181|             spec = REGISTRY.get(wk) or {}
+  182|             if spec.get('generated') and spec.get('mode') == 'agents' and spec.get('world'):
+  183|                 by_wk.setdefault(wk, []).append(r['id'])
+  184|         cache, spent, n = llm.AnswerCache(RUNS), 0.0, 0
+  185|         for wk, ids in by_wk.items():
+  186|             rows = [{'n': i + 1, 'reason': ans[rid]['data'].get('reason', ''), 'quote': ans[rid]['data'].get('quote', '')}
+  187|                     for i, rid in enumerate(ids)]
+  188|             req = world.audit_request(REGISTRY[wk], rows, rc.audit_model, rc.audit_effort)
+  189|             if rc.fast and llm.fast_ok(req['model']):
+  190|                 req['speed'] = 'fast'
+  191|             got = cache.get(req)
+  192|             if not got:
+  193|                 got = llm.AnthropicBackend(effort=rc.audit_effort, max_tokens=rc.pass_max_tokens)._one(req)
+  194|                 d = llm.cost(req['model'], got.get('usage') or {})
+  195|                 spent += d
+  196|                 llm.record_spend('audit', d, self.id, wk)
+  197|                 cache.put(req, got | {'backend': 'anthropic'})
+  198|             if not got.get('ok'):
+  199|                 print(f'audit {wk}: {got.get("error")} (its answers stay unaudited)', flush=True)
+  200|                 continue
+  201|             verdicts = {v['n']: v for v in got['data'].get('verdicts', [])}
+  202|             for i, rid in enumerate(ids):
+  203|                 v = verdicts.get(i + 1) or {'verdict': 'unclear', 'why': 'not returned'}
+  204|                 done[rid] = {'verdict': v['verdict'], 'why': v['why'], 'model': rc.audit_model}
+  205|                 n += 1
+  206|         (self.dir / 'audit.json').write_text(json.dumps(done, indent=1))
+  207|         return {'audited': n, 'dollars': round(spent, 4)}
+  208| 
+  209|     def escalate(self) -> int:
+  210|         """Plan control + counterfactual again, on escalate_model, for every bulk-model
+  211|         counterfactual that failed a check. Same brief, same person; only the model
+  212|         changes, and the pair is compared within itself as always. Returns the count."""
+  213|         ag = self.cfg.agents
+  214|         if not ag.escalate_model or ag.escalate_model == ag.bulk_model:
+  215|             return 0
+  216|         reqs, ans, audit = self.requests(), self.answers(), self.audit_verdicts()
+  217|         by_id = {r['id']: r for r in reqs}
+  218|         new = []
+  219|         for r in reqs:
+  220|             if len(new) >= ag.escalate_max:
+  221|                 break
+  222|             if r['meta']['kind'] != 'cf' or r['model'] != ag.bulk_model or r['id'] not in ans:
+  223|                 continue
+  224|             if not self.failed_check(r, ans[r['id']]['data'], audit):
+  225|                 continue
+  226|             ctl = by_id.get(f'control|{r["meta"]["agent"]}|{self.bulk}')
+  227|             if not ctl:
+  228|                 continue
+  229|             for base in (ctl, r):
+  230|                 nid = base['id'].rsplit('|', 1)[0] + f'|{self.escalated}'
+  231|                 if nid not in by_id:
+  232|                     by_id[nid] = {**base, 'id': nid, 'model': ag.escalate_model, 'meta': {**base['meta'], 'escalated': True},
+  233|                                   **({'speed': 'fast'} if ag.fast and llm.fast_ok(ag.escalate_model) else {})}
+  234|                     new.append(by_id[nid])
+  235|         if new:
+  236|             with open(self.dir / 'agents/all_requests.jsonl', 'a') as f:
+  237|                 for r in new:
+  238|                     f.write(json.dumps(r) + '\n')
+  239|         return len(new)
+  240| 
+  241|     def refine(self) -> dict:
+  242|         """audit → escalate → ask the escalations → audit them. A step that stops is skipped, not
+  243|         fatal: unaudited answers stay in, unanswered escalations are left out."""
+  244|         out, spent = {}, 0.0
+  245| 
+  246|         def step(name, fn):
+  247|             nonlocal spent
+  248|             try:
+  249|                 out[name] = fn()
+  250|                 spent += out[name]['dollars']
+  251|             except SystemExit as e:
+  252|                 out[name] = {'skipped': str(e)}
+  253|                 print(f'refine: {name} skipped: {e}', flush=True)
+  254|                 return False
+  255|             return True
+  256| 
+  257|         step('audit', self.audit)
+  258|         out['escalated'] = self.escalate()
+  259|         if out['escalated'] and step('ask', self.ask):
+  260|             step('audit2', self.audit)
+  261|         out['dollars'] = round(spent, 4)
+  262|         return out
+  263| 
+  264|     # ── analysis ──
+  265|     def analyze(self):
+  266|         fit = self.fit()
+  267|         reqs = {r['id']: r for r in self.requests()}
+  268|         ans = self.answers()
+  269|         agents = {a['id']: a for a in json.loads((self.dir / 'agents/agents.json').read_text())}
+  270|         co = json.loads((self.dir / 'agents/cohorts.json').read_text())
+  271|         cohorts, cell_to = co['cohorts'], {int(k): v for k, v in co['cell_to'].items()}
+  272|         rng = np.random.default_rng(self.cfg.seed + 11)
+  273|         pyrng = random.Random(self.cfg.seed + 11)
+  274| 
+  275|         def norm(rid):
+  276|             if rid not in ans:
+  277|                 return None
+  278|             lab = reqs[rid]['meta']['label_of']
+  279|             row = paired.normalize(ans[rid]['data'], {v: k for k, v in lab.items()})
+  280|             if row:
+  281|                 d = ans[rid]['data']
+  282|                 row.update({'reason': d.get('reason', ''), 'quote': d.get('quote', ''), 'sources_used': d.get('sources_used', []),
+  283|                             'agent': reqs[rid]['meta']['agent'], 'model': ans[rid]['model']})
+  284|             return row
+  285| 
+  286|         # Backbone cohort shares in the point draw's median over draws
+  287|         w = fit.world
+  288|         v = w.adults * w.can * w.t
+  289|         backbone_r2, backbone_turn, backbone_o = {}, {}, {}
+  290|         for k in cohorts:
+  291|             idx = [i for i, kk in cell_to.items() if kk == k]
+  292|             vv = v[:, idx]
+  293|             R = (vv * w.share[:, idx, 0]).sum(axis=1)
+  294|             Dm = (vv * w.share[:, idx, 1]).sum(axis=1)
+  295|             # per legally eligible adult (what an agent's p_vote means), exclusion included
+  296|             elig = (w.adults[:, idx] * (w.can[:, idx] + w.barred_by['excluded'][:, idx])).sum(axis=1)
+  297|             backbone_r2[k] = float(np.median(R / np.maximum(R + Dm, 1e-9)))
+  298|             backbone_turn[k] = float(np.median(vv.sum(axis=1) / np.maximum(elig, 1e-9)))
+  299|             backbone_o[k] = float(np.median((vv * w.share[:, idx, 2]).sum(axis=1) / np.maximum(vv.sum(axis=1), 1e-9)))
+  300| 
+  301|         # L1 recall probe (the winner is the historical one: R in 1920, D in 1960)
+  302|         states_, sidx_ = self.state_index(fit)
+  303|         won = int(np.argmax(aggregate.outcome(aggregate.by_state(fit.world, sidx_, len(states_))[:1],
+  304|                                               self.inp.ev.reindex(states_).fillna(0).to_numpy(), self._fixed_ev(states_), self._split_ev(states_), o_single=self._o_single(states_))['ev'][0]))
+  305|         probes = []
+  306|         for rid, r in reqs.items():
+  307|             if r['meta']['kind'] != 'probe' or rid not in ans:
+  308|                 continue
+  309|             d = ans[rid]['data']
+  310|             lab = r['meta']['label_of']
+  311|             cands = {k: str(v).lower() for k, v in (d.get('candidates') or {}).items()}
+  312|             probes.append({
+  313|                 'cohort': r['meta']['cohort'],
+  314|                 'year': str(d.get('year', '')).strip().startswith(str(self.year)),
+  315|                 'names': all(self.cand[i].lower() in cands.get(lab[p], '') for i, p in enumerate('RD') if p in lab),
+  316|                 'winner': self.cand[won].lower() in str(d.get('winner_name', '')).lower() or d.get('winner_label') == lab.get('RDO'[won]),
+  317|             })
+  318|         by_cohort = {}
+  319|         for p in probes:
+  320|             by_cohort.setdefault(p['cohort'], []).append(p)
+  321|         exposed = {k for k, ps in by_cohort.items() if np.mean([p['winner'] for p in ps]) > 0.5}
+  322|         l1 = {'n': len(probes),
+  323|               'year_rate': float(np.mean([p['year'] for p in probes])) if probes else None,
+  324|               'names_rate': float(np.mean([p['names'] for p in probes])) if probes else None,
+  325|               'winner_rate': float(np.mean([p['winner'] for p in probes])) if probes else None,
+  326|               'exposed_cohorts': sorted(exposed),
+  327|               'by_cohort': {k: {'n': len(ps), 'winner_rate': float(np.mean([p['winner'] for p in ps]))} for k, ps in by_cohort.items()}}
+  328|         nationally_exposed = bool(l1['winner_rate'] is not None and l1['winner_rate'] > 0.5)
+  329| 
+  330|         # L2 label swap
+  331|         swaps = []
+  332|         for rid, r in reqs.items():
+  333|             if r['meta']['kind'] != 'swap' or rid not in ans:
+  334|                 continue
+  335|             ctl = norm(f'control|{r["meta"]["agent"]}|{self.bulk}')
+  336|             if not ctl or ctl['choice'] not in ('R', 'D'):
+  337|                 continue
+  338|             chosen = ans[rid]['data'].get('choice')
+  339|             plat = {x['label']: x['platform_of'] for x in r['meta']['displayed']}
+  340|             if chosen not in plat:
+  341|                 continue
+  342|             swaps.append({'follows_platform': plat[chosen] == ctl['choice'],
+  343|                           'follows_label': chosen == r['meta']['label_of'][ctl['choice']]})
+  344|         l2 = {'n': len(swaps), 'label_rate': float(np.mean([s['follows_label'] for s in swaps])) if swaps else None,
+  345|               'platform_rate': float(np.mean([s['follows_platform'] for s in swaps])) if swaps else None}
+  346| 
+  347|         # Paired effects per what-if (agent-mode what-ifs apply them; others are cross-checks)
+  348|         effects, pairs_out, kept, dropped = {}, {}, {}, {}
+  349|         audit = self.audit_verdicts()
+  350|         for wk in self.cfg.what_ifs:
+  351|             pairs, checks, beliefs, audits, escalated = {}, [], [], [], 0
+  352|             kept_wk, dropped_wk = {}, {}
+  353|             for aid, a in agents.items():
+  354|                 if a['group'] == 'foreign_white_alien' and REGISTRY[wk]['mode'] == 'backbone':
+  355|                     continue  # planned in error for p1 (brief contradicted itself); excluded, see EVAL.md
+  356|                 for model in self.models:
+  357|                     fid = f'cf:{wk}|{aid}|{model}'
+  358|                     c, f = norm(f'control|{aid}|{model}'), norm(fid)
+  359|                     if not (c and f):
+  360|                         continue
+  361|                     m, data = reqs[fid]['meta'], ans[fid]['data']
+  362|                     # p5: took the news to be about the other candidate. p6 (D33): got the belief
+  363|                     # check wrong, or reasoned from the world as it was (the audit). Each answered a
+  364|                     # different question than the one asked: left out, and counted.
+  365|                     if m.get('news_check'):
+  366|                         got = data.get('news_about')
+  367|                         checks.append({'agent': aid, 'expected': m['news_check']['expected'], 'got': got,
+  368|                                        'ok': got == m['news_check']['expected']})
+  369|                     if m.get('world_check'):
+  370|                         got = data.get('world_check')
+  371|                         beliefs.append({'agent': aid, 'model': model, 'got': got, 'ok': got == m['world_check']['expected']})
+  372|                     if fid in audit:
+  373|                         audits.append({'agent': aid, 'model': model, 'verdict': audit[fid]['verdict'], 'why': audit[fid]['why']})
+  374|                     why = self.failed_check(reqs[fid], data, audit)
+  375|                     if why:
+  376|                         dropped_wk.setdefault(aid, why)
+  377|                         continue
+  378|                     pairs.setdefault(a['cohort'], []).append((c, f, a['paraphrase'], model))
+  379|                     kept_wk[aid] = model
+  380|                     escalated += bool(m.get('escalated'))
+  381|             kept[wk] = kept_wk
+  382|             dropped[wk] = {aid: why for aid, why in dropped_wk.items() if aid not in kept_wk}
+  383|             misread = {'checked': len(checks), 'misread': sum(not x['ok'] for x in checks), 'rows': checks,
+  384|                        'belief_checked': len(beliefs), 'belief_failed': sum(not x['ok'] for x in beliefs),
+  385|                        'audit_checked': len(audits), 'audit_failed': sum(x['verdict'] == 'contradicts' for x in audits),
+  386|                        'escalated': escalated, 'dropped': len(dropped[wk]),
+  387|                        'question': next((reqs[f'cf:{wk}|{x["agent"]}|{x["model"]}']['meta']['world_check']['question']
+  388|                                          for x in beliefs), None),
+  389|                        'belief_rows': beliefs, 'audit_rows': audits}
+  390|             if not pairs and (checks or beliefs or audits):
+  391|                 # Everyone misread the change: nothing was measured, so nothing moves.
+  392|                 zero = {k: {'mean': 0.0, 'lo': 0.0, 'hi': 0.0} for k in ('dt', 'dr', 'do')}
+  393|                 effects[wk] = {'cohorts': {}, 'regions': {}, 'national': zero, 'national_bias': 0.0, 'by_paraphrase': {},
+  394|                                'by_model': {}, 'manipulation': misread, 'blended': False,
+  395|                                'agreement': {'verdict': 'untested', 'detail': 'Every interview misread the change.', 'measures': []},
+  396|                                'agent_stats': {'n': 0, 'measure': 'dr', 'spans_zero': True, 'paraphrase_flip': False,
+  397|                                                'exposed': nationally_exposed, **{k: misread[k] for k in STAT_KEYS}}}
+  398|                 pairs_out[wk] = {}
+  399|                 continue
+  400|             if not pairs:
+  401|                 continue
+  402|             region_of = {k: cohorts[k]['region'] for k in pairs}
+  403|             generated = bool(REGISTRY[wk].get('generated'))
+  404|             eff = paired.effects(pairs, backbone_r2, region_of, 200, rng, exposed=exposed if not nationally_exposed else set(pairs),
+  405|                                  weights={k: cohorts[k]['adults'] for k in pairs}, floor=generated)
+  406|             borrowed = self._borrow(eff, cohorts, REGISTRY[wk], rng) if generated and REGISTRY[wk]['mode'] == 'agents' else []
+  407|             # A3: paraphrase and model spread of the national two-party effect
+  408|             by_para, by_model = {}, {}
+  409|             for k, ps in pairs.items():
+  410|                 for c, f, p, m in ps:
+  411|                     by_para.setdefault(p, []).append((c, f))
+  412|                     by_model.setdefault(m, []).append((c, f))
+  413|             def nat(ps):
+  414|                 return paired.diff(paired.cohort_stats([x[1] for x in ps]), paired.cohort_stats([x[0] for x in ps]))
+  415|             eff['by_paraphrase'] = {str(p): nat(ps) for p, ps in by_para.items()}
+  416|             eff['by_model'] = {m: nat(ps) for m, ps in by_model.items()}
+  417|             # the Sonnet/Opus comparison uses only agents asked on both
+  418|             both = [(c, f, m) for ps in pairs.values() for c, f, p, m in ps]
+  419|             ids_opus = {c['agent'] for c, f, m in both if m == self.check}
+  420|             shared = {m: [(c, f) for c, f, mm in both if mm == m and c['agent'] in ids_opus] for m in self.models}
+  421|             eff['shared_subsample'] = {m: nat(ps) for m, ps in shared.items() if ps}
+  422|             # History: does the record agree with the interviews? For compiled
+  423|             # (exploratory) what-ifs the evidence is also a prior on each cohort.
+  424|             spec, ev = REGISTRY[wk], scenario.load_evidence(wk)
+  425|             wts = {k: cohorts[k]['adults'] for k in pairs}
+  426|             tot = sum(wts.values()) or 1.0
+  427|             nat_base = {m: sum(b[k] * wts[k] for k in pairs) / tot
+  428|                         for m, b in (('turnout', backbone_turn), ('r2', backbone_r2), ('o', backbone_o))}
+  429|             mkey = 'do' if spec['kind'] == 'candidate' else 'dr'
+  430|             signs = {float(np.sign(v[mkey])) for v in eff['by_paraphrase'].values() if abs(v[mkey]) > 0.02}
+  431|             eff['agent_stats'] = {'n': sum(len(ps) for ps in pairs.values()), 'measure': mkey,
+  432|                                   'spans_zero': bool(eff['national'][mkey]['lo'] < 0 < eff['national'][mkey]['hi']),
+  433|                                   'paraphrase_flip': len(signs) > 1, 'exposed': nationally_exposed,
+  434|                                   'borrowed': len(borrowed), **{k: misread[k] for k in STAT_KEYS}}
+  435|             eff['manipulation'] = misread
+  436|             eff['agreement'] = evidence.agreement(ev, eff['national'], nat_base, spec['kind'])
+  437|             if spec.get('withdraws'):
+  438|                 from .whatifs import transfer
+  439|                 eff['transfer'] = transfer([(c, f) for ps in pairs.values() for c, f, _, _ in ps], 200, rng)
+  440|             eff['blended'] = False
+  441|             if ev and spec.get('evidence_mode') == 'blend':
+  442|                 eff['cohorts'] = {k: evidence.blend(c, evidence.prior(ev, cohorts[k], {'turnout': backbone_turn[k], 'r2': backbone_r2[k],
+  443|                                                                                         'o': backbone_o[k]}))
+  444|                                   for k, c in eff['cohorts'].items()}
+  445|                 eff['blended'] = any(c['evidence_blend'] for c in eff['cohorts'].values())
+  446|             effects[wk] = eff
+  447|             pairs_out[wk] = {k: [{'control': c, 'cf': f, 'paraphrase': p, 'model': m} for c, f, p, m in ps] for k, ps in pairs.items()}
+  448| 
+  449|         # A2 variance compression (control, sonnet)
+  450|         a2 = []
+  451|         for k in cohorts:
+  452|             rows = [norm(f'control|{aid}|{self.bulk}') for aid, a in agents.items() if a['cohort'] == k]
+  453|             rows = [r for r in rows if r and r['p_vote'] > 0 and not np.isnan(r['R'])]
+  454|             if len(rows) < 2:
+  455|                 continue
+  456|             ch = [r['choice'] for r in rows]
+  457|             top = max(ch.count(x) for x in set(ch)) / len(ch)
+  458|             r2 = [r['R'] / max(r['R'] + r['D'], 1e-9) for r in rows]
+  459|             a2.append({'cohort': k, 'n': len(rows), 'sd_R2': float(np.std(r2)), 'modal_share': top,
+  460|                        'backbone_r2': backbone_r2[k], 'homogenized': bool(top >= 0.9 and 0.2 <= backbone_r2[k] <= 0.8)})
+  461|         eligible_a2 = [x for x in a2 if 0.2 <= x['backbone_r2'] <= 0.8]
+  462|         a2s = {'cohorts': a2, 'homogenization_index': float(np.mean([x['homogenized'] for x in eligible_a2])) if eligible_a2 else None,
+  463|                'eligible_cohorts': len(eligible_a2)}
+  464| 
+  465|         # A4 stereotype audit
+  466|         reasons = [norm(rid) for rid in reqs if rid.startswith(('control|', 'cf:')) and rid in ans]
+  467|         a4 = quotes.audit([r for r in reasons if r], 0.2, pyrng)
+  468| 
+  469|         # A1 cohort bias and TVD (control, sonnet)
+  470|         a1 = []
+  471|         for k in cohorts:
+  472|             rows = [norm(f'control|{aid}|{self.bulk}') for aid, a in agents.items() if a['cohort'] == k]
+  473|             rows = [r for r in rows if r]
+  474|             if not rows:
+  475|                 continue
+  476|             st = paired.cohort_stats(rows)
+  477|             ch = [r['choice'] for r in rows]
+  478|             agent_dist = [ch.count('R'), ch.count('D'), ch.count('O'), ch.count('home') + ch.count('barred')]
+  479|             t = backbone_turn[k]
+  480|             bb = backbone_r2[k]
+  481|             bb_dist = [t * bb, t * (1 - bb), 0.0, 1 - t]
+  482|             a1.append({'cohort': k, 'label': cohorts[k]['label'], 'n': len(rows),
+  483|                        'agent_turnout': st['turnout'], 'backbone_turnout': t,
+  484|                        'agent_r2': st['R2'], 'backbone_r2': bb,
+  485|                        'bias_logit': float(logit(st['R2']) - logit(bb)) if not np.isnan(st['R2']) else None,
+  486|                        'tvd': float(0.5 * np.abs(np.array(agent_dist) / max(sum(agent_dist), 1) - np.array(bb_dist) / sum(bb_dist)).sum()),
+  487|                        'exposed': k in exposed})
+  488| 
+  489|         result = {'l1': l1, 'l2': l2, 'a1': a1, 'a2': a2s, 'a4': a4, 'nationally_exposed': nationally_exposed,
+  490|                   'effects': {wk: {'national': e['national'], 'national_bias': e['national_bias'],
+  491|                                    'by_paraphrase': e['by_paraphrase'], 'by_model': e['by_model'],
+  492|                                    'shared_subsample': e.get('shared_subsample'),
+  493|                                    'agent_stats': e.get('agent_stats'), 'agreement': e.get('agreement'), 'blended': e.get('blended'),
+  494|                                    'manipulation': e.get('manipulation'),
+  495|                                    'transfer': {'point': e['transfer']['point'], 'n': e['transfer']['n']} if e.get('transfer') else None,
+  496|                                    'cohorts': {k: {kk: vv for kk, vv in c.items() if kk != 'draws'} for k, c in e['cohorts'].items()}}
+  497|                               for wk, e in effects.items()}}
+  498|         (self.dir / 'analysis.json').write_text(json.dumps(result, indent=1, default=float))
+  499|         with open(self.dir / 'effects.pkl', 'wb') as f:
+  500|             pickle.dump({'effects': effects, 'pairs': pairs_out, 'exposed': exposed,
+  501|                          'nationally_exposed': nationally_exposed, 'kept': kept, 'dropped': dropped}, f)
+  502|         return result
+  503| 
+  504|     def _borrow(self, eff: dict, cohorts: dict, spec: dict, rng) -> list[str]:
+  505|         """D33: a cohort the change reaches but nobody in it was interviewed (only_cohorts
+  506|         left it out) used to get no effect at all, with no uncertainty: the 1916 West, where
+  507|         the election was decided. It now borrows the effect of the interviewed cohorts of its
+  508|         own sex and group (else its group, else everyone), adult-weighted, per draw, plus
+  509|         between-cohort noise: the spread of the interviewed cohorts' own effects, at least
+  510|         0.15 logit. The evidence prior (evidence.blend) then applies to it like any cohort."""
+  511|         have = eff['cohorts']
+  512|         if not have:
+  513|             return []
+  514|         reach = spec.get('reach') or {}
+  515|         tau = {key: max(0.15, float(np.std([c[key] for c in have.values()]))) if len(have) > 1 else 0.3
+  516|                for key in ('dt', 'dr', 'do')}
+  517|         interviewable = agentlayer.groups_for(self.year)['interview']
+  518|         out = []
+  519|         for k, c in cohorts.items():
+  520|             if k in have or c['group'] == 'foreign_white_alien' or c['group'] not in interviewable:
+  521|                 continue
+  522|             regions = set(c.get('regions') or [c.get('region')])
+  523|             if (reach.get('sex') and c['sex'] not in reach['sex']) or (reach.get('group') and c['group'] not in reach['group']) \
+  524|                     or (reach.get('region') and not regions & set(reach['region'])):
+  525|                 continue
+  526|             for pick, what in ((lambda x: x['sex'] == c['sex'] and x['group'] == c['group'], 'its own sex and group'),
+  527|                                (lambda x: x['group'] == c['group'], 'its group'), (lambda x: True, 'everyone interviewed')):
+  528|                 src = [kk for kk in have if not have[kk].get('borrowed') and pick(cohorts[kk])]
+  529|                 if src:
+  530|                     break
+  531|             w = np.array([cohorts[kk]['adults'] for kk in src], float)
+  532|             draws = {key: np.average([have[kk]['draws'][key] for kk in src], axis=0, weights=w) for key in ('dt', 'dr', 'do')}
+  533|             draws = {key: d + rng.normal(0.0, tau[key], len(d)) for key, d in draws.items()}
+  534|             have[k] = {'control': None, 'counterfactual': None, 'n': 0, 'bias': 0.0, 'bias_used': 0.0, 'weight': 0.0,
+  535|                        'exposed': False, 'borrowed': what, **{key: float(np.mean(d)) for key, d in draws.items()}, 'draws': draws}
+  536|             out.append(k)
+  537|         return out
+  538| 
+  539|     def uncertainty_budget(self, what_if: str, draws: int = 200) -> dict:
+  540|         """Spread of the what-if's national R two-party share and Harding EV:
+  541|         full, with population noise off, and with only the agent layer varying
+  542|         (one backbone draw, all effect draws)."""
+  543|         fit = self.fit()
+  544|         states, sidx = self.state_index(fit)
+  545|         ev = self.inp.ev.reindex(states).fillna(0).to_numpy()
+  546|         spec = REGISTRY[what_if]
+  547|         eff = pickle.load(open(self.dir / 'effects.pkl', 'rb')) if (self.dir / 'effects.pkl').exists() else None
+  548|         co = json.loads((self.dir / 'agents/cohorts.json').read_text()) if (self.dir / 'agents/cohorts.json').exists() else None
+  549|         cell_to = [co['cell_to'][str(i)] for i in range(len(fit.cells))] if co else []
+  550| 
+  551|         def measure(f, world):
+  552|             if spec['mode'] == 'backbone':
+  553|                 world = spec['apply'](f, world, self.inp)
+  554|             elif eff and what_if in eff['effects']:
+  555|                 world = apply_effects(f, world, cell_to, eff['effects'][what_if]['cohorts'])
+  556|             else:
+  557|                 return None
+  558|             sv = aggregate.by_state(world, sidx, len(states))
+  559|             out = aggregate.outcome(sv, ev, self._fixed_ev(states), self._split_ev(states), o_single=self._o_single(states))
+  560|             nat = sv.sum(axis=1)
+  561|             return {'r2_sd': float(np.std(nat[:, 0] / (nat[:, 0] + nat[:, 1])) * 100), 'ev_sd': float(np.std(out['ev'][:, 0]))}
+  562| 
+  563|         full = measure(fit, fit.world)
+  564|         zero = {k: 0.0 for k in backbone.GROUPS}
+  565|         if self.year == 1920 or self.extras.get('base_inp') is not None:
+  566|             no_pop = backbone.fit(self.extras.get('base_inp') or self.inp, draws, self.cfg.seed, pop_cv=zero)
+  567|             if self.extras.get('base_inp') is not None:
+  568|                 no_pop = backbone.carry_forward(no_pop, self.inp, self.year, self.cfg.seed)
+  569|         else:
+  570|             no_pop = backbone.general_fit(self.inp, self.year, draws, self.cfg.seed, pop_cv=zero)
+  571|         params_only = measure(no_pop, no_pop.world)
+  572|         agents_only = None
+  573|         if spec['mode'] == 'agents' and eff and what_if in eff['effects']:
+  574|             w = fit.world
+  575|             one = aggregate.World(adults=np.repeat(w.adults[:1], draws, 0), can=np.repeat(w.can[:1], draws, 0),
+  576|                                   t=np.repeat(w.t[:1], draws, 0), share=np.repeat(w.share[:1], draws, 0),
+  577|                                   barred_by={k: np.repeat(v[:1], draws, 0) for k, v in w.barred_by.items()})
+  578|             agents_only = measure(fit, one)
+  579|         return {'what_if': what_if, 'full': full, 'backbone_params_only': params_only, 'agents_only': agents_only,
+  580|                 'note': 'SD in points of the national R two-party share and in Harding EV. Population share ≈ full − params-only (variances).'}
+  581| 
+  582|     # ── verify (any year) ──
+  583|     def verify(self):
+  584|         """The unchanged rerun reproduces every state's certified votes (R1), and,
+  585|         for a carried-forward year, the held-out women's turnout benchmark."""
+  586|         fit = self.fit()
+  587|         states, sidx = self.state_index(fit)
+  588|         sv = aggregate.by_state(fit.world, sidx, len(states))
+  589|         # Certified R/D/O per state; a state missing from the returns, or whose legislature
+  590|         # chose the electors (no popular vote), is checked against zero.
+  591|         no_pop = set(getattr(self.inp, 'no_popular', None) or ()) | set(fit.diagnostics.get('no_popular') or ())
+  592|         cert = np.array(self.inp.returns.reindex(states)[self._ret_cols()].fillna(0), dtype=float)
+  593|         cert[[s in no_pop for s in states]] = 0.0
+  594|         out = aggregate.outcome(sv, self.inp.ev.reindex(states).fillna(0).to_numpy(), self._fixed_ev(states), self._split_ev(states), o_single=self._o_single(states))
+  595|         err = np.abs(sv - cert[None, :, :])
+  596|         worst = float(err.max()) if err.size else 0.0
+  597|         by_state = err.max(axis=(0, 2))
+  598|         res = {'year': self.year, 'R1_worst_vote_error': worst, 'R1_pass': bool(worst <= 0.5), 'R1_states': len(states),
+  599|                'R1_no_popular': sorted(no_pop & set(states)),
+  600|                'R1_worst_states': [{'state': s, 'error': round(float(e), 3)}
+  601|                                    for s, e in sorted(zip(states, by_state), key=lambda x: -x[1])[:3]],
+  602|                'ev_by_draw': sorted({tuple(int(x) for x in e) for e in out['ev']})[:3]}
+  603|         d = fit.diagnostics
+  604|         if d.get('method') == 'general_fit':
+  605|             # general_fit's edge cases and the era priors it used (backbone.py, notes/B.md).
+  606|             flags = {k: d[k] for k in ('missing_returns', 'dropped_cell_states', 'synthetic_cell_states', 'legal_rules_contradicted',
+  607|                                        'T_column_mismatch', 'other_majority', 'black_south_bound_on') if d.get(k)}
+  608|             zp = {p: v for p, v in (d.get('zero_party') or {}).items() if v}
+  609|             if zp:
+  610|                 flags['zero_party'] = zp
+  611|             scaled = {s: round(float(x), 3) for s, x in (d.get('adults_scaled_share') or {}).items() if x}
+  612|             if scaled:
+  613|                 flags['adults_scaled_share'] = scaled
+  614|             res['fit_flags'] = flags
+  615|             res['priors'] = d.get('priors')
+  616|         from . import benchmarks  # validation stage: the held-out Corder–Wolbrecht turnout
+  617|         cw = benchmarks.corder_wolbrecht_any_year()
+  618|         cw = cw[(cw.year == self.year) & cw.state.isin(states)].set_index('state')
+  619|         if len(cw) and not backbone.cw_held_out(self.year, d.get('method')):
+  620|             res['corder_wolbrecht_skipped'] = ('not held out: this year\'s women\'s-turnout prior draws on '
+  621|                                                f'Corder–Wolbrecht knots {backbone.CW_PRIOR_KNOTS} (DISCLOSURES A11)')
+  622|         elif len(cw):
+  623|             # Corder–Wolbrecht's denominator: every adult 21+ of the sex, non-citizens included (EVAL.md N1).
+  624|             w = fit.world
+  625|             female = (fit.cells.sex == 'F').to_numpy()
+  626| 
+  627|             def rate(m):
+  628|                 votes, adults = np.zeros((w.t.shape[0], len(states))), np.zeros((w.t.shape[0], len(states)))
+  629|                 np.add.at(votes, (slice(None), sidx[m]), (w.adults * w.can * w.t)[:, m])
+  630|                 np.add.at(adults, (slice(None), sidx[m]), w.adults[:, m])
+  631|                 return votes / np.maximum(adults, 1)
+  632|             wt, mt = rate(female), rate(~female)
+  633|             rows = []
+  634|             for s in cw.index:
+  635|                 i = states.index(s)
+  636|                 rows.append({'state': s, 'women_model': round(float(np.median(wt[:, i])) * 100, 1),
+  637|                              'women_cw': round(float(cw.loc[s, 'women_turnout']) * 100, 1),
+  638|                              'men_model': round(float(np.median(mt[:, i])) * 100, 1),
+  639|                              'men_cw': round(float(cw.loc[s, 'men_turnout']) * 100, 1)})
+  640|             res['corder_wolbrecht'] = rows
+  641|             res['women_mae_points'] = round(float(np.mean([abs(r['women_model'] - r['women_cw']) for r in rows])), 1) if rows else None
+  642|         (self.dir / 'check.json').write_text(json.dumps(res, indent=1, default=float))
+  643|         return res
+  644| 
+  645|     def _fixed_ev(self, states):
+  646|         """[S, 3] electors by party for states whose legislature chose them (inp.ev_fixed:
+  647|         state → (R, D, O)); NaN rows elsewhere. None when the inputs carry no such table."""
+  648|         fx = getattr(self.inp, 'ev_fixed', None) or self.extras.get('franchise', {}).get('ev_fixed') or LEGISLATURE_EV.get(self.year)
+  649|         if not fx:
+  650|             return None
+  651|         out = np.full((len(states), 3), np.nan)
+  652|         for i, s in enumerate(states):
+  653|             if s in fx:
+  654|                 v = fx[s]
+  655|                 out[i] = [v.get(k, 0) for k in 'RDO'] if isinstance(v, dict) else list(v)
+  656|         return out
+  657| 
+  658|     def _o_single(self, states):
+  659|         """[S] the largest single "other" candidate's share of O (the named third P vs
+  660|         the rest), so a lumped O can't carry a state no one of its candidates won.
+  661|         None for 1916–1924 (their bundles stay as published)."""
+  662|         if self.year in (1916, 1920, 1924):
+  663|             return None
+  664|         r, yy = self.inp.returns.reindex(states).fillna(0), self.year % 100
+  665|         if f'P{yy}' not in r or f'O{yy}' not in r:
+  666|             return None
+  667|         o, p = r[f'O{yy}'].to_numpy(float), r[f'P{yy}'].clip(lower=0).to_numpy(float)
+  668|         p = np.minimum(p, o)
+  669|         return np.where(o > 0, np.maximum(p, o - p) / np.maximum(o, 1e-9), 1.0)
+  670| 
+  671|     def _split_ev(self, states):
+  672|         """[S, 3] historical electors by party for states that divided them (inp.ev_split:
+  673|         state → (R, D, O)); None when the inputs carry no such table."""
+  674|         sp = getattr(self.inp, 'ev_split', None) or self.extras.get('franchise', {}).get('ev_split')
+  675|         if not sp:
+  676|             return None
+  677|         out = np.full((len(states), 4), np.nan)
+  678|         cols = self._ret_cols()
+  679|         r = self.inp.returns.reindex(states).fillna(0)
+  680|         osg = self._o_single(states)
+  681|         for i, s in enumerate(states):
+  682|             if s in sp:
+  683|                 v = sp[s]
+  684|                 out[i, :3] = [v.get(k, 0) for k in 'RDO'] if isinstance(v, dict) else list(v)
+  685|                 pv = r.loc[s, cols].to_numpy(float) * np.array([1, 1, osg[i] if osg is not None else 1])
+  686|                 if pv.sum() > 0:
+  687|                     out[i, 3] = pv.argmax()   # the historical popular winner keeps the historical division
+  688|         return out
+  689| 
+  690|     def _ret_cols(self) -> list[str]:
+  691|         """This year's certified R, D and other columns in the returns (R1920… or the older R20…)."""
+  692|         r, y = self.inp.returns, self.year
+  693|         for suf in (str(y), f'{y % 100:02d}', str(y % 100)):  # R1920 first: R20 is ambiguous across centuries
+  694|             cols = [f'R{suf}', f'D{suf}', f'O{suf}']
+  695|             if all(c in r for c in cols):
+  696|                 return cols
+  697|         raise SystemExit(f'No certified {y} returns (R/D/O columns) in the inputs: {list(r.columns)[:12]}')
+  698| 
+  699|     # ── dry run (free: no model calls) ──
+  700|     def dryrun(self, samples: int = 1) -> dict:
+  701|         """backbone (if not fitted) → verify → plan. Brief samples: one control per page slice,
+  702|         one counterfactual per what-if; counts of agents, requests and eligibility lines."""
+  703|         if not (self.dir / 'fit.pkl').exists():
+  704|             self.backbone()
+  705|         check = self.verify()
+  706|         plan = self.plan()
+  707|         reqs = self.requests()
+  708|         agents = json.loads((self.dir / 'agents/agents.json').read_text())
+  709|         by_agent = {a['id']: a for a in agents}
+  710|         out_slices, seen = {}, {}
+  711|         for r in reqs:
+  712|             a = by_agent[r['meta']['agent']]
+  713|             sl = serialize.slice_of(SimpleNamespace(group=a['group'], south=a['state'] in agentlayer.SOUTH, sex=a['sex']))
+  714|             out_slices[sl] = out_slices.get(sl, 0) + (r['meta']['kind'] == 'control')
+  715|             k = ('control', sl) if r['meta']['kind'] == 'control' else (r['meta']['arm'], None) if r['meta']['kind'] == 'cf' else None
+  716|             if k and seen.get(k, 0) < samples:
+  717|                 seen[k] = seen.get(k, 0) + 1
+  718|                 seen.setdefault('_briefs', []).append({'arm': r['meta']['arm'], 'slice': sl, 'agent': a['id'], 'user': r['user']})
+  719|         elig = {}
+  720|         for a in agents:
+  721|             line = a['eligibility'].replace(STATE_NAME.get(a['state'], a['state']), '<state>')
+  722|             elig[line] = elig.get(line, 0) + 1
+  723|         groups = {}
+  724|         for a in agents:
+  725|             g = a['group'] + (f':{a["status"]}' if a.get('status') else '') + (f':{a["origin"]}' if a.get('origin') else '')
+  726|             groups[g] = groups.get(g, 0) + 1
+  727|         res = {'year': self.year, 'run': self.id, 'era': agentlayer.era(self.year),
+  728|                'R1_worst_vote_error': check['R1_worst_vote_error'], 'R1_pass': check['R1_pass'], 'ev_by_draw': check['ev_by_draw'],
+  729|                'what_ifs': {k: k in for_year([k], self.year) for k in self.cfg.what_ifs},
+  730|                'cohorts': plan['cohorts'], 'agents': plan['agents'], 'requests': plan['requests'],
+  731|                'by_arm_model': plan['by_arm_model'], 'estimate': plan['estimate'],
+  732|                'controls_by_slice': out_slices, 'agents_by_group': groups,
+  733|                'eligibility_lines': dict(sorted(elig.items(), key=lambda x: -x[1])), 'briefs': seen.get('_briefs', [])}
+  734|         (self.dir / 'dryrun.json').write_text(json.dumps(res, indent=1, default=float))
+  735|         return res
+  736| 
+  737|     # ── evaluate ──
+  738|     def evaluate(self):
+  739|         from . import benchmarks
+  740|         if self.year != 1920:
+  741|             raise SystemExit('evaluate: the validation checks are 1920\'s; every other year is checked by '
+  742|                              '`run verify` (reproduction, and Corder–Wolbrecht where it exists).')
+  743|         fit = self.fit()
+  744|         states, sidx = self.state_index(fit)
+  745|         base_votes = aggregate.by_state(fit.world, sidx, len(states))
+  746|         checks = [evaluate.r1_reproduction(fit, self.inp, base_votes)]
+  747|         ho = evaluate.holdout(fit, self.inp, self.cfg.holdout, self.cfg.draws, self.cfg.seed)
+  748|         checks += ho['checks']
+  749|         checks += benchmarks.natural_experiment(fit, self.inp, self.extras)
+  750|         an = json.loads((self.dir / 'analysis.json').read_text()) if (self.dir / 'analysis.json').exists() else None
+  751|         checks += benchmarks.agent_checks(an, fit, self, self.extras)
+  752|         summary = {'passed': sum(1 for c in checks if c['pass'] is True),
+  753|                    'failed': [c['id'] for c in checks if c['pass'] is False],
+  754|                    'not_run': [c['id'] for c in checks if c['pass'] is None]}
+  755|         budget = [self.uncertainty_budget(k) for k in self.cfg.what_ifs]
+  756|         out = {'summary': summary, 'checks': checks, 'holdout_rows': ho['rows'], 'uncertainty_budget': budget}
+  757|         (self.dir / 'validation.json').write_text(json.dumps(out, indent=1, default=float))
+  758|         return out
+  759| 
+  760| 
+  761| # Electors chosen by a legislature, by party slot (R, D, O), 1828–1876: a fallback until the
+  762| # data layer supplies inp.ev_fixed (which wins). Before 1828 the data layer must supply it.
+  763| LEGISLATURE_EV = {
+  764|     1828: {'DE': (3, 0, 0), 'SC': (0, 11, 0)}, 1832: {'SC': (0, 0, 11)}, 1836: {'SC': (0, 0, 11)},
+  765|     1840: {'SC': (0, 11, 0)}, 1844: {'SC': (0, 9, 0)}, 1848: {'SC': (0, 9, 0)}, 1852: {'SC': (0, 8, 0)},
+  766|     1856: {'SC': (0, 8, 0)}, 1860: {'SC': (0, 0, 8)}, 1868: {'FL': (3, 0, 0)}, 1876: {'CO': (3, 0, 0)},
+  767| }
 ```
 
-## `simharness/whatifs.py`
+## `simharness/profiles.py`
 
 ```python
-    1| """The what-ifs: each edits one layer of the calibrated world and names its
-    2| assumption, its mode (backbone-only or agent effect), and the settled facts a
-    3| counterfactual brief writes into a person's world.
+    1| """Everything about one election that the pipeline needs and the data can't say:
+    2| who ran, how the brief blinds them, which letters are safe, what voters read,
+    3| and how the robot names the result.
     4| 
-    5| Mode, by kind:
-    6| - franchise   backbone only. New voters turn out and choose like a named,
-    7|               observed group; agents supply quotes and a cross-check.
-    8| - population  backbone only, plus reapportionment from the counterfactual
-    9|               census (stats.huntington_hill / webster).
-   10| - issue       agent paired differences shift the groups the change reaches;
-   11|               shrunk by cohort bias (paired.py).
+    5| 1920 is the original: its values are the ones the harness was built with, so
+    6| its briefs stay byte-identical (and its cached answers keep matching).
+    7| 
+    8| 1924 is the first carried-forward year (backbone.carry_forward): its
+    9| population is the 1920 census aged to November 1924, and its group structure
+   10| is the 1920 fit's, recalibrated exactly to the 1924 returns. See
+   11| DISCLOSURES C13–C16.
    12| """
    13| from __future__ import annotations
    14| 
-   15| import numpy as np
-   16| 
-   17| from .aggregate import World
-   18| from .geo import SOUTH, STATE_NAME
-   19| from .stats import expit, logit
-   20| 
-   21| # Every presidential election: 1789, then every fourth year from 1792.
-   22| ELECTION_YEARS = [1789] + list(range(1792, 2025, 4))
-   23| 
-   24| 
-   25| def _northern_black_share(fit, world: World) -> np.ndarray:
-   26|     """[D, 3] vote shares of Black voters outside the South, this world."""
-   27|     c = fit.cells
-   28|     m = ((c.group == 'black') & ~c.south).to_numpy()
-   29|     v = (world.adults * world.can * world.t)[:, m]
-   30|     return (v[..., None] * world.share[:, m, :]).sum(axis=1) / np.maximum(v.sum(axis=1), 1e-9)[:, None]
-   31| 
-   32| 
-   33| def no_19th(fit, world: World, inp) -> World:
-   34|     w = world.copy()
-   35|     c = fit.cells
-   36|     m = ((c.sex == 'F') & ~c.state.isin(inp.women_pre19)).to_numpy()
-   37|     w.barred_by['legal'][:, m] = 1.0
-   38|     w.barred_by['excluded'][:, m] = 0.0
-   39|     w.can[:, m] = 0.0
-   40|     return w
-   41| 
-   42| 
-   43| def fifteenth(fit, world: World, inp) -> World:
-   44|     w = world.copy()
-   45|     c = fit.cells
-   46|     m = ((c.group == 'black') & c.south).to_numpy()
-   47|     w.can[:, m] = w.can[:, m] + w.barred_by['excluded'][:, m]
-   48|     w.barred_by['excluded'][:, m] = 0.0
-   49|     nb = _northern_black_share(fit, world)
-   50|     w.share[:, m, :] = nb[:, None, :]
-   51|     return w
-   52| 
-   53| 
-   54| def everyone(fit, world: World, inp) -> World:
-   55|     w = world.copy()
-   56|     c = fit.cells.reset_index(drop=True)
-   57|     nb = _northern_black_share(fit, world)
-   58|     bs = ((c.group == 'black') & c.south).to_numpy()
-   59|     w.share[:, bs, :] = nb[:, None, :]
-   60|     # Non-citizens choose like naturalized citizens of their own state and sex.
-   61|     key = {(r.state, r.sex): i for i, r in c.iterrows() if r.group == 'foreign_white_naturalized'}
-   62|     for i, r in c.iterrows():
-   63|         if r.group == 'foreign_white_alien' and (r.state, r.sex) in key:
-   64|             w.share[:, i, :] = world.share[:, key[(r.state, r.sex)], :]
-   65|     w.can[:] = 1.0
-   66|     w.t[:] = 1.0
-   67|     for k in w.barred_by:
-   68|         w.barred_by[k][:] = 0.0
-   69|     return w
-   70| 
-   71| 
-   72| def apply_effects(fit, world: World, cohort_of_cell: list, eff: dict) -> World:
-   73|     """Issue what-ifs: logit shifts per cohort, per draw (eff[k]['draws'])."""
-   74|     w = world.copy()
-   75|     D = w.t.shape[0]
-   76|     for i, k in enumerate(cohort_of_cell):
-   77|         if k not in eff or not (w.can[:, i] > 0).any():
-   78|             continue
-   79|         e = eff[k]['draws']
-   80|         j = np.arange(D) % len(e['dt'])
-   81|         dt, dr, do = e['dt'][j], e['dr'][j], e['do'][j]
-   82|         w.t[:, i] = expit(logit(w.t[:, i]) + dt)
-   83|         R, Dm, O = w.share[:, i, 0], w.share[:, i, 1], w.share[:, i, 2]
-   84|         r2 = expit(logit(R / np.maximum(R + Dm, 1e-12)) + dr)
-   85|         o = expit(logit(O) + do)
-   86|         w.share[:, i, 0] = (1 - o) * r2
-   87|         w.share[:, i, 1] = (1 - o) * (1 - r2)
-   88|         w.share[:, i, 2] = o
-   89|     return w
-   90| 
-   91| 
-   92| def withdraw(fit, world: World, tr: dict, frac: np.ndarray) -> World:
-   93|     """A labelled third candidate leaves the race. His share of each cell's
-   94|     voters (the cell's `other` share × his part of the state's `other` vote)
-   95|     goes to R, D or home in the proportions the interviews' La Follette
-   96|     voters moved (tr: draws of R, D, home summing to 1). Other minor parties
-   97|     keep their votes."""
-   98|     w = world.copy()
-   99|     D = w.t.shape[0]
-  100|     j = np.arange(D) % len(tr['R'])
-  101|     tR, tD, tH = tr['R'][j][:, None], tr['D'][j][:, None], tr['home'][j][:, None]
-  102|     lf = w.share[:, :, 2] * frac[None, :]
-  103|     stay = 1 - lf * tH
-  104|     share = np.stack([w.share[:, :, 0] + lf * tR, w.share[:, :, 1] + lf * tD, w.share[:, :, 2] - lf], axis=2)
-  105|     w.share = share / np.maximum(stay, 1e-9)[..., None]
-  106|     w.t = w.t * stay
-  107|     return w
-  108| 
-  109| 
-  110| def transfer(pairs: list, draws: int, rng) -> dict:
-  111|     """Where a withdrawing candidate's voters go: over paired interviews, the
-  112|     change in expected R, D and staying home, per unit of expected vote the
-  113|     candidate had in the control. Bootstrapped over people."""
-  114|     nz = lambda x: 0.0 if x != x else x  # noqa: E731 (NaN → 0: an answer with no leanings)
-  115| 
-  116|     def one(rs):
-  117|         m = sum(c['p_vote'] * nz(c['O']) for c, f in rs)
-  118|         v = np.array([sum(f['p_vote'] * nz(f['R']) - c['p_vote'] * nz(c['R']) for c, f in rs),
-  119|                       sum(f['p_vote'] * nz(f['D']) - c['p_vote'] * nz(c['D']) for c, f in rs),
-  120|                       sum(c['p_vote'] - f['p_vote'] for c, f in rs)]).clip(0, None)
-  121|         return v / v.sum() if v.sum() > 0 and m > 0 else np.array([1 / 3, 1 / 3, 1 / 3])
-  122|     point = one(pairs)
-  123|     boot = np.array([one([pairs[i] for i in rng.integers(0, len(pairs), len(pairs))]) for _ in range(draws)])
-  124|     return {'R': boot[:, 0], 'D': boot[:, 1], 'home': boot[:, 2], 'point': point.tolist(), 'n': len(pairs)}
-  125| 
-  126| 
-  127| # ── Facts written into a counterfactual brief (never phrased as a change) ──
-  128| 
-  129| def facts_no_19th(agent: dict, inp, year: int = 1920) -> dict:
-  130|     s = agent['state']
-  131|     if year == 1920:
-  132|         facts = ['In August the Tennessee legislature voted the woman suffrage amendment down, and it has not been ratified.']
-  133|     else:
-  134|         facts = ['In August 1920 the Tennessee legislature voted the woman suffrage amendment down, and it has never been ratified.']
-  135|     elig = None
-  136|     if agent['sex'] == 'F':
-  137|         if s in inp.women_pre19:
-  138|             elig = f'{STATE_NAME.get(s, s)} law already lets women vote for president, so this person can vote this year.'
-  139|         else:
-  140|             elig = f'Women cannot vote for president in {STATE_NAME.get(s, s)} this year.'
-  141|     # Items about women registering after the amendment's ratification would
-  142|     # contradict this world; drop them.
-  143|     drop = {'T1', 'T7'} if (agent['sex'] == 'F' and s not in inp.women_pre19) else set()
-  144|     return {'facts': facts, 'eligibility': elig, 'drop_topics': drop, 'drop_after': '1920-08-18'}
-  145| 
-  146| 
-  147| def facts_fifteenth(agent: dict, inp, year: int = 1920) -> dict:
-  148|     s = agent['state']
-  149|     if s not in SOUTH:
-  150|         return {'facts': [], 'eligibility': None, 'drop_topics': set()}
-  151|     # 1920 and 1924 read "in 1919"; an earlier election, the year before it.
-  152|     facts = [f'Since the Supreme Court struck down {STATE_NAME.get(s, s)}\'s poll tax and registration test in {min(year - 1, 1919)}, and '
-  153|              'federal registrars were sent to every Southern county, Black citizens register and vote on the same '
-  154|              'terms as white citizens.']
-  155|     elig = None
-  156|     closed = getattr(inp, 'closed_1920', set()) if year == 1920 else set()
-  157|     if agent['group'] == 'black':
-  158|         if agent['sex'] == 'F' and s in closed:
-  159|             elig = f'Registration in {STATE_NAME.get(s, s)} closed before women could enrol, so this person cannot vote for president this year.'
-  160|         elif agent['sex'] == 'F' and year < 1920 and s not in (getattr(inp, 'women_vote', None) or ()):
-  161|             elig = f'Women cannot vote for president in {STATE_NAME.get(s, s)}.'
-  162|         else:
-  163|             elig = 'This person is registered and can vote this year.'
-  164|     return {'facts': facts, 'eligibility': elig, 'drop_topics': {'T5'} if agent['group'] == 'black' else set()}
-  165| 
-  166| 
-  167| def facts_league(agent: dict, inp, year: int = 1920) -> dict:
-  168|     return {
-  169|         'facts': ['In March 1920 the Senate ratified the peace treaty with its reservations, and the United States '
-  170|                   'took its seat in the League of Nations this spring. The treaty is settled, and neither party '
-  171|                   'proposes to reopen it.'],
-  172|         'eligibility': None,
-  173|         'drop_topics': {'T2'},
-  174|         'platform_override': {'League of Nations': None},  # both parties' League planks removed
-  175|     }
-  176| 
-  177| 
-  178| REGISTRY = {
-  179|     'no-19th': {
-  180|         'label': 'The 19th Amendment Fails', 'kind': 'franchise', 'mode': 'backbone', 'apply': no_19th, 'years': [y for y in ELECTION_YEARS if y >= 1920],
-  181|         'facts': facts_no_19th, 'slices': ['women'],
-  182|         'detail': 'Tennessee votes the suffrage amendment down, so women can vote for president only where their own state already let them.',
-  183|         'assumption': 'Women in states without their own presidential suffrage can\'t vote. Everyone else turns out and chooses exactly as in 1920; men\'s votes don\'t change.',
-  184|         'borrowed': None,
-  185|         'research_questions': ['How did women vote and turn out in their first presidential elections in 1920, by state and group?',
-  186|                                'In states where women already voted for president before 1920, did their votes change the result or the parties\' shares?'],
-  187|     },
-  188|     'fifteenth': {
-  189|         'label': 'Enforce the 15th Amendment', 'kind': 'franchise', 'mode': 'backbone', 'apply': fifteenth, 'years': list(range(1892, 1965, 4)),
-  190|         'facts': facts_fifteenth, 'slices': ['black-south'],
-  191|         'detail': 'Black Southerners vote as freely as white Southerners: no literacy tests, poll taxes or terror.',
-  192|         'assumption': 'Black adults in the eleven former Confederate states turn out at the rate white adults of their own state and sex did in 1920, and split like Black voters outside the South in 1920.',
-  193|         'borrowed': 'Black voters outside the South in 1920',
-  194|         'research_questions': ['How did Black voters outside the South vote in 1916–1924, and did the Great Migration change that?',
-  195|                                'When Black Southerners could vote (Reconstruction; after 1965), how did turnout and party choice compare with white Southerners?'],
-  196|     },
-  197|     'league': {
-  198|         'label': 'The Senate Ratifies the League', 'kind': 'issue', 'mode': 'agents', 'apply': None, 'years': [1920],
-  199|         'facts': facts_league, 'slices': ['men', 'women', 'south-white', 'immigrants'],
-  200|         'detail': 'The Senate ratifies the peace treaty with its reservations in March 1920, and the League is no longer a campaign issue.',
-  201|         'assumption': 'Each group of voters shifts by the change its simulated members report between the world as it was and a world where the treaty was ratified, shrunk toward the regional change where the model\'s control answers stray from the calibrated baseline.',
-  202|         'borrowed': None,
-  203|         'research_questions': ['How much did the League of Nations and the treaty fight shape votes in 1920, by region and ethnic group?',
-  204|                                'Which groups (German, Irish and Italian Americans; Midwestern farmers) moved against the administration over the treaty, and by how much?'],
-  205|     },
-  206|     'everyone': {
-  207|         'label': 'Everyone Votes', 'kind': 'franchise', 'mode': 'backbone', 'apply': everyone, 'years': list(ELECTION_YEARS),
-  208|         'facts': None, 'slices': [],
-  209|         'detail': 'Every adult can vote, and turns out.',
-  210|         'assumption': 'Every adult votes. Non-citizens choose like naturalized citizens of their state and sex; Black Southerners like Black voters outside the South; everyone else as their group did in 1920.',
-  211|         'borrowed': 'naturalized citizens of the same state and sex; Black voters outside the South',
-  212|     },
-  213| }
-  214| 
-  215| # Built-in texts written for 1920 that name its year. Another year (1924 kept as it
-  216| # was published) reads them with its own year: "as their group did in 1932".
-  217| YEAR_TEXT = ('assumption', 'borrowed')
-  218| 
-  219| 
-  220| def text_for(spec: dict, year: int) -> dict:
-  221|     """A registry entry as an election year's page reads it."""
-  222|     if spec.get('generated') or year in (1920, 1924):
-  223|         return spec
-  224|     return {**spec, **{k: spec[k].replace('1920', str(year)) for k in YEAR_TEXT if isinstance(spec.get(k), str)}}
-  225| 
-  226| 
-  227| def for_year(keys, year: int) -> list:
-  228|     """The keys whose what-if applies to this election year."""
-  229|     return [k for k in keys if k in REGISTRY and year in (REGISTRY[k].get('years') or [REGISTRY[k].get('year', 1920)])]
-  230| 
-  231| 
-  232| # Compiled what-ifs (harness/whatifs/*.json, exploratory) join the registry
-  233| # after the hand-written ones, never replacing them.
-  234| from .scenario import load_generated  # noqa: E402
-  235| 
-  236| load_generated(REGISTRY)
+   15| import json
+   16| import re
+   17| 
+   18| from .config import ROOT
+   19| 
+   20| PROFILES = {
+   21|     1920: {
+   22|         'year': 1920,
+   23|         'base': None,
+   24|         'day_phrase': 'Tuesday, 2 November',
+   25|         'names': {'R': 'Harding', 'D': 'Cox', 'O': 'another candidate'},
+   26|         'full_names': {'R': 'Warren G. Harding', 'D': 'James M. Cox'},
+   27|         'descriptors': {
+   28|             'R': 'nominee of the party that has held a majority in Congress since the 1918 elections',
+   29|             'D': 'nominee of the party of the administration in office since 1913',
+   30|         },
+   31|         'compile_desc': {'R': 'the party that has held a majority in Congress since the 1918 elections',
+   32|                          'D': 'the party of the administration in office since 1913', 'president': 'Wilson'},
+   33|         'third': None,
+   34|         # No H(arding), C(ox), D(ebs), R(epublican), D(emocrat), S(ocialist),
+   35|         # F(armer-Labor), W(ilson), L(eague).
+   36|         'label_pool': ['K', 'M', 'N', 'P', 'T', 'V'],
+   37|         'others_line': 'Other candidates on some ballots, including a Socialist and a Farmer-Labor nominee (answer "other").',
+   38|         'plank_order': ['League of Nations', 'cost of living', 'labor', 'agriculture', 'women', 'immigration', 'Prohibition'],
+   39|         'names_re': r'\b(Harding|Cox|Coolidge|Roosevelt|Debs|Christensen|Republican|Democrat|G\.\s?O\.\s?P|Wilson)',
+   40|         'never_name': 'Harding, Cox, Coolidge, Franklin Roosevelt, Debs, Christensen or Wilson',
+   41|         'corpus': 'sources/corpus_1920.jsonl',
+   42|         'platforms': 'context/platforms_1920.json',
+   43|         'ev_label': '404–127',
+   44|         'slice_sources': {
+   45|             'men': '1920 census (Fourteenth Census, voting-age tables), men 21+ outside the eleven Southern states; turnout and choice from the backbone (1916→1920 natural experiment, calibrated to certified returns).',
+   46|             'women': '1920 census, women 21+ outside the South; turnout is each state\'s 1920 vote minus the men\'s predicted vote (1916 men\'s turnout × the change in states where women already voted).',
+   47|             'south-white': '1920 census, white adults in the eleven former Confederate states (includes a small number of American Indian and Asian adults); calibrated to certified returns.',
+   48|             'black-south': '1920 census, Black adults in the eleven former Confederate states; turnout from a Goodman regression of 1916 turnout on Black share across those states; the shortfall against white turnout is counted as exclusion.',
+   49|             'immigrants': '1920 census, foreign-born white adults who were aliens or had only declared their intent (first papers).',
+   50|         },
+   51|     },
+   52|     1924: {
+   53|         'year': 1924,
+   54|         'base': 1920,
+   55|         'day_phrase': 'Tuesday, 4 November',
+   56|         'names': {'R': 'Coolidge', 'D': 'Davis', 'O': 'La Follette'},
+   57|         'full_names': {'R': 'Calvin Coolidge', 'D': 'John W. Davis', 'O': 'Robert M. La Follette'},
+   58|         'descriptors': {
+   59|             'R': 'nominee of the party of the administration in office since 1921',
+   60|             'D': 'nominee of the party that held the presidency from 1913 to 1921',
+   61|             'O': 'independent candidate of the Progressive movement, endorsed by farm and labor organizations and the Socialist party',
+   62|         },
+   63|         'compile_desc': {'R': 'the party of the administration in office since 1921',
+   64|                          'D': 'the party that held the presidency from 1913 to 1921', 'president': 'Coolidge'},
+   65|         # La Follette is a labelled line on every 1924 ballot; he counts in O.
+   66|         'third': 'O',
+   67|         # No C(oolidge, Calvin), D(avis, Dawes, Democrat), L(a Follette), R(epublican),
+   68|         # P(rogressive), B(ryan), W(heeler), J(ohn W. Davis), H(arding), S(ocialist).
+   69|         'label_pool': ['K', 'M', 'N', 'T', 'V', 'X'],
+   70|         'others_line': 'Other candidates on some ballots, including a Prohibition and a Workers party nominee (answer "other").',
+   71|         'plank_order': ['corruption', 'monopoly', 'taxes', 'agriculture', 'labor', 'League of Nations', 'Prohibition'],
+   72|         'names_re': r'\b(Coolidge|Davis|La ?Follette|Dawes|Bryan|Wheeler|Harding|Wilson|Republican|Democrat|Progressive party|G\.\s?O\.\s?P)',
+   73|         'never_name': 'Coolidge, Davis, La Follette, Dawes, Bryan, Wheeler, Harding or Wilson',
+   74|         'corpus': None,  # no dated 1924 items yet (DISCLOSURES C15)
+   75|         'platforms': 'context/platforms_1924.json',
+   76|         'ev_label': '382–136–13',
+   77|         'slice_sources': {
+   78|             'men': '1920 census aged to November 1924 along each group\'s 1910→1920 trend; men 21+ outside the eleven Southern states; the 1920 backbone\'s group structure recalibrated exactly to the certified 1924 returns.',
+   79|             'women': '1920 census aged to 1924, women 21+ outside the South; the 1920 backbone\'s women-to-men turnout ratio carried forward, then calibrated to each state\'s 1924 vote (Corder–Wolbrecht 1924 held out as a check).',
+   80|             'south-white': '1920 census aged to 1924, white adults in the eleven former Confederate states; calibrated to certified 1924 returns.',
+   81|             'black-south': '1920 census aged to 1924, Black adults in the eleven former Confederate states; the 1920 exclusion estimate carried forward.',
+   82|             'immigrants': '1920 census aged to 1924, foreign-born white adults who were not citizens.',
+   83|         },
+   84|     },
+   85| }
+   86| 
+   87| 
+   88| # Every other year is a JSON file in harness/profiles/<year>.json with the same
+   89| # keys (plus optional "masks": [[pattern, replacement], …] for scenario.mask_names).
+   90| # A JSON profile whose "corpus" is null picks up sources/corpus_<year>.jsonl
+   91| # from the cache once that file exists.
+   92| PROFILE_DIR = ROOT / 'profiles'
+   93| 
+   94| 
+   95| def _load_json(year: int) -> dict | None:
+   96|     f = PROFILE_DIR / f'{year}.json'
+   97|     if not f.exists():
+   98|         return None
+   99|     prof = json.loads(f.read_text())
+  100|     prof['year'] = year
+  101|     if not prof.get('corpus'):
+  102|         from .config import CACHE
+  103|         rel = f'sources/corpus_{year}.jsonl'
+  104|         prof['corpus'] = rel if (CACHE / rel).exists() else None
+  105|     return prof
+  106| 
+  107| 
+  108| def years() -> list[int]:
+  109|     return sorted(set(PROFILES) | {int(f.stem) for f in PROFILE_DIR.glob('[0-9]*.json')})
+  110| 
+  111| 
+  112| def get(year: int) -> dict:
+  113|     if year not in PROFILES:
+  114|         prof = _load_json(year)
+  115|         if prof is None:
+  116|             raise SystemExit(f'No election profile for {year}. Simulated years: {years()}')
+  117|         PROFILES[year] = prof
+  118|     return PROFILES[year]
+  119| 
+  120| 
+  121| def names_re(year: int):
+  122|     return re.compile(get(year)['names_re'], re.I)
 ```
 
-## `simharness/world.py`
+## `simharness/prompts.py`
 
 ```python
-    1| """Staging a compiled what-if's world, and auditing whether the voices lived in it (D33).
-    2| 
-    3| Two once-per-what-if passes on the strongest model, at high effort. They run
-    4| once per change rather than once per voter, so they cost little next to the
-    5| interviews, and they decide whether the interviews measure the change at all.
-    6| 
-    7| 1. **Stage** (before the interviews). The compiler wrote the change as a few
-    8|    settled facts; staging makes the rest of the person's world agree with them:
-    9|    - `contradicted`: the year's dated newspaper items the change makes false
-   10|      (neutrality news in a world at war). They leave the counterfactual brief.
-   11|      This replaces the 1920-only topic codes (drop_topics) with item ids, so
-   12|      it works for every year that has a corpus.
-   13|    - `consequences`: up to three settled downstream facts any adult would know
-   14|      on the context date, aimed first at the real memory the change overturns
-   15|      (a model that knows 1916 "kept us out of war" needs telling it didn't).
-   16|    - `items`: two to four in-world dated news items (a casualty list, a draft
-   17|      notice), regional where the change is regional. Printed as "a local
-   18|      newspaper", never as a real masthead.
-   19|    - `check`: one multiple-choice question about the world (not the vote) that
-   20|      a person who took the change as true answers one way and a person in the
-   21|      world as it was answers the other. Asked first in every counterfactual
-   22|      interview; a wrong answer leaves that interview out (and escalates it).
-   23|    - `focus`: the groups whose votes the change most plausibly moves, from
-   24|      history: interviewed even when the config's only_cohorts leaves them out.
-   25| 
-   26| 2. **Audit** (after the interviews). Each counterfactual answer's reason and
-   27|    quote, without its vote, judged on one question: does the reasoning treat
-   28|    the change as true? An answer that reasons from the world as it was ("he
-   29|    kept us out of war" in a world at war) is left out, whichever way it voted.
-   30| 
-   31| Nothing staged reaches a brief unmasked: names are masked like compiled
-   32| facts, and a sentence that still names a nominee or party is dropped.
-   33| """
-   34| from __future__ import annotations
+    1| """Versioned prompts: the blinded control brief, the non-hypothetical
+    2| counterfactual brief, the recall probe and the label-swap perturbation.
+    3| 
+    4| Rules the templates enforce:
+    5| - The candidates are neutral letters, drawn per agent from letters that match
+    6|   no 1920 candidate's or party's initial, in a random order.
+    7| - Every dated item in a brief is dated on or before the context cutoff, and
+    8|   shows its date.
+    9| - A counterfactual is never phrased as a hypothesis. The changed fact is
+   10|   written into the person's world as settled; anything in the brief that the
+   11|   change would contradict is removed; the exact change is logged in the
+   12|   request's meta (never shown to the model as a change).
+   13| """
+   14| from __future__ import annotations
+   15| 
+   16| import datetime as dt
+   17| import random
+   18| 
+   19| # p1: the 1920 prototype's answers. p2: brief dated on the context cutoff (p1 dated
+   20| # briefs 30 Oct but admitted items to 1 Nov); non-citizens get no franchise counterfactual.
+   21| # p3: quote capped at 25 words, no letter labels (DISCLOSURES D11).
+   22| # p4: a candidate what-if's counterfactual ballot carries a third labelled line (a named
+   23| # independent); every other brief is byte-identical to p3's, so p3 answers to them are reused.
+   24| # p5: news about one nominee sits on that nominee's ballot line, and those counterfactuals
+   25| # carry a manipulation check (news_about) (DISCLOSURES D21). Briefs without such news are
+   26| # byte-identical to p4's.
+   27| # p6: a staged compiled what-if (world.py) carries a belief check, answered first (world_check),
+   28| # its consequences among the settled facts, the dated items it contradicts removed and up to two
+   29| # in-world items added (DISCLOSURES D33). Every other brief is byte-identical to p5's.
+   30| PROMPT_VERSION = 'p6'
+   31| 
+   32| NEWS_CHECK = ('Also fill news_about: the label of the candidate the recent news on the ballot concerns, '
+   33|               '"neither" if it concerns neither, or "unsure".')
+   34| 
    35| 
-   36| import datetime as dt
-   37| import hashlib
-   38| import json
-   39| import re
-   40| 
-   41| from .scenario import REGION_KEYS, mask_names
-   42| 
-   43| WORLD_VERSION = 'w2'  # w2: the check asks a consequence the brief never states; the audit counts passing slips (D35)
-   44| 
-   45| WORLD_SYSTEM = """You are a historian staging a counterfactual for an election simulation. A change has been written into the world of the {year} United States presidential election as settled fact. Invented voters will be interviewed with a brief dated {cutoff}: their circumstances, a few dated newspaper items from that autumn, and the ballot. The simulation compares each person's answer in the world as it was with their answer in the changed world, so the changed world must hang together: nothing in a person's brief may contradict the change, and the change must be as present in daily life as it would really be.
-   46| 
-   47| The voices are language models that know the real history. Left alone they fall back on it: a voter told the country went to war in 1915 still says the President "kept us out of war". Your job is to close those gaps.
-   48| 
-   49| Fill the JSON:
-   50| - contradicted: every listed newspaper item whose content the change makes false, impossible or plainly out of place in the changed world (news of neutrality when the country is at war; a nominee's speech he could not have given). Give its id and a short why. Do not list an item only because it is irrelevant or would be crowded out of the news; a suit sale stays.
-   51| - consequences: up to three sentences of settled fact, true in the changed world on {cutoff}, that any adult would know and that follow directly from the change. Lead with the one that overturns the best-known real fact the change makes false (a slogan, a policy, an event everybody remembers). Plain, neutral wording of the period. Never phrase a hypothesis.
-   52| - items: two to four short dated news items (at most 60 words each) that a newspaper in the changed world would have printed in the ten weeks before {cutoff}: concrete, local and ordinary (a casualty list, a draft notice, a price, a meeting, a ruling), never a summary of the change. date: YYYY-MM-DD, on or before {cutoff}. regions: the regions where it is local news, from {regions}; empty for national news. kind: a few words ("casualty list").
-   53| - check: one multiple-choice question about the world, not about the election or any candidate, that a person who has taken the change in answers one way and a person in the world as it was answers another way. It tests whether the person reasons from the changed world, not whether they can read: ask about something that follows from the change but that neither the settled facts, your consequences nor your items state, so the answer can't be copied from the brief. A person who only half took the change in, and still carries the real world in their head, should get it wrong. (Change: the country went to war in 1915. Weak: "Is the country at war?", stated outright. Good: "Is there a draft for young men this year?") Three or four short options, none of them obviously absurd. expected: the option true in the changed world. control: the option true in the world as it was. They must differ. The question must not hint at the answer or at any party.
-   54| - focus: up to four groups whose votes the change most plausibly moves, from what historians know of how such people behaved: sex (M, F), group (from {groups}) and region (from {regions}); empty lists mean any. why: one sentence.
-   55| 
-   56| Never name {never_name}, and never write a party's name: call them {parties}. Write in the third person, never addressing the reader."""
-   57| 
-   58| AUDIT_SYSTEM = """You audit interviews from an election simulation. Each interview asked an invented voter, living in a world where a change had happened, what they would do on election day. You see the change, and each answer's stated reason and the line the voter said aloud, but not how they voted.
+   36| def world_check_line(check: dict) -> str:
+   37|     """The belief check, asked before the election question: what the person takes to be true."""
+   38|     opts = '; '.join(f'"{o}"' for o in check['options'])
+   39|     return (f'Before anything else, fill world_check: as this person understands things on this date, {check["question"].rstrip("?")}? '
+   40|             f'Answer with one of: {opts}.')
+   41| 
+   42| # No H(arding), C(ox), D(ebs), R(epublican), D(emocrat), S(ocialist),
+   43| # F(armer-Labor), W(ilson), L(eague).
+   44| LABEL_POOL = ['K', 'M', 'N', 'P', 'T', 'V']
+   45| 
+   46| SYSTEM = """You give voice to one invented person living in the United States. The brief you receive is that person's life and world as they stand on the date it gives: their circumstances, their memories, and what they have lately read or heard. Every line of the brief is settled fact about the world. It is not a scenario or a hypothesis, and you never comment on it as one.
+   47| 
+   48| Answer only from what this person could know on that date. The person does not know anything that happens after it, including how any election turns out. Where the brief leaves something open, answer as this particular person plausibly would given their own circumstances, not as a type or a stereotype of any group.
+   49| 
+   50| Fill the requested JSON:
+   51| - able_to_vote: whether this person can lawfully cast a ballot for president this year and, in practice, will be allowed to.
+   52| - p_vote: the chance, 0 to 100, that this person casts a presidential ballot.
+   53| - choice: the candidate this person would vote for if they vote (a label), "other", or "none".
+   54| - p_choice: this person's leanings as chances that add to 100, over the labelled candidates and "other".
+   55| - confidence: 0 to 100, how settled the person's mind is.
+   56| - reason: one or two sentences, in the third person, naming the circumstances in the brief that drove the answer.
+   57| - quote: one or two sentences, at most 25 words, the person might say aloud to a neighbour. Plain English of the period, specific to their own circumstances. Never use a candidate's letter label in the quote; a person would say "the Republican", "the man from Ohio" or "the administration's man", never "Candidate K" or "K". No slurs, no melodrama.
+   58| - sources_used: the ids of the dated items in the brief the answer rests on."""
    59| 
-   60| For each answer, judge only this: does the reasoning treat the change as true? An answer is "contradicts" if any part of it, even a passing phrase, relies on a state of affairs the change has ended or ruled out (for a country at war since 1915, praising the President for keeping the country out of war; after an ally has surrendered, speaking of helping that ally keep fighting). It is "consistent" if it reasons within the changed world, or simply doesn't touch the change (a voter who thinks only of farm prices is consistent). Use "unclear" when you cannot tell. Do not judge whether the vote is sensible, whether the voter is persuaded, or which way the change should move them."""
+   60| PROBE_SYSTEM = """You are a careful historian. Answer the question about the document you are given. If you do not know, answer "unknown". Fill the requested JSON."""
    61| 
-   62| 
-   63| def _schema(groups: list[str]) -> dict:
-   64|     reach = {'type': 'object', 'properties': {
-   65|         'sex': {'type': 'array', 'items': {'type': 'string', 'enum': ['M', 'F']}},
-   66|         'group': {'type': 'array', 'items': {'type': 'string', 'enum': groups}},
-   67|         'region': {'type': 'array', 'items': {'type': 'string', 'enum': REGION_KEYS}},
-   68|         'why': {'type': 'string'}}, 'required': ['sex', 'group', 'region', 'why'], 'additionalProperties': False}
-   69|     return {
-   70|         'type': 'object',
-   71|         'properties': {
-   72|             'contradicted': {'type': 'array', 'items': {'type': 'object', 'properties': {
-   73|                 'id': {'type': 'string'}, 'why': {'type': 'string'}}, 'required': ['id', 'why'], 'additionalProperties': False}},
-   74|             'consequences': {'type': 'array', 'items': {'type': 'string'}},
-   75|             'items': {'type': 'array', 'items': {'type': 'object', 'properties': {
-   76|                 'date': {'type': 'string'}, 'kind': {'type': 'string'},
-   77|                 'regions': {'type': 'array', 'items': {'type': 'string', 'enum': REGION_KEYS}},
-   78|                 'text': {'type': 'string'}}, 'required': ['date', 'kind', 'regions', 'text'], 'additionalProperties': False}},
-   79|             'check': {'type': 'object', 'properties': {
-   80|                 'question': {'type': 'string'}, 'options': {'type': 'array', 'items': {'type': 'string'}},
-   81|                 'expected': {'type': 'string'}, 'control': {'type': 'string'}},
-   82|                 'required': ['question', 'options', 'expected', 'control'], 'additionalProperties': False},
-   83|             'focus': {'type': 'array', 'items': reach},
-   84|         },
-   85|         'required': ['contradicted', 'consequences', 'items', 'check', 'focus'],
-   86|         'additionalProperties': False,
-   87|     }
-   88| 
-   89| 
-   90| AUDIT_SCHEMA = {
-   91|     'type': 'object',
-   92|     'properties': {'verdicts': {'type': 'array', 'items': {'type': 'object', 'properties': {
-   93|         'n': {'type': 'integer'}, 'verdict': {'type': 'string', 'enum': ['consistent', 'contradicts', 'unclear']},
-   94|         'why': {'type': 'string'}}, 'required': ['n', 'verdict', 'why'], 'additionalProperties': False}}},
-   95|     'required': ['verdicts'],
-   96|     'additionalProperties': False,
-   97| }
-   98| 
-   99| 
-  100| def _prof_bits(prof: dict) -> tuple[str, str]:
-  101|     from .scenario import party_names
-  102|     cd = prof.get('compile_desc') or {}
-  103|     names = party_names(prof)
-  104|     if names:
-  105|         parties = f'"{cd.get("R", "one party")}" ({names["R"]}) and "{cd.get("D", "the other")}" ({names["D"]})'
-  106|     else:
-  107|         parties = f'"{cd.get("R", "one party")}" (Republicans) and "{cd.get("D", "the other")}" (Democrats)'
-  108|     return prof.get('never_name') or 'any nominee', parties
+   62| QUESTIONS = [
+   63|     'Election Day is Tuesday. Can this person vote, how likely are they to vote, and if they vote, for whom?',
+   64|     'A neighbour asks what this person will do on Tuesday, 2 November. Will they cast a ballot for president, and for which candidate?',
+   65|     'Think about Tuesday\'s presidential election from where this person stands. How likely are they to vote, and which candidate would get their vote?',
+   66| ]
+   67| 
+   68| WEEKDAYS = ('Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday')
+   69| 
+   70| 
+   71| def questions(day_phrase: str = 'Tuesday, 2 November') -> list[str]:
+   72|     """The three paraphrases for an election day (1920's are QUESTIONS, unchanged). Before
+   73|     1845 states chose electors on different days, and the profile's day_phrase is a clause
+   74|     ("the day this person's state has set…"): the questions then say "election day"."""
+   75|     day = day_phrase.split(',')[0].strip()
+   76|     if day == 'Tuesday':
+   77|         return [q.replace('Tuesday, 2 November', day_phrase) for q in QUESTIONS]
+   78|     if day in WEEKDAYS:
+   79|         return [q.replace('Tuesday, 2 November', day_phrase).replace('Election Day is Tuesday.', f'Election Day is {day}.')
+   80|                 .replace("Tuesday's presidential election", f"{day}'s presidential election") for q in QUESTIONS]
+   81|     return [q.replace('Tuesday, 2 November', 'election day').replace('Election Day is Tuesday.', 'The presidential election is near.')
+   82|             .replace("Tuesday's presidential election", 'the coming presidential election') for q in QUESTIONS]
+   83| 
+   84| 
+   85| PROBE_QUESTION = (
+   86|     'Set the person aside. Which year\'s United States presidential election does this brief describe? '
+   87|     'Which real candidates stand behind each label? Who won that election? '
+   88|     'Answer "unknown" for anything you cannot tell.'
+   89| )
+   90| 
+   91| 
+   92| def answer_schema(labels: list[str], news_check: bool = False, world_options: list[str] | None = None) -> dict:
+   93|     choice_props = {l: {'type': 'integer'} for l in labels}
+   94|     choice_props['other'] = {'type': 'integer'}
+   95|     if world_options:
+   96|         # p6: the belief check comes first, so the person settles what is true before choosing.
+   97|         s = answer_schema(labels, news_check)
+   98|         s['properties'] = {'world_check': {'type': 'string', 'enum': list(world_options)}, **s['properties']}
+   99|         s['required'] = ['world_check'] + s['required']
+  100|         return s
+  101|     if news_check:
+  102|         s = answer_schema(labels)
+  103|         s['properties']['news_about'] = {'type': 'string', 'enum': labels + ['neither', 'unsure']}
+  104|         s['required'].append('news_about')
+  105|         return s
+  106|     return {
+  107|         'type': 'object',
+  108|         'properties': {
+  109|             'able_to_vote': {'type': 'string', 'enum': ['yes', 'no', 'unsure']},
+  110|             'p_vote': {'type': 'integer'},
+  111|             'choice': {'type': 'string', 'enum': labels + ['other', 'none']},
+  112|             'p_choice': {'type': 'object', 'properties': choice_props,
+  113|                          'required': list(choice_props), 'additionalProperties': False},
+  114|             'confidence': {'type': 'integer'},
+  115|             'reason': {'type': 'string'},
+  116|             'quote': {'type': 'string'},
+  117|             'sources_used': {'type': 'array', 'items': {'type': 'string'}},
+  118|         },
+  119|         'required': ['able_to_vote', 'p_vote', 'choice', 'p_choice', 'confidence', 'reason', 'quote', 'sources_used'],
+  120|         'additionalProperties': False,
+  121|     }
+  122| 
+  123| 
+  124| def probe_schema(labels: list[str]) -> dict:
+  125|     return {
+  126|         'type': 'object',
+  127|         'properties': {
+  128|             'year': {'type': 'string'},
+  129|             'candidates': {'type': 'object', 'properties': {l: {'type': 'string'} for l in labels},
+  130|                            'required': labels, 'additionalProperties': False},
+  131|             'winner_label': {'type': 'string'},
+  132|             'winner_name': {'type': 'string'},
+  133|             'confidence': {'type': 'integer'},
+  134|         },
+  135|         'required': ['year', 'candidates', 'winner_label', 'winner_name', 'confidence'],
+  136|         'additionalProperties': False,
+  137|     }
+  138| 
+  139| 
+  140| def long_date(iso: str) -> str:
+  141|     d = dt.date.fromisoformat(iso)
+  142|     return f'{d.strftime("%A")}, {d.day} {d.strftime("%B %Y")}'
+  143| 
+  144| 
+  145| OTHERS_1920 = 'Other candidates on some ballots, including a Socialist and a Farmer-Labor nominee (answer "other").'
+  146| 
+  147| 
+  148| def ballot_block(state_name: str, parties: list[dict], labels: list[str], others: str = OTHERS_1920,
+  149|                  note: str | None = None) -> list[str]:
+  150|     """parties: [{key, descriptor, planks: [str]}] in display order, already
+  151|     paired with labels in the same order. note: a profile's ballot note for this
+  152|     state (profile 'ballot_notes', e.g. 1964 Alabama's unpledged electors), last."""
+  153|     lines = [f'On the ballot for president in {state_name}:']
+  154|     for label, p in zip(labels, parties):
+  155|         planks = ' '.join(p['planks'])
+  156|         news = f' Recent news: {" ".join(p["news"])}' if p.get('news') else ''
+  157|         lines.append(f'- Candidate {label}: {p["descriptor"]}.{news} {planks}'.rstrip())
+  158|     lines.append(f'- {others}')
+  159|     if note:
+  160|         lines.append(f'- {note}')
+  161|     return lines
+  162| 
+  163| 
+  164| def brief(persona: dict, world: dict, items: list[dict], ballot: list[str], asof: str, day_phrase: str = 'Tuesday, 2 November') -> str:
+  165|     lines = [f'Date: {long_date(asof)}. The presidential election is on {day_phrase}.', '', 'This person:']
+  166|     lines += [f'- {line}' for line in persona['lines']]
+  167|     if world.get('facts'):
+  168|         lines += ['', 'How things stand:']
+  169|         lines += [f'- {f}' for f in world['facts']]
+  170|     if items:
+  171|         lines += ['', 'What this person has lately read or heard (dated):']
+  172|         for it in items:
+  173|             lines.append(f'[{it["id"]}] {it["newspaper"]}, {it["place"]}, {long_date(it["date"])}: "{it["text"]}"')
+  174|     lines += [''] + ballot
+  175|     return '\n'.join(lines)
+  176| 
+  177| 
+  178| def assign_labels(rng: random.Random, keys: list[str], pool: list[str] = LABEL_POOL) -> dict:
+  179|     """{party key: label}, and the display order."""
+  180|     labels = rng.sample(pool, len(keys))
+  181|     order = keys[:]
+  182|     rng.shuffle(order)
+  183|     return dict(zip(keys, labels)), order
+```
+
+## `simharness/publish.py`
+
+```python
+    1| """The publish stage: every what-if combination → the page's result shape and bundle.
+    2| 
+    3| `Run` (pipeline.py) mixes `Publisher` in, so the methods here read the run's
+    4| fit, inputs, profile and agent files through `self`.
+    5| """
+    6| from __future__ import annotations
+    7| 
+    8| import itertools
+    9| import json
+   10| import pickle
+   11| from pathlib import Path
+   12| 
+   13| import numpy as np
+   14| 
+   15| from . import agentlayer, aggregate, evidence, paired, prompts, quotes, scenario, serialize
+   16| from .config import ROOT
+   17| from .geo import STATE_NAME
+   18| from .whatifs import REGISTRY, apply_effects, for_year, text_for, withdraw
+   19| 
+   20| CONF = {'franchise': 'high', 'population': 'medium', 'issue': 'low', 'candidate': 'low'}
+   21| KIND_ORDER = ['franchise', 'population', 'issue', 'candidate']
+   22| 
+   23| 
+   24| def pre_interviews(run_dir: Path) -> dict | None:
+   25|     """The interviews done before any change, from a run's answered requests:
+   26|     each synthetic voter asked in the world as it was (the baseline the
+   27|     what-ifs are measured against), and the leakage probes when the run had
+   28|     them (L1 recall, L2 label swap; analysis.json)."""
+   29|     rq, an = run_dir / 'agents/all_requests.jsonl', run_dir / 'agents/answers.jsonl'
+   30|     if not rq.exists() or not an.exists():
+   31|         return None
+   32|     meta = {r['id']: r['meta'] for r in map(json.loads, rq.read_text().splitlines()) if r}
+   33|     done = [meta[a['id']] for a in map(json.loads, an.read_text().splitlines()) if a.get('ok', True) and a['id'] in meta]
+   34|     control = [m for m in done if m['kind'] == 'control']
+   35|     if not control:
+   36|         return None
+   37|     out = {'voters': len({m['agent'] for m in control}), 'interviews': len(control)}
+   38|     ap = run_dir / 'analysis.json'
+   39|     a = json.loads(ap.read_text()) if ap.exists() else {}
+   40|     if a.get('l1', {}).get('n'):
+   41|         out['recall'] = {'n': a['l1']['n'], 'winnerRate': a['l1']['winner_rate']}
+   42|     if a.get('l2', {}).get('n'):
+   43|         out['swap'] = {'n': a['l2']['n'], 'platformRate': a['l2']['platform_rate']}
+   44|     ag = run_dir / 'agents/agents.json'
+   45|     agents = {x['id']: x for x in json.loads(ag.read_text())} if ag.exists() else {}
+   46|     per = [len(agents[m['agent']].get('items', [])) for m in control if m['agent'] in agents]
+   47|     if per:
+   48|         out['items'] = [min(per), max(per)]
+   49|     out['asOf'] = max((m.get('context_date') or '' for m in control), default='') or None
+   50|     out['wordings'] = len({m.get('paraphrase') for m in control})
+   51|     return out
+   52| 
+   53| 
+   54| ITEM_SUMMARIES = ROOT / 'extracts' / 'item-summaries.json'
+   55| 
+   56| 
+   57| 
+   58| def briefs_record(run_dir: Path) -> dict:
+   59|     """What the synthetic voters were shown, from a run's requests and agents.
+   60|     told: per what-if, the exact lines that wrote the change into their world
+   61|     (settled facts; news printed on a nominee's ballot line; planks added or
+   62|     dropped). reading: every dated newspaper item in their briefs, with a
+   63|     one-line summary from extracts/item-summaries.json when it has one."""
+   64|     rq, ag = run_dir / 'agents/all_requests.jsonl', run_dir / 'agents/agents.json'
+   65|     told, reading = {}, []
+   66|     if rq.exists():
+   67|         by = {}
+   68|         for r in map(json.loads, rq.read_text().splitlines()):
+   69|             if r and r['meta']['kind'] == 'cf':
+   70|                 by.setdefault(r['meta']['change']['what_if'], []).append(r)
+   71|         for wk, rs in by.items():
+   72|             ch = [r['meta']['change'] for r in rs]
+   73|             facts = max((c.get('facts', []) for c in ch), key=lambda f: sum(c.get('facts', []) == f for c in ch))
+   74|             t = {'facts': facts,
+   75|                  'added': sorted({p['text'] for c in ch for p in c.get('added_planks', [])}),
+   76|                  'dropped': sorted({p for c in ch for p in c.get('dropped_planks', [])}),
+   77|                  # D33: staged in-world news, and how many real items the change made false
+   78|                  'items': sorted({(i['date'], i['text']) for c in ch for i in c.get('added_items', [])}),
+   79|                  'removed': len({i for c in ch for i in c.get('dropped_sources', [])})}
+   80|             t['items'] = [{'date': d, 'text': x} for d, x in t['items']]
+   81|             sp = scenario.spec_path(wk)
+   82|             spec = json.loads(sp.read_text()) if sp.exists() else REGISTRY.get(wk, {})
+   83|             news = spec.get('nominee_news') or []
+   84|             if news and any(f'Recent news: {" ".join(news)}' in r['user'] for r in rs):
+   85|                 t['news'] = news
+   86|             told[wk] = {k: v for k, v in t.items() if v}
+   87|     if ag.exists():
+   88|         sums = json.loads(ITEM_SUMMARIES.read_text()) if ITEM_SUMMARIES.exists() else {}
+   89|         seen = {}
+   90|         for a in json.loads(ag.read_text()):
+   91|             for i in a.get('items', []):
+   92|                 seen.setdefault(i['id'], {'date': i['date'], 'newspaper': i['newspaper'], 'place': i['place'],
+   93|                                           **({'summary': sums[i['id']]} if i['id'] in sums else {})})
+   94|         reading = sorted(seen.values(), key=lambda x: (x['date'], x['newspaper']))
+   95|     return {'told': told, 'reading': reading}
+   96| 
+   97| class Publisher:
+   98|     """The publish stage and the bundle's parts. Needs the attributes and
+   99|     helpers `Run` sets up: cfg, inp, extras, prof, year, cand, dir, id, bulk,
+  100|     fit(), state_index(), requests(), answers(), _fixed_ev(), _split_ev(),
+  101|     _o_single() and _ret_cols()."""
+  102| 
+  103|     def publish(self):
+  104|         fit = self.fit()
+  105|         states, sidx = self.state_index(fit)
+  106|         ev = self.inp.ev.reindex(states).fillna(0).to_numpy()
+  107|         base_votes = aggregate.by_state(fit.world, sidx, len(states))
+  108|         base = aggregate.outcome(base_votes, ev, self._fixed_ev(states), self._split_ev(states), o_single=self._o_single(states))
+  109|         base_winner = base['winner'][0]
+  110|         base_sum = aggregate.summarize(base, base_winner)
+  111|         # Page key A is the historical winner (history.js): D → A in a year the D nominee won.
+  112|         self.key_of = serialize.key_map(base_sum['ev_point'])
+  113|         eff_path = self.dir / 'effects.pkl'
+  114|         eff = pickle.load(open(eff_path, 'rb')) if eff_path.exists() else {'effects': {}, 'pairs': {}, 'exposed': set(), 'nationally_exposed': False}
+  115|         co = json.loads((self.dir / 'agents/cohorts.json').read_text()) if (self.dir / 'agents/cohorts.json').exists() else None
+  116|         cell_to = [co['cell_to'][str(i)] for i in range(len(fit.cells))] if co else []
+  117| 
+  118|         available = [k for k in for_year(self.cfg.what_ifs, self.year) if REGISTRY[k]['mode'] == 'backbone' or k in eff['effects']]
+  119|         available += ['everyone'] if 'everyone' not in available else []
+  120|         runs, tables, results_meta = {}, {}, {}
+  121|         for n in range(0, min(len(available), self.cfg.max_combo) + 1):
+  122|             for combo in itertools.combinations(sorted(available), n):
+  123|                 if 'everyone' in combo and len(combo) > 1:
+  124|                     continue
+  125|                 if sum(REGISTRY[k]['kind'] == 'candidate' for k in combo) > 1:
+  126|                     continue  # two named third candidates would share the one O column
+  127|                 world = fit.world
+  128|                 for k in sorted(combo, key=lambda k: KIND_ORDER.index(REGISTRY[k]['kind'])):
+  129|                     spec = REGISTRY[k]
+  130|                     if spec['mode'] == 'backbone':
+  131|                         world = spec['apply'](fit, world, self.inp)
+  132|                     elif spec.get('withdraws') and 'transfer' in eff['effects'][k]:
+  133|                         world = withdraw(fit, world, eff['effects'][k]['transfer'], self._third_frac(fit))
+  134|                     else:
+  135|                         world = apply_effects(fit, world, cell_to, eff['effects'][k]['cohorts'])
+  136|                 sv = aggregate.by_state(world, sidx, len(states))
+  137|                 out = aggregate.outcome(sv, ev, self._fixed_ev(states), self._split_ev(states), o_single=self._o_single(states))
+  138|                 summ = aggregate.summarize(out, base_winner)
+  139|                 key = '+'.join(combo)
+  140|                 runs[key] = (world, summ, out)
+  141|         bundle = self._bundle(fit, states, runs, base_sum, base_winner, eff)
+  142|         bundle['pre'] = pre_interviews(self.dir)
+  143|         bundle.update(briefs_record(self.dir))
+  144|         pub = self.dir / 'published'
+  145|         pub.mkdir(exist_ok=True)
+  146|         (pub / f'{self.cfg.election}.json').write_text(json.dumps(bundle, indent=1, default=float))
+  147|         return {k: {'ev': v[1]['ev_point'], 'drawsWon': v[1]['draws_won']} for k, v in runs.items()}
+  148| 
+  149|     def _third_frac(self, fit):
+  150|         """Per cell: the labelled third candidate's part of the state's `other` vote."""
+  151|         r = self.inp.returns
+  152|         col = next((c for c in (f'P{self.year}', f'P{self.year % 100}') if c in r), None)
+  153|         if col is None:
+  154|             return np.ones(len(fit.cells))
+  155|         frac = (r[col] / r[self._ret_cols()[2]].clip(lower=1)).clip(0, 1)
+  156|         return fit.cells.state.map(frac).fillna(0).to_numpy()
+  157| 
+  158|     def spec(self, k: str) -> dict:
+  159|         """A what-if's registry entry as this year's page reads it."""
+  160|         return text_for(REGISTRY[k], self.year)
+  161| 
+  162|     def _bundle(self, fit, states, runs, base_sum, base_winner, eff):
+  163|         state_names = {**{s: s for s in states}, **STATE_NAME}  # a state geo doesn't name (AK, HI) reads as its code
+  164|         sources_by_slice = self.prof['slice_sources']
+  165|         slice_labels = None if 1868 <= self.year < 1972 else agentlayer.groups_for(self.year)['slices']
+  166|         base_world = runs[''][0]
+  167|         base_point = base_sum['point']
+  168|         used = sorted({k for key in runs for k in key.split('+') if k})
+  169|         evs = {k: scenario.load_evidence(k) for k in used}
+  170|         conf_of = {k: evidence.confidence(REGISTRY[k], evs[k], eff['effects'].get(k, {}).get('agreement'),
+  171|                                           eff['effects'].get(k, {}).get('agent_stats'), bool(REGISTRY[k].get('generated')))
+  172|                    for k in used}
+  173|         election = {
+  174|             'slices': serialize.slices(fit, base_world, base_point, sources_by_slice, slice_labels, self.key_of),
+  175|             'whatIfs': [{'key': k, 'label': self.spec(k)['label'], 'kind': REGISTRY[k]['kind'], 'detail': self.spec(k)['detail'],
+  176|                          'slices': REGISTRY[k]['slices'], 'assumption': self.spec(k)['assumption'],
+  177|                          # additive
+  178|                          'confidenceTier': conf_of[k]['tier'], 'evidence': conf_of[k]['evidence'],
+  179|                          'exploratory': bool(REGISTRY[k].get('generated'))}
+  180|                         for k in used],
+  181|         }
+  182|         validation = {}
+  183|         vpath = self.dir / 'validation.json'
+  184|         if vpath.exists():
+  185|             validation = json.loads(vpath.read_text())
+  186|         out_runs, tables = {}, {}
+  187|         # Each what-if's own sentence comes from its single run, so a combined
+  188|         # run doesn't misattribute one change's people to another.
+  189|         single = {k: self._lead([k], fit, runs[''][0], runs[k][0], runs[k][1]) for k in runs if k and '+' not in k}
+  190|         for key, (world, summ, out) in runs.items():
+  191|             combo = [k for k in key.split('+') if k]
+  192|             tier = evidence.combine_tiers([conf_of[k] for k in combo])
+  193|             # The page knows high, medium and low; "very-low" reaches it as low plus the flag.
+  194|             conf = tier['tier'] if tier['tier'] in CONF.values() else 'low'
+  195|             sl = serialize.slices(fit, world, summ['point'], sources_by_slice, slice_labels, self.key_of)
+  196|             lead = ' '.join(single[k] for k in combo) if combo else self._lead([], fit, runs[''][0], world, summ)
+  197|             cand = dict(self.cand)
+  198|             for k in combo:
+  199|                 if REGISTRY[k]['kind'] == 'candidate' and REGISTRY[k].get('candidate') and not REGISTRY[k].get('withdraws'):
+  200|                     cand[2] = REGISTRY[k]['candidate']['name']
+  201|             text = serialize.verdict(lead=lead, names=states, state_names=state_names, cand=cand, summary=summ,
+  202|                                      base_summary=base_sum, base_winner=base_winner, key_of=self.key_of)
+  203|             if tier['reasons'] and (tier['tier'] == 'very-low' or any(REGISTRY[k].get('generated') for k in combo)):
+  204|                 text += f' {tier["label"]}. {tier["reasons"][0]}'
+  205|             ev_page = [x for x in (evidence.page_evidence(k, evs[k], eff['effects'].get(k, {}).get('agreement')) for k in combo) if x]
+  206|             ev_sources = list({s['url']: {'title': s['title'], 'url': s['url']} for x in ev_page for f in x['findings']
+  207|                                for s in f['sources']}.values())
+  208|             extras = {
+  209|                 'assumptions': [self.spec(k)['assumption'] for k in combo],
+  210|                 'howIGotThis': self._how(combo, summ, evs, tier),
+  211|                 'sources': sources_for(self.year) + ev_sources,
+  212|                 # additive: how sure, and why
+  213|                 'confidenceTier': tier['tier'], 'confidenceLabel': tier['label'],
+  214|                 'confidenceFlags': tier['flags'], 'confidenceReasons': tier['reasons'],
+  215|                 'evidence': ev_page,
+  216|                 'mode': 'truth',
+  217|                 'runId': self.id,
+  218|                 'validation': validation.get('summary'),
+  219|                 'cohortEffects': self._cohort_effects(combo, eff),
+  220|             }
+  221|             applied = [{'key': k, 'label': REGISTRY[k]['label'], 'kind': REGISTRY[k]['kind']} for k in combo]
+  222|             out_runs[key] = serialize.result(names=states, summary=summ, base_winner=base_winner, slices_out=sl, text=text,
+  223|                                              confidence=conf, applied=applied, extras=extras, key_of=self.key_of)
+  224|             tables[key] = self._state_slice_table(fit, world, summ['point'])
+  225|         voters = self._voters(eff, runs)
+  226|         return {
+  227|             'year': self.cfg.election, 'runId': self.id, 'election': election, 'runs': out_runs, 'tables': tables,
+  228|             'voters': voters, 'interviews': self._interviews(eff), 'ev': dict(zip(states, self.inp.ev.reindex(states).fillna(0).astype(int).tolist())),
+  229|             'historyWinner': {s: self.key_of[int(w)] for s, w in zip(states, base_winner)},
+  230|             'words': self._words(used),
+  231|         }
+  232| 
+  233|     def _words(self, used):
+  234|         base = {'no-19th': ['19th', 'nineteenth', 'suffrage fails', 'women can\'t vote', 'no women'],
+  235|                 'fifteenth': ['15th', 'fifteenth', 'black southern', 'black voters', 'poll tax', 'jim crow'],
+  236|                 'league': ['league', 'treaty', 'versailles'],
+  237|                 'everyone': ['everyone', 'all adults', 'universal']}
+  238|         extra = scenario.extra_words()
+  239|         out = []
+  240|         for k in used:
+  241|             words = base.get(k, []) + REGISTRY[k].get('words', []) + extra.get(k, [])
+  242|             if words:
+  243|                 out.append({'key': k, 'words': list(dict.fromkeys(w.lower() for w in words))})
+  244|         return out
+  245| 
+  246|     def _lead(self, combo, fit, base, world, summ):
+  247|         if not combo:
+  248|             # Winner and electoral votes from the calibrated rerun, not the profile's ev_label (whose order varies).
+  249|             won = int(np.argmax(summ['ev_point']))
+  250|             return (f'Rerun with nothing changed, {self.year} comes out as it did: {self.cand[won]} wins, '
+  251|                     f'{serialize.headline_ev(summ, getattr(self, "key_of", serialize.PARTY_TO_KEY))}.')
+  252|         p = summ['point']
+  253|         voted_base = (base.adults[p] * base.can[p] * base.t[p]).sum()
+  254|         voted = (world.adults[p] * world.can[p] * world.t[p]).sum()
+  255|         change = voted - voted_base
+  256|         parts = []
+  257|         for k in combo:
+  258|             if k == 'no-19th':
+  259|                 parts.append(f'{serialize.fmt_m(-change)} women who voted can\'t, outside the states that already let them.')
+  260|             elif k == 'fifteenth':
+  261|                 parts.append(f'{serialize.fmt_m(change)} more Black Southerners vote, turning out like white Southerners and splitting like Black voters in the North.')
+  262|             elif k == 'everyone':
+  263|                 parts.append(f'{serialize.fmt_m(change)} more adults vote.')
+  264|             elif k == 'league':
+  265|                 def r2(wd):
+  266|                     v = (wd.adults[p] * wd.can[p] * wd.t[p])[:, None] * wd.share[p]
+  267|                     return v[:, 0].sum() / (v[:, 0].sum() + v[:, 1].sum()) * 100
+  268|                 shift = r2(world) - r2(base)
+  269|                 toward = self.cand[1] if shift < 0 else self.cand[0]
+  270|                 parts.append(f'With the treaty settled, the voters lean {abs(shift):.1f} points further toward {toward} '
+  271|                              'than the same people did in the world as it was.')
+  272|             elif REGISTRY[k].get('generated'):
+  273|                 # D34: a reinterpreted change says so before anything else.
+  274|                 if REGISTRY[k].get('reinterpretation'):
+  275|                     parts.append(REGISTRY[k]['reinterpretation'])
+  276|                 parts.append(self._lead_generated(REGISTRY[k], base, world, p, change))
+  277|         return ' '.join(parts)
+  278| 
+  279|     def _lead_generated(self, spec, base, world, p, change):
+  280|         def shares(wd):
+  281|             v = (wd.adults[p] * wd.can[p] * wd.t[p])[:, None] * wd.share[p]
+  282|             r, d, o = v[:, 0].sum(), v[:, 1].sum(), v[:, 2].sum()
+  283|             return r / (r + d) * 100, o / (r + d + o) * 100
+  284|         (r2_0, o_0), (r2_1, o_1) = shares(base), shares(world)
+  285|         toward = self.cand[1] if r2_1 < r2_0 else self.cand[0]
+  286|         if spec.get('withdraws'):
+  287|             return (f'With {self.cand[2]} out of the race, candidates outside the two parties take {o_1:.1f}% of the vote, '
+  288|                     f'against {o_0:.1f}% in {self.year}, and the two-party split moves {abs(r2_1 - r2_0):.1f} points toward {toward}.')
+  289|         if spec['kind'] == 'candidate':
+  290|             name = spec['candidate']['name']
+  291|             return (f'With {name} on the ballot, candidates outside the two parties take {o_1:.1f}% of the vote, against {o_0:.1f}% '
+  292|                     f'in {self.year}, and the two-party split moves {abs(r2_1 - r2_0):.1f} points toward {toward}.')
+  293|         if spec['kind'] == 'franchise':
+  294|             return f'{serialize.fmt_m(abs(change))} {"more" if change >= 0 else "fewer"} adults vote.'
+  295|         if spec['kind'] == 'population':
+  296|             d = float((world.adults[p] - base.adults[p]).sum())
+  297|             return (f'{serialize.fmt_m(abs(d))} {"more" if d >= 0 else "fewer"} adults live in the country, and those who can vote '
+  298|                     f'turn out and choose as their group did in {self.year}.')
+  299|         return (f'In this world, the voters lean {abs(r2_1 - r2_0):.1f} points further toward {toward} than the same '
+  300|                 f'people did in {self.year} as it was.')
+  301| 
+  302|     def _how(self, combo, summ, evs=None, tier=None):
+  303|         lines = []
+  304|         for k in combo:
+  305|             spec = self.spec(k)
+  306|             if spec.get('reinterpretation'):
+  307|                 lines.append(f'Not quite what you asked: {spec["reinterpretation"]}')
+  308|             lines.append(f'What changed: {spec["detail"]}')
+  309|             if spec.get('borrowed'):
+  310|                 lines.append(f'New voters borrow the behaviour of {spec["borrowed"]}.')
+  311|             ev = (evs or {}).get(k)
+  312|             if ev and ev.get('summary'):
+  313|                 n, level = len(ev.get('findings', [])), evidence.strength(ev)['level']
+  314|                 count = f' ({n} finding{"s" if n != 1 else ""}, {level} evidence)' if n else ''
+  315|                 lines.append(f'What historians found{count}: {ev["summary"]}')
+  316|         census = self.prof.get('census_line') or (
+  317|             '1920 census voting-age tables' if self.year == 1920 else
+  318|             f'{self.prof["base"]} census voting-age tables aged to {self.year}' if self.prof.get('base') else
+  319|             census_phrase(self.year))
+  320|         lines.append(f'The numbers: the {census} and certified returns; every draw reproduces {self.year} exactly before the change.')
+  321|         lines.append(f'How sure: I reran it {summ["draws"]} times with different population and parameter draws.')
+  322|         if tier and tier['tier'] in ('low', 'very-low') and combo:
+  323|             lines.append(f'{tier["label"]}: ' + ' '.join(tier['reasons'][:3]))
+  324|         return lines
+  325| 
+  326|     def _cohort_effects(self, combo, eff):
+  327|         out = []
+  328|         for k in combo:
+  329|             e = eff['effects'].get(k)
+  330|             if not e or REGISTRY[k]['mode'] != 'agents':
+  331|                 continue
+  332|             for ck, c in e['cohorts'].items():
+  333|                 out.append({'whatIf': k, 'cohort': ck, 'n': c['n'], 'bias': round(c['bias'], 3), 'weight': round(c['weight'], 3),
+  334|                             'exposed': c['exposed'], 'dr': round(c['dr'], 3), 'dt': round(c['dt'], 3)})
+  335|         return out
+  336| 
+  337|     def _state_slice_table(self, fit, world, p):
+  338|         keys = fit.cells.apply(serialize.slice_of, axis=1).to_numpy()
+  339|         rows = []
+  340|         for (s, sl), idx in fit.cells.assign(sl=keys).groupby(['state', 'sl']).groups.items():
+  341|             idx = np.array(list(idx))
+  342|             a = world.adults[p, idx]
+  343|             n = a.sum()
+  344|             if n <= 0:
+  345|                 continue
+  346|             voted = a * world.can[p, idx] * world.t[p, idx]
+  347|             by_key = {self.key_of[j]: float((voted * world.share[p, idx, j]).sum() / n) for j in range(3)}
+  348|             rows.append({'state': s, 'slice': sl, 'adults': float(n),
+  349|                          'barred': float((a * (1 - world.can[p, idx])).sum() / n),
+  350|                          'home': float((a * world.can[p, idx] * (1 - world.t[p, idx])).sum() / n),
+  351|                          'A': by_key['A'], 'B': by_key['B'], 'O': by_key['O']})
+  352|         return rows
+  353| 
+  354|     def _voters(self, eff, runs):
+  355|         """One person per slice, per what-if combination (single what-ifs and history)."""
+  356|         if not (self.dir / 'agents/agents.json').exists():
+  357|             return {}
+  358|         agents = {a['id']: a for a in json.loads((self.dir / 'agents/agents.json').read_text())}
+  359|         co = json.loads((self.dir / 'agents/cohorts.json').read_text())
+  360|         cohorts = co['cohorts']
+  361|         reqs = {r['id']: r for r in self.requests()}
+  362|         ans = self.answers()
+  363|         corpus = {c['id']: c for c in self.extras['corpus']}
+  364|         slice_of_cohort = {}
+  365|         for k, c in cohorts.items():
+  366|             row = type('R', (), {'group': c['group'], 'south': c['region'] == 'south', 'sex': c['sex']})
+  367|             slice_of_cohort[k] = serialize.slice_of(row)
+  368|         slices = {}
+  369|         for k, s in slice_of_cohort.items():
+  370|             slices.setdefault(s, []).append(k)
+  371|         adults = {k: c['adults'] for k, c in cohorts.items()}
+  372|         out = {}
+  373|         for wk in [''] + list(eff['pairs']):
+  374|             answers = {}
+  375|             for aid, a in agents.items():
+  376|                 if wk and aid in (eff.get('dropped') or {}).get(wk, {}):
+  377|                     continue  # D33: failed the belief check or the audit on every model asked
+  378|                 # The pair the analysis kept: the escalated model's, when the bulk answer failed a check.
+  379|                 model = (eff.get('kept') or {}).get(wk, {}).get(aid, self.bulk) if wk else self.bulk
+  380|                 c_id = f'control|{aid}|{model}'
+  381|                 f_id = f'cf:{wk}|{aid}|{model}' if wk else c_id
+  382|                 chk = reqs[f_id]['meta'].get('news_check') if f_id in reqs else None
+  383|                 if chk and f_id in ans and ans[f_id]['data'].get('news_about') != chk['expected']:
+  384|                     continue  # misread whom the news was about (p5 check)
+  385|                 if c_id in ans and f_id in ans:
+  386|                     lab = {v: k for k, v in reqs[c_id]['meta']['label_of'].items()}
+  387|                     answers[aid] = {'control': paired.normalize(ans[c_id]['data'], lab) | {'raw': ans[c_id]['data']},
+  388|                                     'cf': paired.normalize(ans[f_id]['data'], lab) | {'raw': ans[f_id]['data']},
+  389|                                     'cf_req': reqs[f_id]}
+  390|             picks = quotes.select(slices, agents, answers, adults, self.cfg.seed)
+  391|             per = {}
+  392|             for p in picks:
+  393|                 a = p['agent']
+  394|                 x = answers[a['id']]
+  395|                 names = {a['label_of'][k]: self.prof['names'][k] for k in a['label_of']}
+  396|                 if x['cf_req']['meta'].get('candidate'):
+  397|                     names[x['cf_req']['meta']['candidate']['label']] = x['cf_req']['meta']['candidate']['name']
+  398|                 srcs = [corpus[i] for i in x['cf']['raw'].get('sources_used', []) if i in corpus] or \
+  399|                        [corpus[i] for i in x['cf_req']['meta']['sources'] if i in corpus]
+  400|                 key_map = {'R': self.key_of[0], 'D': self.key_of[1], 'O': 'O', 'home': 'home', 'barred': 'barred'}
+  401|                 per[p['slice']] = {
+  402|                     'name': a['name'],
+  403|                     'line': f'{a["age"]}, {"a city or town" if a["urban"] else "the countryside"}, {STATE_NAME.get(a["state"], a["state"])}',
+  404|                     'quote': quotes.deblind(x['cf']['raw'].get('quote', ''), names),
+  405|                     'history': key_map[x['control']['choice']],
+  406|                     'now': key_map[x['cf']['choice']],
+  407|                     # additive
+  408|                     'controlQuote': quotes.deblind(x['control']['raw'].get('quote', ''), names),
+  409|                     'cohort': cohorts[a['cohort']]['label'],
+  410|                     'cohortAdults': round(cohorts[a['cohort']]['adults']),
+  411|                     'weight': round(a['weight']),
+  412|                     'contextDate': x['cf_req']['meta']['context_date'],
+  413|                     'sources': [{'title': f'{s["newspaper"]}, {s["date"]}', 'url': s['url'], 'date': s['date']} for s in srcs],
+  414|                     'model': x['cf_req']['model'], 'promptVersion': x['cf_req']['meta']['prompt_version'],
+  415|                     'memorizationExposed': bool(eff.get('nationally_exposed') or a['cohort'] in eff.get('exposed', set())),
+  416|                     'namesRestored': True,
+  417|                     'unchanged': x['cf']['choice'] == x['control']['choice'],
+  418|                     'change': x['cf_req']['meta'].get('change'),
+  419|                 }
+  420|             out[wk] = per
+  421|         return out
+  422| 
+  423|     def _interviews(self, eff):
+  424|         """Every paired interview, per what-if (additive): the question wordings
+  425|         once, and each person's two answers (as it was / in the what-if), names
+  426|         restored. The page shows it in the robot's opened bubble."""
+  427|         if not (self.dir / 'agents/agents.json').exists():
+  428|             return {}
+  429|         agents = {a['id']: a for a in json.loads((self.dir / 'agents/agents.json').read_text())}
+  430|         cohorts = json.loads((self.dir / 'agents/cohorts.json').read_text())['cohorts']
+  431|         reqs = {r['id']: r for r in self.requests()}
+  432|         ans = self.answers()
+  433|         says = {'R': self.cand[0], 'D': self.cand[1], 'O': self.cand[2], 'home': 'stays home', 'barred': 'can’t vote'}
+  434| 
+  435|         def one(rid, a, lab):
+  436|             d = ans[rid]['data']
+  437|             n = paired.normalize(d, lab)
+  438|             names = {a['label_of'][k]: self.prof['names'][k] for k in a['label_of']}
+  439|             c = reqs[rid]['meta'].get('candidate')
+  440|             if c:
+  441|                 names[c['label']] = c['name']
+  442|             choice = c['name'] if c and d.get('choice') == c['label'] and n['choice'] == 'O' else says.get(n['choice'], n['choice'])
+  443|             return {'choice': choice, 'pVote': d.get('p_vote'),
+  444|                     'quote': quotes.deblind(d.get('quote', ''), names), 'reason': quotes.deblind(d.get('reason', ''), names)}
+  445| 
+  446|         out = {'questions': prompts.questions(self.prof['day_phrase']), 'byWhatIf': {}}
+  447|         for wk in eff['pairs']:
+  448|             rows = []
+  449|             for aid, a in agents.items():
+  450|                 model = (eff.get('kept') or {}).get(wk, {}).get(aid, self.bulk)
+  451|                 c_id, f_id = f'control|{aid}|{model}', f'cf:{wk}|{aid}|{model}'
+  452|                 if c_id not in ans or f_id not in ans:
+  453|                     continue
+  454|                 lab = {v: k for k, v in reqs[c_id]['meta']['label_of'].items()}
+  455|                 chk = reqs[f_id]['meta'].get('news_check')
+  456|                 why = (eff.get('dropped') or {}).get(wk, {}).get(aid)
+  457|                 rows.append({
+  458|                     # additive: took the news to be about the other candidate; left out of the counts
+  459|                     **({'misread': True} if chk and ans[f_id]['data'].get('news_about') != chk['expected'] else {}),
+  460|                     # additive (D33): disbelieved the change or reasoned from the world as it was; left out
+  461|                     **({'excluded': why} if why else {}),
+  462|                     **({'model': model} if model != self.bulk else {}),
+  463|                     'question': a['paraphrase'], 'name': a['name'], 'cohort': cohorts[a['cohort']]['label'],
+  464|                     'line': f'{a["age"]}, {"a city or town" if a["urban"] else "the countryside"}, {STATE_NAME.get(a["state"], a["state"])}',
+  465|                     'before': one(c_id, a, lab), 'after': one(f_id, a, lab),
+  466|                 })
+  467|             out['byWhatIf'][wk] = sorted(rows, key=lambda r: (r['question'], r['cohort'], r['name']))
+  468|         return out
+  469| 
+  470| 
+  471| 
+  472| 
+  473| def census_phrase(year: int) -> str:
+  474|     """Which censuses a general year's population comes from (first census 1790; latest 2020)."""
+  475|     c = min(max(year - year % 10, 1790), 2020)
+  476|     if c == year:
+  477|         return f'{year} census counts'
+  478|     if c > year:
+  479|         return f'{c} census counts carried back to {year}'
+  480|     if c == 2020:
+  481|         return f'2020 census counts carried forward to {year}'
+  482|     return f'{c} and {c + 10} census counts interpolated to {year}'
+  483| 
+  484| 
+  485| def sources_for(year: int) -> list[dict]:
+  486|     if year == 1920:
+  487|         return SOURCES
+  488|     if year == 1924:
+  489|         return [SOURCES[0], SOURCES[1],
+  490|                 {'title': f'National Archives, {year} Electoral College results', 'url': f'https://www.archives.gov/electoral-college/{year}'},
+  491|                 SOURCES[4], SOURCES[5],
+  492|                 {'title': f'American Presidency Project, {year} party platforms (Republican, Democratic, Progressive)',
+  493|                  'url': 'https://www.presidency.ucsb.edu/documents/app-categories/elections-and-transitions/party-platforms'}]
+  494|     from . import profiles
+  495|     prof = profiles.get(year)
+  496|     if prof.get('sources'):
+  497|         return prof['sources']  # a profile's own list wins
+  498|     census = min(max(year - year % 10, 1790), 2020)
+  499|     out = [{'title': f'{census} United States census (population by state, sex, race, nativity and citizenship, via NHGIS)',
+  500|             'url': 'https://www.nhgis.org/'}]
+  501|     if 1868 <= year <= 2020:
+  502|         out.append(SOURCES[1])
+  503|     else:
+  504|         out.append({'title': 'Dubin, United States Presidential Elections, 1788–1860' if year < 1868 else
+  505|                     f'Federal Election Commission, Official {year} Presidential General Election Results',
+  506|                     'url': 'https://www.fec.gov/introduction-campaign-finance/election-results-and-voting-information/'
+  507|                     if year > 2020 else 'https://mcfarlandbooks.com/product/united-states-presidential-elections-1788-1860/'})
+  508|     out.append({'title': f'National Archives, {year} Electoral College results', 'url': f'https://www.archives.gov/electoral-college/{year}'})
+  509|     out.append(SOURCES[4])
+  510|     if year < 1920:
+  511|         out.append(SOURCES[5])
+  512|     if year >= 1840:
+  513|         parties = ', '.join(prof.get('full_names', {}).get(k, '') for k in ('R', 'D', 'O') if prof.get('full_names', {}).get(k))
+  514|         out.append({'title': f'American Presidency Project, {year} party platforms' + (f' ({parties})' if parties else ''),
+  515|                     'url': 'https://www.presidency.ucsb.edu/documents/app-categories/elections-and-transitions/party-platforms'})
+  516|     return out
+  517| 
+  518| 
+  519| SOURCES = [
+  520|     {'title': 'Fourteenth Census of the United States (1920), Vol. II–III: voting age, color, nativity and citizenship', 'url': 'https://www.census.gov/library/publications/1922/dec/vol-02-population.html'},
+  521|     {'title': 'Algara & Amlani, county presidential returns 1868–2020 (Harvard Dataverse, CC0)', 'url': 'https://doi.org/10.7910/DVN/DGUMFI'},
+  522|     {'title': 'Clerk of the House, Statistics of the Presidential and Congressional Election of November 2, 1920', 'url': 'https://history.house.gov/Institution/Election-Statistics/'},
+  523|     {'title': 'National Archives, 1920 Electoral College results', 'url': 'https://www.archives.gov/electoral-college/1920'},
+  524|     {'title': 'Gray & Jenkins, state-level franchise data (Harvard Dataverse, CC0)', 'url': 'https://doi.org/10.7910/DVN/QIY9EM'},
+  525|     {'title': 'Teele, women\'s suffrage dates (Harvard Dataverse, CC0)', 'url': 'https://doi.org/10.7910/DVN/JZYGRB'},
+  526|     {'title': 'Library of Congress, Chronicling America (period newspapers, dated before 2 Nov 1920)', 'url': 'https://chroniclingamerica.loc.gov/'},
+  527| ]
+  528| 
+```
+
+## `simharness/quotes.py`
+
+```python
+    1| """Choosing whose words the page shows, and auditing the reasons behind them.
+    2| 
+    3| Selection is by representativeness, never by drama:
+    4| 1. Within a page slice, a cohort is drawn in proportion to its adults.
+    5| 2. Within that cohort, the agent chosen is the one whose change (control →
+    6|    counterfactual) is closest to the cohort's median change. Ties go to the
+    7|    earliest id; nothing is chosen for vividness.
+    8| 3. Across a run's quotes, at least one person whose vote didn't change is
+    9|    shown. If none was chosen, the slice with the most such agents swaps its
+   10|    pick for its most typical unchanged agent.
+   11| 
+   12| Every quote keeps its cohort, the adults it stands for, both answers, the date
+   13| of its context and the dated sources it cites.
+   14| """
+   15| from __future__ import annotations
+   16| 
+   17| import random
+   18| import re
+   19| 
+   20| import numpy as np
+   21| 
+   22| LABEL_DRIVEN = re.compile(
+   23|     r"\b(as an? |being an? |like (most|all|other) )(woman|women|man|men|black|negro|colored|immigrant|foreigner|"
+   24|     r"german|irish|italian|pole|swede|catholic|protestant|farmer'?s wife|southerner|northerner|westerner)\b"
+   25|     r"|\b(women|negroes|black (people|folks|men|women)|immigrants|foreigners|catholics|southerners|farmers) "
+   26|     r"(usually|always|naturally|tend to|are inclined|by nature)\b",
+   27|     re.I,
+   28| )
+   29| 
+   30| 
+   31| def label_driven(reason: str, sources_used: list) -> bool:
+   32|     """Heuristic flag for stereotype-driven logic: reasoning from a group label
+   33|     rather than from a circumstance in the brief. The audit sample is also
+   34|     read by a person; this flag is the first pass."""
+   35|     return bool(LABEL_DRIVEN.search(reason or '')) and not sources_used
+   36| 
+   37| 
+   38| def audit(rows: list[dict], share: float, rng: random.Random, minimum: int = 30) -> dict:
+   39|     n = max(minimum, int(round(len(rows) * share)))
+   40|     sample = rng.sample(rows, min(n, len(rows)))
+   41|     flagged = [r for r in sample if label_driven(r['reason'], r.get('sources_used'))]
+   42|     return {'audited': len(sample), 'flagged': len(flagged), 'rate': len(flagged) / max(1, len(sample)),
+   43|             'flagged_examples': [{'agent': r['agent'], 'reason': r['reason']} for r in flagged[:10]]}
+   44| 
+   45| 
+   46| def deblind(text: str, label_names: dict) -> str:
+   47|     for label, name in label_names.items():
+   48|         text = re.sub(rf'\b(?:Candidate|candidate|Mr\.)\s+{label}\b', name, text)
+   49|         text = re.sub(rf'(?<![A-Za-z]){label}(?![A-Za-z\'’])', name, text)
+   50|     return text
+   51| 
+   52| 
+   53| def select(slices: dict, agents: dict, answers: dict, cohort_adults: dict, seed: int) -> list[dict]:
+   54|     """slices: {slice: [cohort keys]}; agents: {id: agent}; answers: {id: {'control', 'cf'}}
+   55|     (normalized rows with text). Returns one pick per slice."""
+   56|     rng = random.Random(f'quotes:{seed}')
+   57|     picks, unchanged_by_slice = [], {}
+   58|     for sl, cohorts in slices.items():
+   59|         cohorts = [c for c in cohorts if any(a['cohort'] == c and a['id'] in answers for a in agents.values())]
+   60|         if not cohorts:
+   61|             continue
+   62|         c = rng.choices(cohorts, weights=[cohort_adults[x] for x in cohorts])[0]
+   63|         members = sorted([a for a in agents.values() if a['cohort'] == c and a['id'] in answers], key=lambda a: a['id'])
+   64| 
+   65|         def change(a):
+   66|             x = answers[a['id']]
+   67|             return (x['cf']['p_vote'] * np.nan_to_num(x['cf']['R'])) - (x['control']['p_vote'] * np.nan_to_num(x['control']['R']))
+   68| 
+   69|         med = float(np.median([change(a) for a in members]))
+   70|         pick = min(members, key=lambda a: (abs(change(a) - med), a['id']))
+   71|         picks.append({'slice': sl, 'agent': pick, 'cohort': c})
+   72|         unchanged_by_slice[sl] = [a for a in members if answers[a['id']]['cf']['choice'] == answers[a['id']]['control']['choice']]
+   73|     if picks and not any(answers[p['agent']['id']]['cf']['choice'] == answers[p['agent']['id']]['control']['choice'] for p in picks):
+   74|         sl = max(unchanged_by_slice, key=lambda s: len(unchanged_by_slice[s]), default=None)
+   75|         if sl and unchanged_by_slice[sl]:
+   76|             for p in picks:
+   77|                 if p['slice'] == sl:
+   78|                     p['agent'] = unchanged_by_slice[sl][0]
+   79|                     p['swapped_for_unchanged'] = True
+   80|     return picks
+```
+
+## `simharness/run.py`
+
+```python
+    1| """The pipeline. `python -m simharness.run <stage> --config configs/prototype-1920.json`
+    2| 
+    3| Stages (each writes into runs/<run id>/ and can be rerun alone):
+    4|   backbone   population + backbone fit + the unchanged-run reproduction check
+    5|   plan       sample agents and write every model request (no calls)
+    6|   ask        send pending requests through the configured backend
+    7|   refine     staged what-ifs (D33): audit the answers' reasoning, re-ask failed checks on
+    8|              agents.escalate_model, audit those
+    9|   analyze    paired effects, leakage probes, label swap, bias, audit, quotes
+   10|   publish    every what-if combination → the page's result shape + bundle
+   11|   evaluate   validation checks → validation.json (+ EVAL table rows); 1920 only
+   12|   verify     any year: the unchanged rerun reproduces every state's R/D/O (R1), plus
+   13|              Corder–Wolbrecht where it exists
+   14|   dryrun     free: backbone (if needed) → verify → plan, with brief samples and counts
+   15|              (`python -m simharness.run dryrun --year 1880`)
+   16|   all        backbone → plan → ask → analyze → publish → evaluate
+   17| 
+   18| Typed what-ifs (intake.py, agent.py): research, stage, whatif [--agent], and for the
+   19| research agent: trace, replay, approve, agent-eval (see docs/harness/README.md).
+   20| """
+   21| from __future__ import annotations
+   22| 
+   23| import argparse
+   24| import json
+   25| import sys
+   26| 
+   27| from .config import ROOT, RunConfig
+   28| from .pipeline import LEGISLATURE_EV, Run
+   29| from .publish import CONF, KIND_ORDER, SOURCES, briefs_record, census_phrase, pre_interviews, sources_for
+   30| 
+   31| # The stages live in pipeline.py and publish.py; these names stay importable from here.
+   32| __all__ = ['CONF', 'KIND_ORDER', 'LEGISLATURE_EV', 'SOURCES', 'Run', 'briefs_record', 'census_phrase', 'main',
+   33|            'pre_interviews', 'sources_for']
+   34| 
+   35| 
+   36| def main(argv=None):
+   37|     ap = argparse.ArgumentParser()
+   38|     ap.add_argument('stage', choices=['backbone', 'plan', 'ask', 'refine', 'analyze', 'publish', 'evaluate', 'verify', 'dryrun', 'all',
+   39|                                       'id', 'research', 'whatif', 'stage', 'trace', 'replay', 'approve', 'agent-eval'])
+   40|     ap.add_argument('--config', default=str(ROOT / 'configs/prototype-1920.json'))
+   41|     ap.add_argument('--year', type=int, help='use configs/live-<year>.json (instead of --config)')
+   42|     ap.add_argument('--samples', type=int, default=1, help='dryrun: briefs to print per slice and per what-if')
+   43|     ap.add_argument('--all-cohorts', action='store_true',
+   44|                     help='dryrun: ignore the config\'s only_cohorts and arms (every group and arm; a separate run folder)')
+   45|     ap.add_argument('--text', help='whatif: the words a reader typed')
+   46|     ap.add_argument('--queue', action='store_true', help='whatif: model what the router queued as unknown')
+   47|     ap.add_argument('--limit', type=int, default=3, help='whatif --queue: at most this many texts')
+   48|     ap.add_argument('--refresh', action='store_true', help='research again even if evidence is saved')
+   49|     ap.add_argument('--key', help='research: only this what-if')
+   50|     ap.add_argument('--reextract', action='store_true', help='research: extract findings again from the saved notes (no search)')
+   51|     ap.add_argument('--agent', action='store_true', help='whatif: the research agent (agent.py) chooses the stages')
+   52|     ap.add_argument('--publish', choices=['ask', 'gate', 'never'], default='ask',
+   53|                     help='whatif --agent: hold the bundle for approve (ask), put it live if its checks pass (gate), or never')
+   54|     ap.add_argument('--dry-run', action='store_true', help='whatif --agent: no writes, interviews or publishing')
+   55|     ap.add_argument('--ceiling', type=float, help='whatif --agent, agent-eval: the most one text may spend, in dollars')
+   56|     ap.add_argument('--model', help='whatif --agent, replay, agent-eval: the agent\'s model (default: the compile model)')
+   57|     ap.add_argument('--id', help='trace, replay, approve: the trace id')
+   58|     ap.add_argument('--force', action='store_true', help='approve: even if the bundle fails its checks now')
+   59|     args = ap.parse_args(argv)
+   60|     if args.year:
+   61|         args.config = str(ROOT / f'configs/live-{args.year}.json')
+   62|     if args.stage in ('trace', 'replay', 'approve', 'agent-eval') or (args.stage == 'whatif' and args.agent):
+   63|         from . import agent, agent_eval, trace
+   64|         if args.stage == 'trace':
+   65|             out = trace.summary(trace.load(args.id)) | {'id': args.id} if args.id else \
+   66|                 {'recent': trace.recent(), 'held': agent.pending()}
+   67|         elif args.stage == 'replay':
+   68|             out = agent.replay(args.id or ap.error('replay needs --id'), args.model)
+   69|         elif args.stage == 'approve':
+   70|             out = agent.approve(args.id or ap.error('approve needs --id'), args.force)
+   71|         elif args.stage == 'agent-eval':
+   72|             out = agent_eval.evaluate(RunConfig.load(args.config).election, args.limit, args.model, args.ceiling or 4.0)
+   73|         else:
+   74|             out = agent.run(args.text or ap.error('whatif --agent needs --text'), args.config, args.ceiling,
+   75|                             agent.Policy(publish=args.publish, dry_run=args.dry_run, model=args.model))
+   76|         print(json.dumps(out, indent=1, default=float))
+   77|         return
+   78|     if args.stage in ('research', 'whatif', 'stage'):
+   79|         from . import intake
+   80|         if args.stage == 'research':
+   81|             out = intake.research_config(args.config, args.refresh, args.key, args.reextract)
+   82|         elif args.stage == 'stage':
+   83|             out = intake.stage_config(args.config, args.key, args.refresh)
+   84|         elif args.queue:
+   85|             out = intake.process_queue(args.config, args.limit)
+   86|         elif args.text:
+   87|             out = intake.whatif(args.text, args.config, args.refresh)
+   88|         else:
+   89|             ap.error('whatif needs --text or --queue')
+   90|         print(json.dumps(out, indent=1, default=float))
+   91|         return
+   92|     cfg = RunConfig.load(args.config)
+   93|     if args.all_cohorts:
+   94|         cfg.agents.only_cohorts, cfg.agents.arms = None, None
+   95|     run = Run(cfg)
+   96|     stages = ['backbone', 'plan', 'ask', 'refine', 'analyze', 'evaluate', 'publish'] if args.stage == 'all' else [args.stage]
+   97|     for s in stages:
+   98|         if s == 'id':
+   99|             print(run.id)
+  100|             continue
+  101|         if s == 'dryrun':
+  102|             out = run.dryrun(args.samples)
+  103|             for b in out['briefs']:
+  104|                 print(f"\n── {b['arm']} · {b['slice']} · {b['agent']} ──\n{b['user']}")
+  105|             print('\ndryrun', json.dumps({k: v for k, v in out.items() if k != 'briefs'}, indent=1, default=float))
+  106|             continue
+  107|         out = getattr(run, s)()
+  108|         print(s, json.dumps(out if not hasattr(out, 'world') else {'fit': 'ok'}, default=float)[:2000])
   109| 
   110| 
-  111| def change_lines(spec: dict) -> list[str]:
-  112|     """The compiled change as the voters were told it."""
-  113|     out = [f'Label: {spec["label"]}. {spec.get("detail", "")}']
-  114|     out += [f'Settled fact: {f}' for f in spec.get('facts_text') or []]
-  115|     out += [f'News printed on a nominee\'s ballot line: {n}' for n in spec.get('nominee_news') or []]
-  116|     out += [f'Plank added ({p["party"]}): {p["text"]}' for p in spec.get('add_planks') or []]
-  117|     out += [f'Plank topic removed: {t}' for t in spec.get('drop_planks') or []]
-  118|     c = spec.get('candidate') or {}
-  119|     if c.get('name') and spec.get('kind') == 'candidate' and not spec.get('withdraws'):
-  120|         out.append(f'A third line on the ballot: {c["name"]}, {c.get("descriptor", "")}')
-  121|     if spec.get('withdraws'):
-  122|         out.append('The labelled third candidate has left the race.')
-  123|     return out
-  124| 
-  125| 
-  126| def stage_request(spec: dict, prof: dict, cutoff: str, corpus: list[dict], model: str, effort: str,
-  127|                   ev: dict | None = None) -> dict:
-  128|     from .agentlayer import groups_for
-  129|     year = prof['year']
-  130|     groups = groups_for(year)['interview']
-  131|     never, parties = _prof_bits(prof)
-  132|     system = WORLD_SYSTEM.format(year=year, cutoff=cutoff, regions=REGION_KEYS, groups=groups, never_name=never, parties=parties)
-  133|     lines = [f'Election: {year}, election day {prof.get("day_phrase", "")}. Context date: {cutoff}.', '',
-  134|              'The change, as written into the voters\' world:'] + [f'- {x}' for x in change_lines(spec)]
-  135|     if ev and ev.get('summary'):
-  136|         lines += ['', f'What historians found (for choosing the focus groups; never quote it): {ev["summary"]}']
-  137|         pops = sorted({json.dumps(f['population'], sort_keys=True) for f in ev.get('findings', []) if f.get('population')})
-  138|         if pops:
-  139|             lines.append('Populations the findings concern: ' + '; '.join(pops[:12]))
-  140|     items = [c for c in corpus if not c.get('identifying')]
-  141|     if items:
-  142|         lines += ['', f'The {len(items)} dated newspaper items voters may be shown (id, date, place: text):']
-  143|         lines += [f'[{c["id"]}] {c["date"]}, {c.get("place", c.get("state", ""))}: {c["text"]}' for c in items]
-  144|     else:
-  145|         lines += ['', f'No period newspaper items exist for {year}; contradicted is an empty list, and your items are the only news voters read.']
-  146|     user = '\n'.join(lines)
-  147|     return {'id': f'stage|{year}|{spec["key"]}|{hashlib.sha256(user.encode()).hexdigest()[:8]}', 'model': model, 'effort': effort,
-  148|             'system': system, 'user': user, 'schema': _schema(groups), 'meta': {'kind': 'stage', 'version': WORLD_VERSION}}
-  149| 
-  150| 
-  151| def _clean(text: str, year: int, names) -> str | None:
-  152|     t = ' '.join(mask_names(str(text), year).split())
-  153|     return None if not t or names.search(t) else t
-  154| 
-  155| 
-  156| def finalize(raw: dict, spec: dict, prof: dict, cutoff: str, corpus: list[dict], model: str, effort: str) -> dict:
-  157|     """A staging answer → spec['world'], checked: ids exist, dates fall on or before the
-  158|     cutoff, every sentence masked (a sentence that still names someone is dropped), and a
-  159|     check whose two worlds answer alike is discarded (it can't tell them apart)."""
-  160|     from .profiles import names_re
-  161|     year = prof['year']
-  162|     names = names_re(year)
-  163|     ids = {c['id'] for c in corpus if not c.get('identifying')}
-  164|     contradicted = [{'id': x['id'], 'why': x['why']} for x in raw.get('contradicted', []) if x.get('id') in ids]
-  165|     consequences = [t for t in (_clean(x, year, names) for x in raw.get('consequences', [])[:3]) if t]
-  166|     items = []
-  167|     for j, it in enumerate(raw.get('items', [])[:4]):
-  168|         text = _clean(it.get('text', ''), year, names)
-  169|         if not text:
-  170|             continue
-  171|         try:
-  172|             d = dt.date.fromisoformat(str(it.get('date', ''))[:10]).isoformat()
-  173|         except ValueError:
-  174|             d = cutoff
-  175|         items.append({'id': f'W{j + 1}', 'date': min(d, cutoff), 'kind': it.get('kind', ''),
-  176|                       'regions': [r for r in it.get('regions', []) if r in REGION_KEYS], 'text': ' '.join(text.split()[:70])})
-  177|     check = None
-  178|     c = raw.get('check') or {}
-  179|     opts = [o.strip() for o in c.get('options', []) if str(o).strip()][:4]
-  180|     q = _clean(c.get('question', ''), year, names)
-  181|     if q and len(opts) >= 2 and c.get('expected') in opts and c.get('control') in opts and c['expected'] != c['control'] \
-  182|             and not any(names.search(o) for o in opts):
-  183|         check = {'question': q, 'options': opts, 'expected': c['expected'], 'control': c['control']}
-  184|     focus = [{k: f.get(k, []) for k in ('sex', 'group', 'region')} | {'why': f.get('why', '')} for f in raw.get('focus', [])[:4]]
-  185|     return {'version': WORLD_VERSION, 'contradicted': contradicted, 'consequences': consequences, 'items': items,
-  186|             'check': check, 'focus': focus, 'model': model, 'effort': effort,
-  187|             'staged_at': dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds')}
-  188| 
-  189| 
-  190| def items_for_agent(world: dict, agent: dict, state_name: str, k: int = 2) -> list[dict]:
-  191|     """The staged items an agent reads: local ones for their region first, then national."""
-  192|     region = 'south' if agent.get('region') == 'south' else agent.get('region')
-  193|     local = [i for i in world.get('items', []) if i['regions'] and region in i['regions']]
-  194|     national = [i for i in world.get('items', []) if not i['regions']]
-  195|     return [{'id': i['id'], 'newspaper': 'A local newspaper', 'place': state_name, 'date': i['date'], 'text': i['text'],
-  196|              'topic': 'staged', 'identifying': False, 'staged': True} for i in (local + national)[:k]]
-  197| 
-  198| 
-  199| def cohort_matches(cohort: dict, f: dict) -> bool:
-  200|     """Whether a cohort falls in one focus entry (empty lists match anyone)."""
-  201|     if f.get('sex') and cohort['sex'] not in f['sex']:
-  202|         return False
-  203|     if f.get('group') and cohort['group'] not in f['group']:
-  204|         return False
-  205|     return not (f.get('region') and not set(cohort.get('regions') or [cohort.get('region')]) & set(f['region']))
-  206| 
-  207| 
-  208| def audit_request(spec: dict, rows: list[dict], model: str, effort: str) -> dict:
-  209|     """rows: [{n, reason, quote}] — one what-if's counterfactual answers, without their votes."""
-  210|     world = spec.get('world') or {}
-  211|     lines = ['The change in these voters\' world:'] + [f'- {x}' for x in change_lines(spec)]
-  212|     lines += [f'- Settled fact: {x}' for x in world.get('consequences', [])]
-  213|     lines += ['', 'Answers:'] + [f'[{r["n"]}] Reason: {r["reason"]} Said: "{r["quote"]}"' for r in rows]
-  214|     user = '\n'.join(lines)
-  215|     return {'id': f'audit|{spec["key"]}|{hashlib.sha256(user.encode()).hexdigest()[:10]}', 'model': model, 'effort': effort,
-  216|             'system': AUDIT_SYSTEM, 'user': user, 'schema': AUDIT_SCHEMA, 'meta': {'kind': 'audit'}}
-  217| 
-  218| 
-  219| BARRED = re.compile(r'cannot vote|bars them from voting|no one in .* votes for president', re.I)
-  220| 
-  221| 
-  222| def barred(eligibility_line: str | None) -> bool:
-  223|     """Whether a brief's eligibility line says this person can't vote for president."""
-  224|     return bool(eligibility_line and BARRED.search(eligibility_line))
-```
-
-## `src/app.d.ts`
-
-```ts
-    1| declare global {
-    2|   namespace App {}
-    3| }
-    4| export {};
-```
-
-## `src/app.html`
-
-```html
-    1| <!doctype html>
-    2| <html lang="en">
-    3|   <head>
-    4|     <meta charset="utf-8" />
-    5|     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    6|     <link rel="icon" type="image/png" href="%sveltekit.assets%/favicon.png" />
-    7|     <!-- The four weights the page renders, fetched at parse time to avoid a late font swap. -->
-    8|     <link rel="preload" href="/fonts/Geist-Regular.woff2" as="font" type="font/woff2" crossorigin />
-    9|     <link rel="preload" href="/fonts/Geist-SemiBold.woff2" as="font" type="font/woff2" crossorigin />
-   10|     <link rel="preload" href="/fonts/GeistMono-Regular.woff2" as="font" type="font/woff2" crossorigin />
-   11|     <link rel="preload" href="/fonts/GeistMono-Medium.woff2" as="font" type="font/woff2" crossorigin />
-   12|     <title>Simulacra Americana</title>
-   13|     <!-- For search engines, link unfurlers and AI agents. None of this is painted. -->
-   14|     <meta name="description" content="Every American presidential election from 1789 to 2024, replayed as it happened and rerun with one thing changed: who could vote, who lived where, what people cared about, or who was on the ballot." />
-   15|     <link rel="canonical" href="https://simulacraamericana.com/" />
-   16|     <link rel="alternate" type="text/plain" href="/llms.txt" title="Plain-text overview for AI agents" />
-   17|     <meta name="author" content="Cameron Feather" />
-   18|     <meta property="og:type" content="website" />
-   19|     <meta property="og:site_name" content="Simulacra Americana" />
-   20|     <meta property="og:title" content="Simulacra Americana" />
-   21|     <meta property="og:description" content="Every American presidential election from 1789 to 2024, replayed as it happened and rerun with one thing changed: who could vote, who lived where, what people cared about, or who was on the ballot." />
-   22|     <meta property="og:url" content="https://simulacraamericana.com/" />
-   23|     <meta name="twitter:card" content="summary" />
-   24|     <meta name="twitter:title" content="Simulacra Americana" />
-   25|     <meta name="twitter:description" content="Every American presidential election from 1789 to 2024, replayed as it happened and rerun with one thing changed: who could vote, who lived where, what people cared about, or who was on the ballot." />
-   26|     <script type="application/ld+json">{"@context": "https://schema.org", "@graph": [{"@type": "WebApplication", "@id": "https://simulacraamericana.com/#app", "name": "Simulacra Americana", "url": "https://simulacraamericana.com/", "description": "Every American presidential election from 1789 to 2024, replayed as it happened and rerun with one thing changed: who could vote, who lived where, what people cared about, or who was on the ballot.", "applicationCategory": "EducationalApplication", "operatingSystem": "Web browser", "inLanguage": "en", "isAccessibleForFree": true, "creator": {"@type": "Person", "@id": "https://cameronfeather.com/#cameron", "name": "Cameron Feather", "url": "https://cameronfeather.com"}, "about": [{"@type": "Thing", "name": "United States presidential elections"}, {"@type": "Thing", "name": "Counterfactual simulation"}], "isBasedOn": {"@id": "https://github.com/partyhat-ai/synthetic-electorate-toy"}}, {"@type": "SoftwareSourceCode", "@id": "https://github.com/partyhat-ai/synthetic-electorate-toy", "name": "synthetic-electorate-toy", "codeRepository": "https://github.com/partyhat-ai/synthetic-electorate-toy", "programmingLanguage": ["TypeScript", "Python", "Svelte"], "author": {"@id": "https://cameronfeather.com/#cameron"}}]}</script>
-   27|     <style>
-   28|       @font-face { font-family: 'Geist'; src: url('/fonts/Geist-Regular.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: swap; }
-   29|       @font-face { font-family: 'Geist'; src: url('/fonts/Geist-SemiBold.woff2') format('woff2'); font-weight: 600; font-style: normal; font-display: swap; }
-   30|       @font-face { font-family: 'Geist Mono'; src: url('/fonts/GeistMono-Light.woff2') format('woff2'); font-weight: 300; font-style: normal; font-display: swap; }
-   31|       @font-face { font-family: 'Geist Mono'; src: url('/fonts/GeistMono-Regular.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: swap; }
-   32|       @font-face { font-family: 'Geist Mono'; src: url('/fonts/GeistMono-Medium.woff2') format('woff2'); font-weight: 500; font-style: normal; font-display: swap; }
-   33|       html, body { font-family: 'Geist', sans-serif; }
-   34|       input, textarea, select, button { font-family: inherit; }
-   35|     </style>
-   36|     %sveltekit.head%
-   37|   </head>
-   38|   <body data-sveltekit-preload-data="hover">
-   39|     <div style="display: contents">%sveltekit.body%</div>
-   40|     <!-- The page in plain text, for crawlers and agents that don't run script (the app is client-only).
-   41|          Never painted: `hidden` plus an inline display:none, which outranks every stylesheet rule, from
-   42|          the first byte. It sits outside the app's mount point, so the app never touches it.
-   43|          Keep it in step with static/llms.txt. -->
-   44|     <article id="about-plain" hidden style="display: none">
-   45|       <h1>Simulacra Americana</h1>
-   46|       <p>Every American presidential election from 1789 to 2024, replayed as it happened and rerun with one thing changed: who could vote, who lived where, what people cared about, or who was on the ballot.</p>
-   47|       <h2>How it works</h2>
-   48|       <ul>
-   49|         <li>Every election opens as it happened. The electorate is rebuilt from census records, including the adults who couldn't legally vote, each kept with the reason.</li>
-   50|         <li>A calibrated statistical backbone decides the counts. An unchanged rerun reproduces each state's certified Republican, Democratic and other vote in every draw.</li>
-   51|         <li>Synthetic voters, interviewed in both the real and the changed world, supply only within-person changes and quotes, never counts.</li>
-   52|         <li>A what-if is one of four kinds: franchise (who can vote), population (who lives where), issue (what people care about) or candidate (who is on the ballot).</li>
-   53|         <li>Every rerun carries a confidence tier, and a running disclosures log records what is assumed rather than known.</li>
-   54|       </ul>
-   55|       <h2>Evaluation (1920 prototype, 12 held-out states)</h2>
-   56|       <ul>
-   57|         <li>Two-party vote share RMSE 7.6 points, against 8.7 for uniform swing and 17.4 for persistence.</li>
-   58|         <li>Brier score for state winners 0.052, against 0.069 for uniform swing.</li>
-   59|         <li>Turnout RMSE 2.9 points (persistence 16.5); Spearman rank correlation 0.92.</li>
-   60|         <li>The checks it fails are published alongside the ones it passes.</li>
-   61|       </ul>
-   62|       <p><a href="https://github.com/partyhat-ai/synthetic-electorate-toy/blob/main/EVAL.md">Evaluation, failures included</a> · <a href="https://github.com/partyhat-ai/synthetic-electorate-toy">Code</a> · <a href="/llms.txt">Plain-text overview</a> · Built by <a href="https://cameronfeather.com">Cameron Feather</a></p>
-   63|     </article>
-   64|   </body>
-   65| </html>
-```
-
-## `src/app.html.test.ts`
-
-```ts
-    1| import { readFileSync } from 'node:fs';
-    2| import { describe, expect, it } from 'vitest';
-    3| 
-    4| // The plain-text copy of the page in app.html is for crawlers and agents only. It must never be
-    5| // painted, not even for a frame before the app mounts, and the app must never touch it.
-    6| const html = readFileSync(new URL('./app.html', import.meta.url), 'utf8');
-    7| const read = (p: string): string => readFileSync(new URL(`../static/${p}`, import.meta.url), 'utf8');
-    8| 
-    9| describe('app.html plain-text copy', () => {
-   10|   const open = html.match(/<article id="about-plain"[^>]*>/)?.[0] ?? '';
-   11| 
-   12|   it('is hidden by attribute and by an inline style, which outranks stylesheet rules', () => {
-   13|     expect(open).toContain(' hidden');
-   14|     expect(open).toContain('style="display: none"');
-   15|   });
-   16| 
-   17|   it('sits outside the element the app mounts into', () => {
-   18|     const mount = html.indexOf('%sveltekit.body%</div>');
-   19|     expect(mount).toBeGreaterThan(-1);
-   20|     expect(html.indexOf('<article id="about-plain"')).toBeGreaterThan(mount);
-   21|   });
-   22| 
-   23|   it('carries parseable JSON-LD', () => {
-   24|     const ld = html.match(/<script type="application\/ld\+json">(.*?)<\/script>/s)?.[1] ?? '';
-   25|     expect(() => JSON.parse(ld)).not.toThrow();
-   26|   });
-   27| });
-   28| 
-   29| describe('crawler files', () => {
-   30|   it('robots.txt points at the sitemap and llms.txt', () => {
-   31|     const robots = read('robots.txt');
-   32|     expect(robots).toContain('Sitemap: https://simulacraamericana.com/sitemap.xml');
-   33|     expect(robots).toContain('https://simulacraamericana.com/llms.txt');
-   34|   });
-   35| 
-   36|   it('llms.txt and the plain-text copy quote the same evaluation figures', () => {
-   37|     const llms = read('llms.txt');
-   38|     for (const figure of ['RMSE 7.6 points', '8.7 for uniform swing', '0.052', '0.069', 'Turnout RMSE 2.9']) {
-   39|       expect(llms).toContain(figure);
-   40|       expect(html).toContain(figure);
-   41|     }
-   42|   });
-   43| });
-```
-
-## `src/lib/robot/RobotFrame.svelte`
-
-```svelte
-    1| <script lang="ts">
-    2|   // The narrator robot, framed into the page. Mount it inside the element the
-    3|   // robot should scroll with (the page's `robot-host`, position: relative or
-    4|   // absolute): the frame fills that element, is click-through, and never moves
-    5|   // once it has started loading (moving an iframe reloads it).
-    6|   //
-    7|   // Props
-    8|   //   stage    RobotStage | null  The box the robot stands in, CSS px from the
-    9|   //                               host element's bottom-right corner, with
-   10|   //                               mirror and yaw (degrees, eased in the frame).
-   11|   //                               null: the frame's default corner box.
-   12|   //                               See stageInSlot in ./stage.ts.
-   13|   //   visible  boolean = true      false hides the frame and stops its render loop.
-   14|   //   walking  boolean = false     The robot walks (the page is working) or idles.
-   15|   //   paint    'history' | 'rerun' History is the Americana model's own paint;
-   16|   //                               Rerun the original paint with the stars.
-   17|   //                               Each paint brings its own lighting.
-   18|   //   onRobot  (anchors) => void   Called every frame while visible with
-   19|   //                               { centerX, feetY } in window CSS px: the
-   20|   //                               robot's centre line and the floor under its
-   21|   //                               feet. null while it loads or while hidden.
-   22|   //
-   23|   // Methods
-   24|   //   blast(color)                 A shot from the chest reactor in #rrggbb.
-   25|   //                               Nothing before the frame is ready.
-   26|   import { onMount } from 'svelte';
-   27|   import { resolve } from '$app/paths';
-   28|   import type { Paint } from './characters';
-   29|   import { type HostMessage, parseFrameMessage, type RobotAnchors, type RobotStage } from './messages';
-   30| 
-   31|   interface Props {
-   32|     stage: RobotStage | null;
-   33|     visible?: boolean;
-   34|     walking?: boolean;
-   35|     paint: Paint;
-   36|     onRobot?: (anchors: RobotAnchors | null) => void;
-   37|   }
-   38| 
-   39|   let { stage, visible = true, walking = false, paint, onRobot }: Props = $props();
-   40| 
-   41|   let frame: HTMLIFrameElement | undefined = $state();
-   42|   // Bumped on every robot:ready, so a reloaded frame is sent the state again.
-   43|   let readyCount = $state(0);
-   44| 
-   45|   function post(message: HostMessage): void {
-   46|     frame?.contentWindow?.postMessage(message, location.origin);
-   47|   }
-   48| 
-   49|   export function blast(color: string): void {
-   50|     if (readyCount > 0 && visible) post({ type: 'robot:blast', color });
-   51|   }
-   52| 
-   53|   // $state.snapshot: a reactive proxy can't be structured-cloned.
-   54|   $effect(() => {
-   55|     if (readyCount > 0) post({ type: 'robot:stage', stage: $state.snapshot(stage) });
-   56|   });
-   57|   $effect(() => {
-   58|     if (readyCount > 0) post({ type: 'robot:running', on: visible });
-   59|   });
-   60|   $effect(() => {
-   61|     if (readyCount > 0) post({ type: 'robot:walk', on: walking });
-   62|   });
-   63|   $effect(() => {
-   64|     if (readyCount > 0) post({ type: 'robot:paint', paint });
-   65|   });
-   66|   $effect(() => {
-   67|     if (!visible) onRobot?.(null);
-   68|   });
-   69| 
-   70|   onMount(() => {
-   71|     function onMessage(event: MessageEvent): void {
-   72|       if (!frame || event.origin !== location.origin || event.source !== frame.contentWindow) return;
-   73|       const message = parseFrameMessage(event.data);
-   74|       if (!message) return;
-   75|       switch (message.type) {
-   76|         case 'robot:ready':
-   77|           readyCount += 1;
-   78|           break;
-   79|         case 'robot:anchors': {
-   80|           const a = message.anchors;
-   81|           if (!a || !visible) {
-   82|             onRobot?.(null);
-   83|             break;
-   84|           }
-   85|           // Frame px to window px.
-   86|           const r = frame.getBoundingClientRect();
-   87|           onRobot?.({ centerX: a.centerX + r.left, feetY: a.feetY + r.top });
-   88|           break;
-   89|         }
-   90|         default:
-   91|           message satisfies never;
-   92|       }
-   93|     }
-   94|     window.addEventListener('message', onMessage);
-   95|     return () => window.removeEventListener('message', onMessage);
-   96|   });
-   97| </script>
-   98| 
-   99| <iframe
-  100|   bind:this={frame}
-  101|   class="robot-frame"
-  102|   class:hidden={!visible}
-  103|   src={resolve('/robot')}
-  104|   title="Narrator"
-  105|   tabindex="-1"
-  106|   aria-hidden="true"
-  107| ></iframe>
-  108| 
-  109| <style>
-  110|   .robot-frame {
-  111|     position: absolute;
-  112|     inset: 0;
-  113|     width: 100%;
-  114|     height: 100%;
-  115|     border: 0;
-  116|     background: transparent;
-  117|     pointer-events: none;
-  118|     z-index: 20;
-  119|     /* = the frame document's, or browsers paint the frame opaque. */
-  120|     color-scheme: normal;
-  121|   }
-  122|   .robot-frame.hidden {
-  123|     visibility: hidden;
-  124|   }
-  125| </style>
-```
-
-## `src/lib/robot/assets.ts`
-
-```ts
-    1| // Where the robot's model, paint textures and the candidates' portraits live
-    2| // (CloudFront over the assets bucket, not the deploy). PUBLIC_ASSET_BASE
-    3| // overrides it.
-    4| import { env } from '$env/dynamic/public';
-    5| 
-    6| export const DEFAULT_ASSET_BASE = 'https://assets.simulacraamericana.com/';
-    7| 
-    8| /** The base URL with exactly one trailing slash; the default when unset or blank. */
-    9| export function normalizeAssetBase(raw: string | undefined): string {
-   10|   const value = raw?.trim() ?? '';
-   11|   if (value === '') return DEFAULT_ASSET_BASE;
-   12|   return value.endsWith('/') ? value : `${value}/`;
-   13| }
-   14| 
-   15| export const ASSET_BASE = normalizeAssetBase(env.PUBLIC_ASSET_BASE);
-   16| 
-   17| export function assetUrl(path: string): string {
-   18|   return `${ASSET_BASE}${path.replace(/^\/+/, '')}`;
-   19| }
-```
-
-## `src/lib/robot/blast.test.ts`
-
-```ts
-    1| import { describe, expect, test } from 'vitest';
-    2| import { boltProfile, recoilAfter, SHOT_LIFE_S, shotFade, shotTravel } from './blast';
-    3| 
-    4| describe('the bolt', () => {
-    5|   test('comes to a point at the tail and the nose, widest just past the middle', () => {
-    6|     expect(boltProfile(0)).toBe(0);
-    7|     expect(boltProfile(1)).toBeCloseTo(0, 6);
-    8|     const samples = Array.from({ length: 101 }, (_, i) => boltProfile(i / 100));
-    9|     const widest = samples.indexOf(Math.max(...samples)) / 100;
-   10|     expect(widest).toBeGreaterThan(0.6);
-   11|     expect(widest).toBeLessThan(0.7);
-   12|     expect(Math.max(...samples)).toBeCloseTo(1, 2);
-   13|   });
-   14| });
-   15| 
-   16| describe('a shot', () => {
-   17|   test('flies out fast and eases only a touch over its life', () => {
-   18|     expect(shotTravel(10, 0)).toBe(0);
-   19|     expect(shotTravel(10, 1)).toBeCloseTo(9.2);
-   20|     // Still moving outward at the end of its life.
-   21|     expect(shotTravel(10, SHOT_LIFE_S)).toBeGreaterThan(shotTravel(10, SHOT_LIFE_S - 0.01));
-   22|   });
-   23|   test('stays whole until its last quarter second, then fades out', () => {
-   24|     expect(shotFade(0)).toBe(1);
-   25|     expect(shotFade(SHOT_LIFE_S - 0.25)).toBe(1);
-   26|     expect(shotFade(SHOT_LIFE_S - 0.125)).toBeCloseTo(0.5);
-   27|     expect(shotFade(SHOT_LIFE_S)).toBe(0);
-   28|     expect(shotFade(SHOT_LIFE_S + 1)).toBe(0);
-   29|   });
-   30| });
-   31| 
-   32| describe('the recoil', () => {
-   33|   test('is gone a fifth of a second after a shot', () => {
-   34|     expect(recoilAfter(1, 0.1)).toBeCloseTo(0.5);
-   35|     expect(recoilAfter(1, 0.2)).toBe(0);
-   36|     expect(recoilAfter(0, 0.016)).toBe(0);
-   37|   });
-   38| });
-```
-
-## `src/lib/robot/blast.ts`
-
-```ts
-    1| // Shots from the robot's chest reactor, on demand (a tap on the robot): one
-    2| // streamlined bolt in the shot's colour inside a soft sheath of the same
-    3| // shape, a flash and a light at the chest as it leaves, and a small recoil of
-    4| // the whole robot. Sizes are in robot heights, so it fires to its own scale.
-    5| import {
-    6|   AdditiveBlending,
-    7|   Color,
-    8|   DoubleSide,
-    9|   Group,
-   10|   IcosahedronGeometry,
-   11|   LatheGeometry,
-   12|   Mesh,
-   13|   MeshBasicMaterial,
-   14|   PointLight,
-   15|   type Scene,
-   16|   ShaderMaterial,
-   17|   Vector2,
-   18|   Vector3,
-   19| } from 'three';
-   20| 
-   21| /** Seconds a shot lives; it fades over the last FADE_S. */
-   22| export const SHOT_LIFE_S = 1.6;
-   23| const FADE_S = 0.25;
-   24| /** The muzzle flash's burst, seconds. */
-   25| export const FLASH_S = 0.22;
-   26| /** The shot stretches from compressed to full length over this, seconds. */
-   27| const STRETCH_S = 0.1;
-   28| /** The recoil eases out at this rate, per second (1 → 0 in 0.2s). */
-   29| const RECOIL_RATE = 5;
-   30| 
-   31| /** The bolt's radius at `t` along it (0 the tail's point, 1 the nose), as a fraction of its widest. */
-   32| export function boltProfile(t: number): number {
-   33|   return Math.sin(Math.PI * t ** 1.6) ** 0.8;
-   34| }
-   35| 
-   36| /** How far a shot fired at `speed` has gone after `t` seconds: fast off the chest, easing a touch. */
-   37| export function shotTravel(speed: number, t: number): number {
-   38|   return speed * (t - 0.08 * t * t);
-   39| }
-   40| 
-   41| /** A shot's opacity factor at `t`: whole until the last FADE_S of its life. */
-   42| export function shotFade(t: number, life: number = SHOT_LIFE_S): number {
-   43|   return Math.max(0, Math.min(1, (life - t) / FADE_S));
-   44| }
-   45| 
-   46| /** The recoil left after `dt` seconds from `kick` (0..1). */
-   47| export function recoilAfter(kick: number, dt: number): number {
-   48|   return Math.max(0, kick - dt * RECOIL_RATE);
-   49| }
-   50| 
-   51| /** A streamlined bolt along +Y: a rounded nose tapering to a point at the tail. */
-   52| function boltGeometry(radius: number, length: number): LatheGeometry {
-   53|   const pts: Vector2[] = [];
-   54|   for (let i = 0; i <= 24; i++) {
-   55|     const t = i / 24;
-   56|     pts.push(new Vector2(Math.max(radius * boltProfile(t), 1e-4), (t - 0.62) * length));
-   57|   }
-   58|   return new LatheGeometry(pts, 20);
-   59| }
-   60| 
-   61| /**
-   62|  * The muzzle flash's material: additive, in the shot's colour, and faded out
-   63|  * through the half of the sphere farther from the camera (measured from its
-   64|  * centre in view space), so where it sinks into the chest it dissolves
-   65|  * instead of being cut by the robot's geometry.
-   66|  */
-   67| function flashMaterial(color: string, radius: number): ShaderMaterial {
-   68|   return new ShaderMaterial({
-   69|     uniforms: { uColor: { value: new Color(color) }, uOpacity: { value: 1 }, uRadius: { value: radius } },
-   70|     vertexShader: `
-   71|       uniform float uRadius;
-   72|       varying float vDepth;
-   73|       void main() {
-   74|         vec4 mv = modelViewMatrix * vec4(position, 1.0);
-   75|         vec4 centre = modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0);
-   76|         float r = uRadius * length((modelViewMatrix * vec4(1.0, 0.0, 0.0, 0.0)).xyz);
-   77|         vDepth = (mv.z - centre.z) / r;   // +1 nearest the camera, -1 farthest
-   78|         gl_Position = projectionMatrix * mv;
-   79|       }`,
-   80|     fragmentShader: `
-   81|       uniform vec3 uColor;
-   82|       uniform float uOpacity;
-   83|       varying float vDepth;
-   84|       void main() {
-   85|         gl_FragColor = vec4(uColor, uOpacity * smoothstep(-0.05, 0.6, vDepth));
-   86|       }`,
-   87|     transparent: true,
-   88|     blending: AdditiveBlending,
-   89|     depthWrite: false,
-   90|     side: DoubleSide,
-   91|   });
-   92| }
-   93| 
-   94| const glowMaterial = (color: string, opacity: number) =>
-   95|   new MeshBasicMaterial({ color, transparent: true, opacity, blending: AdditiveBlending, depthWrite: false });
-   96| 
-   97| interface Shot {
-   98|   readonly shot: Group;
-   99|   readonly parts: readonly { readonly mesh: Mesh<LatheGeometry, MeshBasicMaterial>; readonly opacity: number }[];
-  100|   readonly flash: Mesh<IcosahedronGeometry, ShaderMaterial>;
-  101|   readonly light: PointLight;
-  102|   readonly origin: Vector3;
-  103|   readonly dir: Vector3;
-  104|   readonly speed: number;
-  105|   t: number;
-  106| }
-  107| 
-  108| export interface FireOptions {
-  109|   /** World space. */
-  110|   readonly origin: Vector3;
-  111|   readonly direction: Vector3;
-  112|   /** The robot's height in world units. */
-  113|   readonly size: number;
-  114|   /** #rrggbb. */
-  115|   readonly color: string;
-  116| }
-  117| 
-  118| export interface ChestBlast {
-  119|   fire(options: FireOptions): void;
-  120|   /** Advance every shot by dt seconds; whether any is still flying. */
-  121|   update(dt: number): boolean;
-  122|   /** The recoil (1 just after firing, easing to 0), for the robot to rock back by. */
-  123|   recoil(): number;
-  124|   dispose(): void;
-  125| }
-  126| 
-  127| export function createChestBlast(scene: Scene): ChestBlast {
-  128|   const group = new Group();
-  129|   group.name = 'Chest blasts';
-  130|   scene.add(group);
-  131|   const up = new Vector3(0, 1, 0);
-  132|   const shots: Shot[] = [];
-  133|   let kick = 0;
-  134| 
-  135|   function remove(s: Shot): void {
-  136|     group.remove(s.shot, s.flash, s.light);
-  137|     for (const { mesh } of s.parts) {
-  138|       mesh.geometry.dispose();
-  139|       mesh.material.dispose();
-  140|     }
-  141|     s.flash.geometry.dispose();
-  142|     s.flash.material.dispose();
-  143|     s.light.dispose();
-  144|   }
-  145| 
-  146|   return {
-  147|     fire({ origin, direction, size, color }) {
-  148|       const r = size * 0.03;
-  149|       const dir = direction.clone().normalize();
-  150|       const shot = new Group();
-  151|       // The bolt and its sheath: one shape, the sheath wider and longer and fainter.
-  152|       const parts = [
-  153|         { mesh: new Mesh(boltGeometry(r * 1.3, r * 11), glowMaterial(color, 0.9)), opacity: 0.9 },
-  154|         { mesh: new Mesh(boltGeometry(r * 2.2, r * 13), glowMaterial(color, 0.3)), opacity: 0.3 },
-  155|       ];
-  156|       for (const { mesh } of parts) shot.add(mesh);
-  157|       shot.quaternion.setFromUnitVectors(up, dir);
-  158|       shot.position.copy(origin);
-  159|       const flash = new Mesh(new IcosahedronGeometry(r * 1.5, 2), flashMaterial(color, r * 1.5));
-  160|       flash.position.copy(origin);
-  161|       const light = new PointLight(color, 0, size * 1.2);
-  162|       light.position.copy(origin);
-  163|       group.add(shot, flash, light);
-  164|       shots.push({ shot, parts, flash, light, origin: origin.clone(), dir, speed: size * 4.5, t: 0 });
-  165|       kick = 1;
-  166|     },
-  167|     update(dt) {
-  168|       kick = recoilAfter(kick, dt);
-  169|       for (let i = shots.length - 1; i >= 0; i--) {
-  170|         const s = shots[i];
-  171|         if (!s) continue;
-  172|         s.t += dt;
-  173|         s.shot.position.copy(s.origin).addScaledVector(s.dir, shotTravel(s.speed, s.t));
-  174|         // It leaves the chest compressed and stretches to full length.
-  175|         s.shot.scale.set(1, 0.55 + 0.45 * Math.min(1, s.t / STRETCH_S), 1);
-  176|         const fade = shotFade(s.t);
-  177|         for (const { mesh, opacity } of s.parts) mesh.material.opacity = opacity * fade;
-  178|         // The muzzle flash: a burst at the chest.
-  179|         const f = Math.min(1, s.t / FLASH_S);
-  180|         s.flash.visible = f < 1;
-  181|         s.flash.scale.setScalar(1 + f * 1.6);
-  182|         const uOpacity = s.flash.material.uniforms.uOpacity;
-  183|         if (uOpacity) uOpacity.value = 1 - f;
-  184|         s.light.intensity = 30 * Math.max(0, 1 - s.t / 0.3);
-  185|         s.light.position.copy(s.shot.position);
-  186|         if (s.t >= SHOT_LIFE_S) {
-  187|           remove(s);
-  188|           shots.splice(i, 1);
-  189|         }
-  190|       }
-  191|       return shots.length > 0;
-  192|     },
-  193|     recoil: () => kick * kick,
-  194|     dispose() {
-  195|       for (const s of shots) remove(s);
-  196|       shots.length = 0;
-  197|       scene.remove(group);
-  198|     },
-  199|   };
-  200| }
+  111| if __name__ == '__main__':
+  112|     sys.exit(main())
 ```

@@ -1,7 +1,138 @@
-# synthetic-electorate-toy: source and docs, part 4 of 16
+# synthetic-electorate-toy: source and docs, part 4 of 17
 
-Generated from commit `5fc0a9e54bc9` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
-Files `scripts/harness/build_population.py` to `scripts/harness/build_population_republic.py`. Lines are numbered as in the repository.
+Generated from commit `4a07108d3ae4` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Files `scripts/harness/build_franchise.py` to `scripts/harness/build_population_republic.py`. Lines are numbered as in the repository.
+
+## `scripts/harness/build_franchise.py`
+
+```python
+    1| """Build franchise/state_franchise_all.csv: the legal franchise by state, presidential years 1868–1968.
+    2| 
+    3| Columns: year,state,poll_tax,literacy_test,alien_voting,women_vote,white_can,black_can,
+    4|          felony_disenfranchised_share,voting_age,chosen_by,source,note
+    5| 
+    6| Sources:
+    7|   poll_tax, literacy_test: Gray & Jenkins (2024) State-Level Data File, doi:10.7910/DVN/QIY9EM,
+    8|     rows elec_type==1 (presidential), 1872–1968. 1868 uses the state's 1870 row [I]
+    9|     (the file starts in 1870). DC (1964, 1968): no poll tax, no literacy test.
+   10|   women_vote: Teele (2018) presidential-suffrage year (franchise/women_suffrage_pre19th.csv)
+   11|     <= election year; every state from 1920 (19th Amendment).
+   12|   alien_voting: declarant-alien voting, Keyssar (2000) The Right to Vote, Table A.12, and
+   13|     Hayduk (2006) Democracy for All, ch. 2 — year ranges transcribed from those tables
+   14|     without the book to hand, so tagged [I] (Gray & Jenkins has no alien-voting field).
+   15|   voting_age: 21; GA 18 from 1944 (1943 amendment); KY 18 from 1956 (1955 amendment);
+   16|     AK 19 and HI 20 from 1960 (statehood constitutions).
+   17|   black_can / white_can: 1 from 1870 (15th Amendment). 1868: Black men barred by law
+   18|     outside New England (except CT), WI, NE, and the reconstructed South; NY's $250
+   19|     property test for Black men [I]; ex-Confederate test oaths in MO, TN, WV, AR [I].
+   20|   felony_disenfranchised_share: blank (no state-level estimate before 1970; Gray &
+   21|     Jenkins' exfelon law flag is kept in the note).
+   22|   chosen_by: from labels/state_pres_all.csv.
+   23| 
+   24| Run: ~/.venvs/simharness/bin/python scripts/harness/build_franchise.py
+   25| """
+   26| from __future__ import annotations
+   27| 
+   28| import sys
+   29| from pathlib import Path
+   30| 
+   31| import numpy as np
+   32| import pandas as pd
+   33| 
+   34| HERE = Path(__file__).resolve().parent
+   35| sys.path.insert(0, str(HERE.parents[1]))  # the repo root
+   36| from simharness.config import CACHE  # noqa: E402
+   37| 
+   38| FR = CACHE / 'franchise'
+   39| OUT = FR / 'state_franchise_all.csv'
+   40| YEARS = list(range(1868, 1969, 4))
+   41| 
+   42| # Declarant-alien voting for president: state → (first, last) election year it applied.
+   43| # Keyssar (2000) Table A.12; Hayduk (2006) [I].
+   44| ALIEN = {
+   45|     'WI': (1848, 1908), 'MI': (1850, 1894), 'IN': (1851, 1921), 'MN': (1857, 1896), 'OR': (1859, 1914),
+   46|     'KS': (1861, 1918), 'NE': (1867, 1918), 'MO': (1865, 1921), 'TX': (1869, 1921), 'AR': (1868, 1926),
+   47|     'AL': (1867, 1901), 'FL': (1868, 1894), 'GA': (1868, 1877), 'SC': (1868, 1895), 'LA': (1879, 1898),
+   48|     'CO': (1876, 1902), 'ND': (1889, 1909), 'SD': (1889, 1918),
+   49| }
+   50| # 1868: Black men legally able to vote (share of adult Black men) [I].
+   51| BLACK_1868 = {s: 0.0 for s in ['CA', 'CT', 'DE', 'IL', 'IN', 'KS', 'KY', 'MD', 'MI', 'MO', 'NJ', 'NV', 'OH', 'OR',
+   52|                                'PA', 'WV', 'IA', 'MN']}
+   53| BLACK_1868['NY'] = 0.1  # $250 freehold test for Black men only [I]
+   54| # 1868: whites barred by ex-Confederate test oaths [I].
+   55| WHITE_1868 = {'MO': 0.80, 'TN': 0.70, 'WV': 0.85, 'AR': 0.85}
+   56| 
+   57| 
+   58| def voting_age(state: str, year: int) -> int:
+   59|     if year >= 1972:
+   60|         return 18
+   61|     if state == 'GA' and year >= 1944:
+   62|         return 18
+   63|     if state == 'KY' and year >= 1956:
+   64|         return 18
+   65|     if state == 'AK' and year >= 1960:
+   66|         return 19
+   67|     if state == 'HI' and year >= 1960:
+   68|         return 20
+   69|     return 21
+   70| 
+   71| 
+   72| def main():
+   73|     gj = pd.read_csv(FR / 'raw/GrayJenkins_State-Level_Data_File.tab', sep='\t')
+   74|     icp = pd.read_csv(FR / 'grayjenkins_state_franchise_1916_1920_1924.csv').drop_duplicates('state')
+   75|     code = dict(zip(icp.icpsr_state.astype(int), icp.state))
+   76|     gj['st'] = gj.state.astype(int).map(code)
+   77|     pres = gj[gj.elec_type == 1].set_index(['year', 'st'])
+   78|     first70 = gj[gj.year == 1870].sort_values('elec_type').drop_duplicates('st').set_index('st')
+   79|     w = pd.read_csv(FR / 'women_suffrage_pre19th.csv').set_index('state')
+   80|     wy = w.presidential_suffrage_year.combine_first(w.full_suffrage_year).to_dict()
+   81|     ret = pd.read_csv(CACHE / 'labels/state_pres_all.csv')
+   82|     rows = []
+   83|     for _, r in ret[ret.year.isin(YEARS)].iterrows():
+   84|         y, s = int(r.year), r.state
+   85|         notes, src = [], []
+   86|         if s == 'DC':
+   87|             pt, lt, ex = 0, 0, np.nan
+   88|             src.append('DC: no poll tax or literacy test')
+   89|         elif y == 1868:
+   90|             g = first70.loc[s] if s in first70.index else None
+   91|             pt, lt, ex = (np.nan, np.nan, np.nan) if g is None else (g.poll_tax, g.lit_test, g.exfelon)
+   92|             src.append('Gray&Jenkins doi:10.7910/DVN/QIY9EM 1870 row [I]')
+   93|         else:
+   94|             g = pres.loc[(y, s)]
+   95|             pt, lt, ex = g.poll_tax, g.lit_test, g.exfelon
+   96|             src.append('Gray&Jenkins doi:10.7910/DVN/QIY9EM elec_type 1')
+   97|         py = wy.get(s)
+   98|         wv = int(y >= 1920 or (py is not None and pd.notna(py) and float(py) <= y))
+   99|         if y == 1920 and s in ('GA', 'MS'):
+  100|             notes.append('women could not register in time for Nov 1920 (closed_1920)')
+  101|         src.append('women: Teele doi:10.7910/DVN/EVYI2H')
+  102|         a = ALIEN.get(s)
+  103|         av = int(a is not None and a[0] <= y <= a[1])
+  104|         if a is not None:
+  105|             src.append('alien: Keyssar 2000 Table A.12 / Hayduk 2006 [I]')
+  106|         bc = BLACK_1868.get(s, 1.0) if y == 1868 else 1.0
+  107|         wc = WHITE_1868.get(s, 1.0) if y == 1868 else 1.0
+  108|         if y == 1868 and (s in BLACK_1868 or s in WHITE_1868):
+  109|             notes.append('pre-15th Amendment exclusions [I]')
+  110|         if pd.notna(ex):
+  111|             notes.append(f'exfelon law (GJ)={int(ex)}')
+  112|         rows.append({'year': y, 'state': s, 'poll_tax': pt, 'literacy_test': lt, 'alien_voting': av, 'women_vote': wv,
+  113|                      'white_can': wc, 'black_can': bc, 'felony_disenfranchised_share': np.nan,
+  114|                      'voting_age': voting_age(s, y), 'chosen_by': r.chosen_by, 'source': '; '.join(src),
+  115|                      'note': '; '.join(notes)})
+  116|     out = pd.DataFrame(rows)
+  117|     for c in ('poll_tax', 'literacy_test'):
+  118|         out[c] = out[c].astype('Int64')
+  119|     out.to_csv(OUT, index=False)
+  120|     print(f'wrote {OUT} ({len(out)} rows)')
+  121|     print(out.groupby('year')[['poll_tax', 'literacy_test', 'alien_voting', 'women_vote']].sum().T.to_string())
+  122|     print('missing poll_tax:', out[out.poll_tax.isna()][['year', 'state']].values.tolist())
+  123| 
+  124| 
+  125| if __name__ == '__main__':
+  126|     main()
+```
 
 ## `scripts/harness/build_population.py`
 

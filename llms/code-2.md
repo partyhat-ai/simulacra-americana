@@ -1,7 +1,7 @@
-# synthetic-electorate-toy: source and docs, part 2 of 16
+# synthetic-electorate-toy: source and docs, part 2 of 17
 
-Generated from commit `5fc0a9e54bc9` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
-Files `EVAL.md` to `infra/alb.tf`. Lines are numbered as in the repository.
+Generated from commit `4a07108d3ae4` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Files `EVAL.md` to `infra/.gitignore`. Lines are numbered as in the repository.
 
 ## `EVAL.md`
 
@@ -1601,66 +1601,72 @@ Files `EVAL.md` to `infra/alb.tf`. Lines are numbered as in the repository.
   265| 
   266| To change a cap, edit its value in `infra/taskdef.json.tftpl` and deploy.
   267| 
-  268| The per-IP limits (`serve/simulacra.ts`, `DEFAULT_LIMITS`): 1,200
-  269| requests per 10 minutes, 120 runs per 10 minutes, and 10 queued texts an
-  270| hour; past the last, POST /runs answers 429. The rate limits read the
-  271| visitor's address from `X-Forwarded-For` two proxies deep (`TRUST_PROXY_HOPS`:
-  272| Vercel, then the ALB). A request sent to the ALB directly can forge that
-  273| header, so the per-IP limits can be dodged; the dollar caps can't, since they
-  274| count every visitor together. To stop the spending at once,
-  275| remove or revoke the Anthropic key, or stop the service
-  276| (`aws ecs update-service --cluster simulacra --service simulacra-api --desired-count 0`).
-  277| 
-  278| Session logs (`requests.jsonl` and the queue files) keep 7 days of lines
-  279| (`SIMULACRA_RETAIN_DAYS`), pruned at start and hourly while no worker runs.
-  280| `spend.jsonl` keeps every line, but drops a line's `note` (the visitor's
-  281| words) after the same 7 days. The worker's `intake.log` is emptied past 20 MB (CloudWatch keeps its
-  282| copy). To read them, run a one-off task, or download the latest AWS Backup
-  283| recovery point.
-  284| 
-  285| AWS can't see Anthropic spend. Set a usage alert on the production key in the
-  286| Anthropic console.
-  287| 
-  288| ## Census data
-  289| 
-  290| The NHGIS/IPUMS extracts and the derived `population/*_nhgis.csv` files are
-  291| not for redistribution. They live only in `s3://simulacra-americana-data/cache/`
-  292| (the derived part, everything except `*/raw/`) and on EFS. They are never in
-  293| git, an image, Vercel or the assets bucket.
-  294| 
-  295| To re-sync after rebuilding the cache on a laptop, run
-  296| `scripts/sync-data.sh upload-cache`, then `scripts/sync-data.sh cache`. Run
-  297| ids hash the cache manifest, so a changed cache means new run ids.
-  298| 
-  299| ## Alarms
+  268| The research agent (`simharness/agent.py`) is off in production. It runs only
+  269| when the task definition sets `SIMULACRA_AGENT=1`. It spends under the same caps
+  270| and `Budget`, and its own model turns are recorded in the ledger as stage `agent`.
+  271| With `SIMULACRA_AGENT_PUBLISH=ask`, nothing it builds goes live until
+  272| `python -m simharness.run approve --id <trace>` is run in a one-off task.
+  273| 
+  274| The per-IP limits (`serve/simulacra.ts`, `DEFAULT_LIMITS`): 1,200
+  275| requests per 10 minutes, 120 runs per 10 minutes, and 10 queued texts an
+  276| hour; past the last, POST /runs answers 429. The rate limits read the
+  277| visitor's address from `X-Forwarded-For` two proxies deep (`TRUST_PROXY_HOPS`:
+  278| Vercel, then the ALB). A request sent to the ALB directly can forge that
+  279| header, so the per-IP limits can be dodged; the dollar caps can't, since they
+  280| count every visitor together. To stop the spending at once,
+  281| remove or revoke the Anthropic key, or stop the service
+  282| (`aws ecs update-service --cluster simulacra --service simulacra-api --desired-count 0`).
+  283| 
+  284| Session logs (`requests.jsonl` and the queue files) keep 7 days of lines
+  285| (`SIMULACRA_RETAIN_DAYS`), pruned at start and hourly while no worker runs.
+  286| `spend.jsonl` keeps every line, but drops a line's `note` (the visitor's
+  287| words) after the same 7 days. The worker's `intake.log` is emptied past 20 MB (CloudWatch keeps its
+  288| copy). To read them, run a one-off task, or download the latest AWS Backup
+  289| recovery point.
+  290| 
+  291| AWS can't see Anthropic spend. Set a usage alert on the production key in the
+  292| Anthropic console.
+  293| 
+  294| ## Census data
+  295| 
+  296| The NHGIS/IPUMS extracts and the derived `population/*_nhgis.csv` files are
+  297| not for redistribution. They live only in `s3://simulacra-americana-data/cache/`
+  298| (the derived part, everything except `*/raw/`) and on EFS. They are never in
+  299| git, an image, Vercel or the assets bucket.
   300| 
-  301| All alarms go to SNS `simulacra-alarms`, which emails cam@partyhat.ai:
-  302| - no healthy target for 3 minutes;
-  303| - more than 5 target 5xx in 5 minutes;
-  304| - more than 10 ELB 5xx in 5 minutes;
-  305| - any worker STOP, refusal or traceback (the entrypoint echoes worker lines
-  306|   to the log with a `[worker]` prefix);
-  307| - the AWS Budget forecast passing 80%, and actual spend passing 100% of $150
-  308|   a month. The budget filters on the `project` cost-allocation tag. AWS can
-  309|   take up to 24 hours to see a new tag, so activating it may fail on the
-  310|   first apply; re-apply the next day.
-  311| 
-  312| ## Cost estimate (us-east-1, October 2026 list prices)
-  313| 
-  314| | Item | Basis | ~/month |
-  315| |---|---|---|
-  316| | ALB | $16.43 base plus about 1 LCU | $22 |
-  317| | Fargate | 1 vCPU, 4 GB, ARM, 24/7 | $34 |
-  318| | Public IPv4 | Task plus 2 ALB addresses at $3.65 each | $11 |
-  319| | EFS (elastic) | About 1–2 GB, growing 5–7 MB per new what-if, plus I/O | $1–3 |
-  320| | AWS Backup | EFS warm storage | <$1 |
-  321| | CloudFront | About 19 MB per first-time visitor; inside the 1 TB/month free tier up to about 50k visitors | $0 |
-  322| | S3, ECR, logs, alarms, Secrets Manager | | $3–5 |
-  323| | **AWS total** | | **≈ $75–80** |
-  324| | Vercel | Hobby is $0, but its terms exclude commercial use; Pro is $20 per member | $0–20 |
-  325| | Anthropic | $0.74–$1.91 per new typed what-if, from any visitor. Repeats and precomputed combinations are free | At most $200, by the monthly cap ($20 a day) |
-  326| 
-  327| The Anthropic line dominates. The daily and monthly caps (Spend, above) bound it.
+  301| To re-sync after rebuilding the cache on a laptop, run
+  302| `scripts/sync-data.sh upload-cache`, then `scripts/sync-data.sh cache`. Run
+  303| ids hash the cache manifest, so a changed cache means new run ids.
+  304| 
+  305| ## Alarms
+  306| 
+  307| All alarms go to SNS `simulacra-alarms`, which emails cam@partyhat.ai:
+  308| - no healthy target for 3 minutes;
+  309| - more than 5 target 5xx in 5 minutes;
+  310| - more than 10 ELB 5xx in 5 minutes;
+  311| - any worker STOP, refusal or traceback (the entrypoint echoes worker lines
+  312|   to the log with a `[worker]` prefix);
+  313| - the AWS Budget forecast passing 80%, and actual spend passing 100% of $150
+  314|   a month. The budget filters on the `project` cost-allocation tag. AWS can
+  315|   take up to 24 hours to see a new tag, so activating it may fail on the
+  316|   first apply; re-apply the next day.
+  317| 
+  318| ## Cost estimate (us-east-1, October 2026 list prices)
+  319| 
+  320| | Item | Basis | ~/month |
+  321| |---|---|---|
+  322| | ALB | $16.43 base plus about 1 LCU | $22 |
+  323| | Fargate | 1 vCPU, 4 GB, ARM, 24/7 | $34 |
+  324| | Public IPv4 | Task plus 2 ALB addresses at $3.65 each | $11 |
+  325| | EFS (elastic) | About 1–2 GB, growing 5–7 MB per new what-if, plus I/O | $1–3 |
+  326| | AWS Backup | EFS warm storage | <$1 |
+  327| | CloudFront | About 19 MB per first-time visitor; inside the 1 TB/month free tier up to about 50k visitors | $0 |
+  328| | S3, ECR, logs, alarms, Secrets Manager | | $3–5 |
+  329| | **AWS total** | | **≈ $75–80** |
+  330| | Vercel | Hobby is $0, but its terms exclude commercial use; Pro is $20 per member | $0–20 |
+  331| | Anthropic | $0.74–$1.91 per new typed what-if, from any visitor. Repeats and precomputed combinations are free | At most $200, by the monthly cap ($20 a day) |
+  332| 
+  333| The Anthropic line dominates. The daily and monthly caps (Spend, above) bound it.
 ```
 
 ## `docs/harness/README.md`
@@ -1709,153 +1715,203 @@ Files `EVAL.md` to `infra/alb.tf`. Lines are numbered as in the repository.
    41| | `simharness/world.py` | The staging pass for a compiled what-if's world, and the audit of the interviews' reasoning (DISCLOSURES D33) |
    42| | `simharness/evidence.py` | Historical evidence: web-search research, grounded extraction, source tiers, agreement, blend, confidence tiers |
    43| | `simharness/intake.py` | Typed what-if intake: compile → research → register → run → `serve/bundles/`; the router's queue |
-   44| | `simharness/profiles.py` | Loads one profile per election (names, blinded descriptors, label letters, ballot wording, sources): 1920 and 1924 in code, the other 58 from `profiles/<year>.json` |
-   45| | `simharness/run.py` | The command line (`python3 -m simharness.run <stage>`) |
-   46| | `simharness/pipeline.py` | The stages: backbone, plan, ask, analyze, verify, dryrun, evaluate (`Run`) |
-   47| | `simharness/publish.py` | The publish stage: every what-if combination → the bundle |
-   48| | `serve/simulacra.ts`, `serve/index.ts` | The Express router that serves the bundles, and the server that mounts it at `/api/simulacra` next to the static page |
-   49| | `serve/bundles/<year>.json` | The bundles the server serves (`SIMULACRA_BUNDLES` overrides the folder) |
-   50| | `extracts/` | IPUMS extract definitions: we ship definitions, never microdata |
-   51| | `runs/<id>/` | Everything a run wrote: config, fit, requests, answers, analysis, validation, `published/1920.json`. The repo keeps only `config.json`, `analysis.json`, `validation.json` and `published/`; `fit.pkl`, `effects.pkl` and `agents/` are regenerable and stay local |
-   52| | `runs/_cache/` | Identical-request answer cache (regenerable from `runs/*`; gitignored) |
-   53| | `whatifs/<key>.json`, `whatifs/evidence/<key>.json` | Compiled what-ifs (exploratory) and every what-if's researched evidence; both hashed into run ids |
-   54| | `sessions/` | Dev only, gitignored: typed requests, the unknown-text queue, intake outcomes, the spend ledger |
-   55| | `scripts/harness/` | The cache build scripts (returns, franchise, population, corpus, NHGIS extracts) and `bundle_fixture.py` |
-   56| | `scripts/harness/nhgis_common.py` | The NHGIS extract client and the population builders' shared helpers |
-   57| | `scripts/harness/sessions-report.py` | What people typed, the share unmodelled, unknowns by kind, today's spend |
-   58| 
-   59| The raw data lives outside the repo, in `SIMHARNESS_CACHE`. It defaults to
-   60| `~/research_notes/historical_election_sim_data/harness_cache`, and each folder
-   61| there has a `PROVENANCE-*.md`.
-   62| 
-   63| Some sources can't be redistributed (IPUMS, NHGIS), so the cache stays
-   64| outside the repo. Only aggregates reach `runs/`.
+   44| | `simharness/agent.py` | The research agent: the same stages as tools a model chooses, behind a permission gate; replay and approval |
+   45| | `simharness/trace.py` | Step-level traces of the agent (`sessions/traces/`), their summaries and retention |
+   46| | `simharness/agent_eval.py` | Golden tasks for the agent from the compiled what-ifs, scored field by field |
+   47| | `simharness/profiles.py` | Loads one profile per election (names, blinded descriptors, label letters, ballot wording, sources): 1920 and 1924 in code, the other 58 from `profiles/<year>.json` |
+   48| | `simharness/run.py` | The command line (`python3 -m simharness.run <stage>`) |
+   49| | `simharness/pipeline.py` | The stages: backbone, plan, ask, analyze, verify, dryrun, evaluate (`Run`) |
+   50| | `simharness/publish.py` | The publish stage: every what-if combination → the bundle |
+   51| | `serve/simulacra.ts`, `serve/index.ts` | The Express router that serves the bundles, and the server that mounts it at `/api/simulacra` next to the static page |
+   52| | `serve/bundles/<year>.json` | The bundles the server serves (`SIMULACRA_BUNDLES` overrides the folder) |
+   53| | `extracts/` | IPUMS extract definitions: we ship definitions, never microdata |
+   54| | `runs/<id>/` | Everything a run wrote: config, fit, requests, answers, analysis, validation, `published/1920.json`. The repo keeps only `config.json`, `analysis.json`, `validation.json` and `published/`; `fit.pkl`, `effects.pkl` and `agents/` are regenerable and stay local |
+   55| | `runs/_cache/` | Identical-request answer cache (regenerable from `runs/*`; gitignored) |
+   56| | `whatifs/<key>.json`, `whatifs/evidence/<key>.json` | Compiled what-ifs (exploratory) and every what-if's researched evidence; both hashed into run ids |
+   57| | `sessions/` | Dev only, gitignored: typed requests, the unknown-text queue, intake outcomes, the spend ledger |
+   58| | `scripts/harness/` | The cache build scripts (returns, franchise, population, corpus, NHGIS extracts) and `bundle_fixture.py` |
+   59| | `scripts/harness/nhgis_common.py` | The NHGIS extract client and the population builders' shared helpers |
+   60| | `scripts/harness/sessions-report.py` | What people typed, the share unmodelled, unknowns by kind, today's spend |
+   61| 
+   62| The raw data lives outside the repo, in `SIMHARNESS_CACHE`. It defaults to
+   63| `~/research_notes/historical_election_sim_data/harness_cache`, and each folder
+   64| there has a `PROVENANCE-*.md`.
    65| 
-   66| ## Run it
-   67| 
-   68| From the repo root (`pip install -e '.[test]'` once; add `'.[llm]'` for the paid stages):
-   69| 
-   70| ```sh
-   71| python3 -m simharness.run backbone      # fit + unchanged-run reproduction
-   72| python3 -m simharness.run plan          # agents and requests (no model calls)
-   73| python3 -m simharness.run ask           # send requests (backend from the config)
-   74| python3 -m simharness.run analyze       # paired effects, probes, bias, audit
-   75| python3 -m simharness.run evaluate      # validation checks → validation.json
-   76| python3 -m simharness.run publish       # every what-if combination → published/1920.json
-   77| python3 -m pytest -q                    # fast unit checks (tests/)
-   78| ```
-   79| 
-   80| Typed what-ifs and historical evidence (all paid stages priced first and recorded in
-   81| `sessions/spend.jsonl`; see `simharness/intake.py`):
+   66| Some sources can't be redistributed (IPUMS, NHGIS), so the cache stays
+   67| outside the repo. Only aggregates reach `runs/`.
+   68| 
+   69| ## Run it
+   70| 
+   71| From the repo root (`pip install -e '.[test]'` once; add `'.[llm]'` for the paid stages):
+   72| 
+   73| ```sh
+   74| python3 -m simharness.run backbone      # fit + unchanged-run reproduction
+   75| python3 -m simharness.run plan          # agents and requests (no model calls)
+   76| python3 -m simharness.run ask           # send requests (backend from the config)
+   77| python3 -m simharness.run analyze       # paired effects, probes, bias, audit
+   78| python3 -m simharness.run evaluate      # validation checks → validation.json
+   79| python3 -m simharness.run publish       # every what-if combination → published/1920.json
+   80| python3 -m pytest -q                    # fast unit checks (tests/)
+   81| ```
    82| 
-   83| ```sh
-   84| H=~/.venvs/simharness/bin/python
-   85| $H -m simharness.run whatif --text "charlie chaplin ran as an independent" --config configs/live-1920.json
-   86| $H -m simharness.run whatif --queue --config configs/live-1920.json     # what the page couldn't model
-   87| $H -m simharness.run research --config configs/live-1920.json           # evidence for the config's what-ifs
-   88| $H -m simharness.run research --key league --refresh | --reextract ...  # one what-if; search again, or re-read saved notes
-   89| ```
-   90| 
-   91| How a typed what-if is modelled:
-   92| 1. **Compile** (`research.compile_model`; Opus in the live configs): the words become a settled-fact change of one kind,
-   93|    with who it reaches, a plausibility grade, keywords and research questions.
-   94|    Nominee and party names are sent back and masked. A request that means an
-   95|    existing what-if only adds keywords.
-   96| 2. **Research** (`research.research_model`, Sonnet, + web search): scholarship, official statistics and
-   97|    archives on the change itself, the same groups in the most similar
-   98|    situations, and any named person's record before the context date.
-   99| 3. **Extract** (`research.extract_model`; Opus in the live configs): findings grounded in the sources the
-  100|    search returned. Each is graded by source tier × match, and signed for the
-  101|    scenario (a situation the change undoes counts the other way).
-  102| 4. **Stage** (`world.py`, when `research.world_model` is set): the year's
-  103|    items the change makes false leave the counterfactual brief, in-world news
-  104|    and a belief check are added, and the groups to interview are named.
-  105| 5. **Interview**: the usual paired control/counterfactual briefs. A candidate
-  106|    gets a third labelled ballot line (p4). Identical earlier requests are
-  107|    reused, so only the new arm is paid for.
-  108|    Answers that fail the belief check or the reasoning audit are left out, or
-  109|    re-asked on `agents.escalate_model`.
-  110| 6. **Evaluate**: the interviews against the record on votes and turnout
-  111|    (corroborated, consistent, contradicted, untested). For exploratory
-  112|    what-ifs, the evidence is also a precision-weighted prior on each cohort's
-  113|    effect.
-  114| 7. **Confidence**: high, medium, low or very low ("Extremely low
-  115|    confidence"), with the reasons. The tier reaches the page as
-  116|    `confidenceTier`, `confidenceFlags` and `confidenceReasons`, and as a
-  117|    sentence in the summary.
-  118| 
-  119| With `SIMULACRA_LOG=1`, the server (`pnpm serve`) logs requests to `sessions/`, queues unknown text,
-  120| and reloads a changed bundle without a restart. `SIMULACRA_AUTORUN=configs/live-1920.json`
-  121| also starts the queue worker as text arrives (`SIMULACRA_PYTHON` picks the interpreter;
-  122| it runs from the repo root).
+   83| Typed what-ifs and historical evidence (all paid stages priced first and recorded in
+   84| `sessions/spend.jsonl`; see `simharness/intake.py`):
+   85| 
+   86| ```sh
+   87| H=~/.venvs/simharness/bin/python
+   88| $H -m simharness.run whatif --text "charlie chaplin ran as an independent" --config configs/live-1920.json
+   89| $H -m simharness.run whatif --queue --config configs/live-1920.json     # what the page couldn't model
+   90| $H -m simharness.run research --config configs/live-1920.json           # evidence for the config's what-ifs
+   91| $H -m simharness.run research --key league --refresh | --reextract ...  # one what-if; search again, or re-read saved notes
+   92| ```
+   93| 
+   94| How a typed what-if is modelled:
+   95| 1. **Compile** (`research.compile_model`; Opus in the live configs): the words become a settled-fact change of one kind,
+   96|    with who it reaches, a plausibility grade, keywords and research questions.
+   97|    Nominee and party names are sent back and masked. A request that means an
+   98|    existing what-if only adds keywords.
+   99| 2. **Research** (`research.research_model`, Sonnet, + web search): scholarship, official statistics and
+  100|    archives on the change itself, the same groups in the most similar
+  101|    situations, and any named person's record before the context date.
+  102| 3. **Extract** (`research.extract_model`; Opus in the live configs): findings grounded in the sources the
+  103|    search returned. Each is graded by source tier × match, and signed for the
+  104|    scenario (a situation the change undoes counts the other way).
+  105| 4. **Stage** (`world.py`, when `research.world_model` is set): the year's
+  106|    items the change makes false leave the counterfactual brief, in-world news
+  107|    and a belief check are added, and the groups to interview are named.
+  108| 5. **Interview**: the usual paired control/counterfactual briefs. A candidate
+  109|    gets a third labelled ballot line (p4). Identical earlier requests are
+  110|    reused, so only the new arm is paid for.
+  111|    Answers that fail the belief check or the reasoning audit are left out, or
+  112|    re-asked on `agents.escalate_model`.
+  113| 6. **Evaluate**: the interviews against the record on votes and turnout
+  114|    (corroborated, consistent, contradicted, untested). For exploratory
+  115|    what-ifs, the evidence is also a precision-weighted prior on each cohort's
+  116|    effect.
+  117| 7. **Confidence**: high, medium, low or very low ("Extremely low
+  118|    confidence"), with the reasons. The tier reaches the page as
+  119|    `confidenceTier`, `confidenceFlags` and `confidenceReasons`, and as a
+  120|    sentence in the summary.
+  121| 
+  122| ### The research agent
   123| 
-  124| The `ask` stage depends on the backend:
-  125| - **`anthropic` or `anthropic-batch`:** needs `pip install -e '.[llm]'`
-  126|   (`anthropic>=1.0`; older SDKs lack `output_config`). The key comes from
-  127|   `ANTHROPIC_API_KEY`, else `~/.config/simulacra/anthropic.env`
-  128|   (`ANTHROPIC_API_KEY=…`, mode 600; `llm.api_key()`), and is never written to
-  129|   the repo, a run folder or a log. The commands above use a venv outside the
-  130|   repo, `~/.venvs/simharness`, with that extra installed.
-  131| - **`transcript`:** writes `runs/<id>/agents/transcript/requests.jsonl` and
-  132|   reads `responses.jsonl`, one `{"id", "model", "answer"}` per line. Any
-  133|   runner can fill it.
-  134| 
-  135| ### Interview runs
-  136| 
-  137| Every stage takes `--config`; the default is `configs/prototype-1920.json`.
-  138| Two small 1920 configs exist for cheap runs on the API:
-  139| - `configs/quick-1920.json`: two cohorts, one agent each, all four arms, on
-  140|   Haiku 4.5 (a few cents).
-  141| - `configs/rung1-1920.json`: six cohorts × 2 agents, `league` only, control
-  142|   and counterfactual arms (under a dime).
-  143| 
-  144| The `agents` block's knobs (`config.AgentConfig`) select what is sent: `arms`
-  145| (any of `control`, `cf`, `swap`, `probe`), `only_cohorts`, `per_cohort`,
-  146| `check_share` (0 skips the check-model subsample), `bulk_model`,
-  147| `check_model`, `effort` and `max_tokens`. `plan` prints the request counts and
-  148| the dollar estimate before anything is sent. Model constraints the backend
-  149| handles: Haiku 4.5 rejects `output_config.effort` (it is stripped), and
-  150| Sonnet 5.5 rejects non-default sampling parameters, so spread comes from
-  151| persona diversity, not temperature.
-  152| 
-  153| A run's id hashes the config, the data and all of `simharness/*.py`
-  154| (DISCLOSURES G1), so any code change starts a new run folder and a fresh
-  155| `ask`; identical requests are still answered from the cache (G4).
-  156| 
-  157| **Changing what the interviews collect.** A new answer field touches, together:
-  158| `prompts.SYSTEM` (what the field is), `prompts.answer_schema` (add it to
-  159| `required`; keep `additionalProperties: false`), `prompts.QUESTIONS` only if
-  160| the field needs asking (keep the paraphrases parallel), `paired.normalize`
-  161| only if it feeds a count, and `publish._voters` to put it in the voter
-  162| payload (plus the zod schemas in `serve/bundle.ts` and
-  163| `src/lib/simulacra/schemas.ts` if the page is to read it). Bump `PROMPT_VERSION` in `prompts.py`; answers from two prompt
-  164| versions are never mixed in one analysis.
-  165| 
-  166| Serve the bundles:
-  167| 1. `pnpm build` (the static page, into `build/`), then `pnpm serve` (`serve/index.ts`, `PORT`, default 8787).
-  168| 2. The router reads `serve/bundles/<year>.json`; set `SIMULACRA_BUNDLES` to serve another folder, such as `runs/<id>/published`.
-  169| 
-  170| ## Years
-  171| 
-  172| - **1920** is the original fit, identified by the 1916→1920 suffrage
-  173|   experiment.
-  174| - **1924** is carried forward from it (`backbone.carry_forward`; DISCLOSURES
-  175|   C13–C16). It has its own `configs/live-1924.json`.
-  176| - **All 60 elections, 1789–2024, are built.** Each other year has
-  177|   `profiles/<year>.json` and `configs/live-<year>.json`. Years other than 1916–1924 use
-  178|   `backbone.general_fit` (DISCLOSURES B10–B13). The unchanged rerun of every
-  179|   year reproduces each state's certified returns and history's electoral votes.
-  180| - `run dryrun --year Y [--all-cohorts] [--samples N]` runs backbone → verify →
-  181|   plan for any year with no model calls, and prints sample briefs, counts and
-  182|   the cost estimate (`runs/<id>/dryrun.json`).
-  183| - `run verify` checks any year: exact reproduction, plus Corder–Wolbrecht
-  184|   where it exists. `evaluate` stays 1920's check set.
-  185| - **Adding a year:**
-  186|   - a `profiles/<year>.json`;
-  187|   - returns, voting rules and platforms in the cache;
-  188|   - a `live-<year>.json` config.
-  189| 
-  190|   The queue sends typed what-ifs to their year's config.
+  124| `simharness/agent.py` runs the same stages as tools, in an order a model chooses:
+  125| it can compile again with a note when a reading is wrong, research again with
+  126| sharper questions when the evidence is thin, take an existing what-if, or stop
+  127| before any interview. It is off unless asked for.
+  128| 
+  129| ```sh
+  130| $H -m simharness.run whatif --agent --text "..." --year 1920                 # held for approval (--publish ask)
+  131| $H -m simharness.run whatif --agent --publish gate --text "..." --year 1920  # live if the bundle's checks pass
+  132| $H -m simharness.run whatif --agent --dry-run --text "..." --year 1920       # no writes, interviews or publishing
+  133| $H -m simharness.run trace                                                    # recent traces, and what is held
+  134| $H -m simharness.run trace --id <trace>                                       # one trace: path, refusals, dollars
+  135| $H -m simharness.run approve --id <trace>                                     # put a held bundle live
+  136| $H -m simharness.run replay --id <trace> --model claude-sonnet-5-5            # recorded tool results, new model
+  137| $H -m simharness.run agent-eval --year 1920 --limit 3                         # golden tasks, dry run (~$1-3 each)
+  138| ```
+  139| 
+  140| Permissions are enforced in code, never by the prompt. Each tool has a tier (read,
+  141| spend, write, publish), and the gate checks preconditions before it runs:
+  142| - `register` needs a spec that passed `validate` unchanged since, plus evidence and,
+  143|   for interviewed changes, a staged world.
+  144| - `use_existing` attaches the reader's words only to the what-if the compiler matched.
+  145| - `run_interviews` prices the uncached requests first, and refuses to run if the
+  146|   typical cost exceeds what the text has left.
+  147| - `publish` puts a bundle live only if it passes `bundle_checks` (the new what-if is
+  148|   in it, no served result is missing, and the unchanged rerun is identical to the
+  149|   served one) and the policy is `gate`. Otherwise the bundle is held in
+  150|   `sessions/pending-publish/` for `approve`.
+  151| 
+  152| The reader's words and anything from the web reach the model only as data. Raw
+  153| pages never do: research returns graded findings that cite returned sources.
+  154| Every model turn and tool call (arguments, decision, full result, dollars, time)
+  155| is written to `sessions/traces/<id>.jsonl`. Traces are kept as long as the session
+  156| logs (`SIMULACRA_RETAIN_DAYS`). A replay re-serves a trace's recorded tool results
+  157| to a new model or prompt and compares the paths.
+  158| 
+  159| The queue worker uses the agent when `SIMULACRA_AGENT=1`. `SIMULACRA_AGENT_PUBLISH`
+  160| is `gate` by default; with `ask`, every new what-if waits for approval, and the
+  161| waiting page is told it will go live once reviewed.
+  162| 
+  163| Untrusted text is fenced in every pass: the reader's words reach compile and research inside
+  164| `<reader_text>`, and the search's notes and source titles reach extraction inside `<research_notes>`
+  165| and `<sources>` (`scenario.fence` swaps angle brackets so the text can't close its fence). Each system
+  166| prompt says fenced text is material, never instructions. A text that tries to instruct the compiler
+  167| is answered as not modelable.
+  168| 
+  169| With `SIMULACRA_LOG=1`, the server (`pnpm serve`) logs requests to `sessions/`, queues unknown text,
+  170| and reloads a changed bundle without a restart. `SIMULACRA_AUTORUN=configs/live-1920.json`
+  171| also starts the queue worker as text arrives (`SIMULACRA_PYTHON` picks the interpreter;
+  172| it runs from the repo root).
+  173| 
+  174| The `ask` stage depends on the backend:
+  175| - **`anthropic` or `anthropic-batch`:** needs `pip install -e '.[llm]'`
+  176|   (`anthropic>=1.0`; older SDKs lack `output_config`). The key comes from
+  177|   `ANTHROPIC_API_KEY`, else `~/.config/simulacra/anthropic.env`
+  178|   (`ANTHROPIC_API_KEY=…`, mode 600; `llm.api_key()`), and is never written to
+  179|   the repo, a run folder or a log. The commands above use a venv outside the
+  180|   repo, `~/.venvs/simharness`, with that extra installed.
+  181| - **`transcript`:** writes `runs/<id>/agents/transcript/requests.jsonl` and
+  182|   reads `responses.jsonl`, one `{"id", "model", "answer"}` per line. Any
+  183|   runner can fill it.
+  184| 
+  185| ### Interview runs
+  186| 
+  187| Every stage takes `--config`; the default is `configs/prototype-1920.json`.
+  188| Two small 1920 configs exist for cheap runs on the API:
+  189| - `configs/quick-1920.json`: two cohorts, one agent each, all four arms, on
+  190|   Haiku 4.5 (a few cents).
+  191| - `configs/rung1-1920.json`: six cohorts × 2 agents, `league` only, control
+  192|   and counterfactual arms (under a dime).
+  193| 
+  194| The `agents` block's knobs (`config.AgentConfig`) select what is sent: `arms`
+  195| (any of `control`, `cf`, `swap`, `probe`), `only_cohorts`, `per_cohort`,
+  196| `check_share` (0 skips the check-model subsample), `bulk_model`,
+  197| `check_model`, `effort` and `max_tokens`. `plan` prints the request counts and
+  198| the dollar estimate before anything is sent. Model constraints the backend
+  199| handles: Haiku 4.5 rejects `output_config.effort` (it is stripped), and
+  200| Sonnet 5.5 rejects non-default sampling parameters, so spread comes from
+  201| persona diversity, not temperature.
+  202| 
+  203| A run's id hashes the config, the data and all of `simharness/*.py`
+  204| (DISCLOSURES G1), so any code change starts a new run folder and a fresh
+  205| `ask`; identical requests are still answered from the cache (G4).
+  206| 
+  207| **Changing what the interviews collect.** A new answer field touches, together:
+  208| `prompts.SYSTEM` (what the field is), `prompts.answer_schema` (add it to
+  209| `required`; keep `additionalProperties: false`), `prompts.QUESTIONS` only if
+  210| the field needs asking (keep the paraphrases parallel), `paired.normalize`
+  211| only if it feeds a count, and `publish._voters` to put it in the voter
+  212| payload (plus the zod schemas in `serve/bundle.ts` and
+  213| `src/lib/simulacra/schemas.ts` if the page is to read it). Bump `PROMPT_VERSION` in `prompts.py`; answers from two prompt
+  214| versions are never mixed in one analysis.
+  215| 
+  216| Serve the bundles:
+  217| 1. `pnpm build` (the static page, into `build/`), then `pnpm serve` (`serve/index.ts`, `PORT`, default 8787).
+  218| 2. The router reads `serve/bundles/<year>.json`; set `SIMULACRA_BUNDLES` to serve another folder, such as `runs/<id>/published`.
+  219| 
+  220| ## Years
+  221| 
+  222| - **1920** is the original fit, identified by the 1916→1920 suffrage
+  223|   experiment.
+  224| - **1924** is carried forward from it (`backbone.carry_forward`; DISCLOSURES
+  225|   C13–C16). It has its own `configs/live-1924.json`.
+  226| - **All 60 elections, 1789–2024, are built.** Each other year has
+  227|   `profiles/<year>.json` and `configs/live-<year>.json`. Years other than 1916–1924 use
+  228|   `backbone.general_fit` (DISCLOSURES B10–B13). The unchanged rerun of every
+  229|   year reproduces each state's certified returns and history's electoral votes.
+  230| - `run dryrun --year Y [--all-cohorts] [--samples N]` runs backbone → verify →
+  231|   plan for any year with no model calls, and prints sample briefs, counts and
+  232|   the cost estimate (`runs/<id>/dryrun.json`).
+  233| - `run verify` checks any year: exact reproduction, plus Corder–Wolbrecht
+  234|   where it exists. `evaluate` stays 1920's check set.
+  235| - **Adding a year:**
+  236|   - a `profiles/<year>.json`;
+  237|   - returns, voting rules and platforms in the cache;
+  238|   - a `live-<year>.json` config.
+  239| 
+  240|   The queue sends typed what-ifs to their year's config.
 ```
 
 ## `infra/.gitignore`
@@ -1866,129 +1922,4 @@ Files `EVAL.md` to `infra/alb.tf`. Lines are numbered as in the repository.
     3| *.tfstate.*
     4| *.tfplan
     5| terraform.tfvars
-```
-
-## `infra/.terraform.lock.hcl`
-
-```
-    1| # This file is maintained automatically by "terraform init".
-    2| # Manual edits may be lost in future updates.
-    3| 
-    4| provider "registry.terraform.io/hashicorp/aws" {
-    5|   version     = "6.67.0"
-    6|   constraints = "~> 6.0"
-    7|   hashes = [
-    8|     "h1:OgdIUAQDtJBxlKjoPgChD1w57vl6hm6PyJHiBYgsgQA=",
-    9|     "zh:111d5686a1f4ccbc888bb5e2229308bcdd9149898c6af97969fcdfb0e7bd2aa0",
-   10|     "zh:21b3b7693bd9754c039fd546f03ed09e7510c6189aa5ee37176f144cf8dd5f95",
-   11|     "zh:25e03c7f025ff4851889537605aa560d2e39bd738b33a5204b8037eb164b475f",
-   12|     "zh:2817a046f1060e25bf04b0eb78f4e251130bb92dc82ec1264ce156dc9bf78e67",
-   13|     "zh:2d318d674c3ec9dbd97ddb10b12ad4827be4f508c43ba2ae1e0523baa9e367e3",
-   14|     "zh:2f07ab356718267299e10b6072472ded29d82753883027bf43bcd687ac72feb2",
-   15|     "zh:32307e67f83bc0dc94d38cfcd23d782166a09e0e975e2a5aa7d7a3e7ca5d3da8",
-   16|     "zh:4ce94853264097dd7f4542b3cfd18d2b98b06d23321db45d5e384ea275a57f63",
-   17|     "zh:869656c41cc7c7412f213e488f98167cff61deafcb8cf245d25d056e8dfdc263",
-   18|     "zh:8fd8c814e9d8edf152552047db23bf5b5d63f22e6b0b5d47b2af851376e99349",
-   19|     "zh:9b12af85486a96aedd8d7984b0ff811a4b42e3d88dad1a3fb4c0b580d04fa425",
-   20|     "zh:9cbc02ceef9bd469da497a1e7065ff984bdacfbe919ac3cce804a86c13b6e2c6",
-   21|     "zh:9ea55dda2767acfc1f6337fc7d29b1d4d79d6f8f04871f8ad99a6078d2865994",
-   22|     "zh:d7149df0819fb57a160489db45d33951765b8f0118daa3b4cd549a0135bc97a1",
-   23|     "zh:e5819937bb7043d08c9829b32d52d9fb55a5b9a4d8d55d550d47a3d7392db546",
-   24|     "zh:f93bc38dbc0ad53842303f30eec7a22c525c4d56209b54ec33a8d375cfc4e4fd",
-   25|   ]
-   26| }
-```
-
-## `infra/acm.tf`
-
-```hcl
-    1| # Certificates for api. (ALB) and assets. (CloudFront; must be us-east-1,
-    2| # which this whole stack is). DNS is at Vercel, so validation is two-step:
-    3| #   1. terraform apply -target=aws_acm_certificate.api -target=aws_acm_certificate.assets
-    4| #   2. infra/vercel-dns.sh certs --apply   (CAA for amazon.com + the validation CNAMEs)
-    5| #   3. terraform apply                     (the validation resources wait for ISSUED)
-    6| # The zone's CAA records allow only pki.goog, sectigo.com and letsencrypt.org
-    7| # today; without an amazon.com CAA record ACM never issues.
-    8| 
-    9| resource "aws_acm_certificate" "api" {
-   10|   domain_name       = "api.${var.domain}"
-   11|   validation_method = "DNS"
-   12|   lifecycle { create_before_destroy = true }
-   13| }
-   14| 
-   15| resource "aws_acm_certificate" "assets" {
-   16|   domain_name       = "assets.${var.domain}"
-   17|   validation_method = "DNS"
-   18|   lifecycle { create_before_destroy = true }
-   19| }
-   20| 
-   21| resource "aws_acm_certificate_validation" "api" {
-   22|   certificate_arn         = aws_acm_certificate.api.arn
-   23|   validation_record_fqdns = [for o in aws_acm_certificate.api.domain_validation_options : o.resource_record_name]
-   24|   timeouts { create = "15m" }
-   25| }
-   26| 
-   27| resource "aws_acm_certificate_validation" "assets" {
-   28|   certificate_arn         = aws_acm_certificate.assets.arn
-   29|   validation_record_fqdns = [for o in aws_acm_certificate.assets.domain_validation_options : o.resource_record_name]
-   30|   timeouts { create = "15m" }
-   31| }
-```
-
-## `infra/alb.tf`
-
-```hcl
-    1| resource "aws_lb" "api" {
-    2|   name               = "${local.name}-api"
-    3|   load_balancer_type = "application"
-    4|   security_groups    = [aws_security_group.alb.id]
-    5|   subnets            = var.subnet_ids
-    6|   # Default 60s idle timeout: every route answers fast (runs are polled).
-    7|   drop_invalid_header_fields = true
-    8| }
-    9| 
-   10| resource "aws_lb_target_group" "api" {
-   11|   name        = "${local.name}-api"
-   12|   port        = 8080
-   13|   protocol    = "HTTP"
-   14|   target_type = "ip"
-   15|   vpc_id      = local.vpc_id
-   16|   # One task, stopped before its replacement starts: a long drain only
-   17|   # lengthens the 503 window.
-   18|   deregistration_delay = 10
-   19|   health_check {
-   20|     path                = "/healthz"
-   21|     matcher             = "200"
-   22|     interval            = 15
-   23|     timeout             = 5
-   24|     healthy_threshold   = 2
-   25|     unhealthy_threshold = 3
-   26|   }
-   27| }
-   28| 
-   29| resource "aws_lb_listener" "http" {
-   30|   load_balancer_arn = aws_lb.api.arn
-   31|   port              = 80
-   32|   protocol          = "HTTP"
-   33|   default_action {
-   34|     type = "redirect"
-   35|     redirect {
-   36|       protocol    = "HTTPS"
-   37|       port        = "443"
-   38|       status_code = "HTTP_301"
-   39|     }
-   40|   }
-   41| }
-   42| 
-   43| resource "aws_lb_listener" "https" {
-   44|   load_balancer_arn = aws_lb.api.arn
-   45|   port              = 443
-   46|   protocol          = "HTTPS"
-   47|   ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
-   48|   certificate_arn   = aws_acm_certificate_validation.api.certificate_arn
-   49|   default_action {
-   50|     type             = "forward"
-   51|     target_group_arn = aws_lb_target_group.api.arn
-   52|   }
-   53| }
 ```
