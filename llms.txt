@@ -1,6 +1,8 @@
-# synthetic-electorate-toy
+# simulacra-americana
 
 ## Summary (the README's opening section, verbatim)
+
+Live at https://simulacraamericana.com
 
 Developed in a private repository from September 2026; this is a snapshot of main as of 20 November 2026.
 
@@ -16,46 +18,46 @@ than known.
 
 Read `VALIDITY.md` for what the system can and cannot claim.
 
-Generated from commit `6a200effe03e` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `4f68c2b917aa` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 
 ## Start here
 
-- [README](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/README.md): overview
-- [File map](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/MAP.md): all 1113 files with size, line count, description, and which digest part holds each one
-- [Commit history](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/HISTORY.md): 11 commit(s)
+- [README](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/README.md): overview
+- [File map](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/MAP.md): all 1113 files with size, line count, description, and which digest part holds each one
+- [Commit history](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/HISTORY.md): 12 commit(s)
 
 ## Documentation
 
-- [AGENTS.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/AGENTS.md)
-- [CONTEXT.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/CONTEXT.md)
-- [DISCLOSURES.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/DISCLOSURES.md)
-- [EVAL.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/EVAL.md)
-- [METHOD.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/METHOD.md)
-- [VALIDITY.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/VALIDITY.md)
-- [data/1920/PROVENANCE.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/data/1920/PROVENANCE.md)
-- [docs/DEPLOY.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/docs/DEPLOY.md)
-- [docs/harness/README.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/docs/harness/README.md)
+- [AGENTS.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/AGENTS.md)
+- [CONTEXT.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/CONTEXT.md)
+- [DISCLOSURES.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/DISCLOSURES.md)
+- [EVAL.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/EVAL.md)
+- [METHOD.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/METHOD.md)
+- [VALIDITY.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/VALIDITY.md)
+- [data/1920/PROVENANCE.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/data/1920/PROVENANCE.md)
+- [docs/DEPLOY.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/docs/DEPLOY.md)
+- [docs/harness/README.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/docs/harness/README.md)
 
-## Full source text (1,808,997 characters, about 452,249 tokens, in 17 part(s))
+## Full source text (1,809,026 characters, about 452,256 tokens, in 17 part(s))
 
-- [llms/code-1.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/code-1.md): 10 files, `.dockerignore` to `Dockerfile` (102,167 characters)
-- [llms/code-2.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/code-2.md): 9 files, `EVAL.md` to `docs/DEPLOY.md` (109,875 characters)
-- [llms/code-3.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/code-3.md): 24 files, `docs/harness/README.md` to `requirements.lock` (75,472 characters)
-- [llms/code-4.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/code-4.md): 5 files, `scripts/harness/build_corpus.py` to `scripts/harness/build_population_mid.py` (119,537 characters)
-- [llms/code-5.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/code-5.md): 11 files, `scripts/harness/build_population_modern.py` to `scripts/harness/sessions-report.py` (115,728 characters)
-- [llms/code-6.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/code-6.md): 18 files, `scripts/llms_digest.py` to `simharness/__init__.py` (116,785 characters)
-- [llms/code-7.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/code-7.md): 5 files, `simharness/agent.py` to `simharness/aggregate.py` (99,696 characters)
-- [llms/code-8.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/code-8.md): 6 files, `simharness/backbone.py` to `simharness/evaluate.py` (109,858 characters)
-- [llms/code-9.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/code-9.md): 5 files, `simharness/evidence.py` to `simharness/paired.py` (109,408 characters)
-- [llms/code-10.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/code-10.md): 6 files, `simharness/pipeline.py` to `simharness/run.py` (118,920 characters)
-- [llms/code-11.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/code-11.md): 12 files, `simharness/scenario.py` to `src/lib/robot/blast.test.ts` (113,730 characters)
-- [llms/code-12.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/code-12.md): 20 files, `src/lib/robot/blast.ts` to `src/lib/simulacra/KindChips.svelte` (117,802 characters)
-- [llms/code-13.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/code-13.md): 14 files, `src/lib/simulacra/MiniMap.svelte` to `src/lib/simulacra/api.test.ts` (116,358 characters)
-- [llms/code-14.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/code-14.md): 13 files, `src/lib/simulacra/api.ts` to `src/lib/simulacra/places.ts` (109,732 characters)
-- [llms/code-15.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/code-15.md): 10 files, `src/lib/simulacra/runs.test.ts` to `src/lib/simulacra/state.test.ts` (112,475 characters)
-- [llms/code-16.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/code-16.md): 16 files, `src/lib/simulacra/state.ts` to `tests/test_agent.py` (117,880 characters)
-- [llms/code-17.md](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/code-17.md): 12 files, `tests/test_agents.py` to `vite.config.ts` (43,574 characters)
+- [llms/code-1.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-1.md): 10 files, `.dockerignore` to `Dockerfile` (102,167 characters)
+- [llms/code-2.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-2.md): 9 files, `EVAL.md` to `docs/DEPLOY.md` (109,929 characters)
+- [llms/code-3.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-3.md): 24 files, `docs/harness/README.md` to `requirements.lock` (75,472 characters)
+- [llms/code-4.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-4.md): 5 files, `scripts/harness/build_corpus.py` to `scripts/harness/build_population_mid.py` (119,537 characters)
+- [llms/code-5.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-5.md): 11 files, `scripts/harness/build_population_modern.py` to `scripts/harness/sessions-report.py` (115,728 characters)
+- [llms/code-6.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-6.md): 18 files, `scripts/llms_digest.py` to `simharness/__init__.py` (116,785 characters)
+- [llms/code-7.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-7.md): 5 files, `simharness/agent.py` to `simharness/aggregate.py` (99,696 characters)
+- [llms/code-8.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-8.md): 6 files, `simharness/backbone.py` to `simharness/evaluate.py` (109,858 characters)
+- [llms/code-9.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-9.md): 5 files, `simharness/evidence.py` to `simharness/paired.py` (109,408 characters)
+- [llms/code-10.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-10.md): 6 files, `simharness/pipeline.py` to `simharness/run.py` (118,920 characters)
+- [llms/code-11.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-11.md): 12 files, `simharness/scenario.py` to `src/lib/robot/blast.test.ts` (113,705 characters)
+- [llms/code-12.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-12.md): 20 files, `src/lib/robot/blast.ts` to `src/lib/simulacra/KindChips.svelte` (117,802 characters)
+- [llms/code-13.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-13.md): 14 files, `src/lib/simulacra/MiniMap.svelte` to `src/lib/simulacra/api.test.ts` (116,358 characters)
+- [llms/code-14.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-14.md): 13 files, `src/lib/simulacra/api.ts` to `src/lib/simulacra/places.ts` (109,732 characters)
+- [llms/code-15.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-15.md): 10 files, `src/lib/simulacra/runs.test.ts` to `src/lib/simulacra/state.test.ts` (112,475 characters)
+- [llms/code-16.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-16.md): 16 files, `src/lib/simulacra/state.ts` to `tests/test_agent.py` (117,880 characters)
+- [llms/code-17.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-17.md): 12 files, `tests/test_agents.py` to `vite.config.ts` (43,574 characters)
 
 ## Data
 
-- [Data samples](https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/llms/data-samples.md): 904 data files in 8 folder(s), one sample each
+- [Data samples](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/data-samples.md): 904 data files in 8 folder(s), one sample each

@@ -1,10 +1,11 @@
-# synthetic-electorate-toy: commit history
+# simulacra-americana: commit history
 
-Generated from commit `6a200effe03e` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `4f68c2b917aa` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 
-11 commit(s), verbatim from `git log` (commits that only regenerate this digest are left out):
+12 commit(s), verbatim from `git log` (commits that only regenerate this digest are left out):
 
 ```
+4f68c2b  2026-11-20  Cameron Feather  README: link the live site; point links at the renamed repo
 6a200ef  2026-11-20  Cameron Feather  Ship the public 1920 inputs, so the 1920 results rerun from the repo
 e5e4f20  2026-11-20  Cameron Feather  README: drop "(toy example)" from the title
 4a07108  2026-11-20  Cameron Feather  Fence the reader's words and web text as data in every pass

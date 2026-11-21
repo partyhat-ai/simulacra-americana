@@ -1,10 +1,10 @@
-# synthetic-electorate-toy: file map
+# simulacra-americana: file map
 
-Generated from commit `6a200effe03e` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `4f68c2b917aa` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 
 1113 tracked files. 196 are reproduced in full in the `code-N.md` parts; the rest are listed with the reason they are not.
 
-Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/ (append the path to fetch the raw file).
+Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/ (append the path to fetch the raw file).
 
 | File | Bytes | Lines | Description | In digest |
 |---|---|---|---|---|
@@ -21,7 +21,7 @@ Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/sy
 | `EVAL.md` | 19,042 | 342 | EVAL: the 1920 prototype | code-2.md |
 | `LICENSE` | 1,065 | 21 |  | code-2.md |
 | `METHOD.md` | 24,001 | 489 | Simulacra Americana: how the harness works | code-2.md |
-| `README.md` | 2,073 | 49 | Synthetic voters | code-2.md |
+| `README.md` | 2,113 | 51 | Synthetic voters | code-2.md |
 | `VALIDITY.md` | 25,202 | 341 | Validity: goals, contamination, leakage and historical bias | code-2.md |
 | `biome.json` | 775 | 40 |  | code-2.md |
 | `data/1920/PROVENANCE.md` | 7,119 | 123 | 1920 inputs: provenance and licences | code-2.md |
@@ -115,7 +115,7 @@ Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/sy
 | `simharness/whatifs.py` | 12,364 | 236 | The what-ifs: each edits one layer of the calibrated world and names its | code-11.md |
 | `simharness/world.py` | 16,346 | 224 | Staging a compiled what-if's world, and auditing whether the voices lived in it (D33). | code-11.md |
 | `src/app.d.ts` | 49 | 4 |  | code-11.md |
-| `src/app.html` | 6,907 | 65 | The four weights the page renders, fetched at parse time to avoid a late font swap. --> | code-11.md |
+| `src/app.html` | 6,882 | 65 | The four weights the page renders, fetched at parse time to avoid a late font swap. --> | code-11.md |
 | `src/app.html.test.ts` | 1,825 | 43 | The plain-text copy of the page in app.html is for crawlers and agents only. It must never be | code-11.md |
 | `src/lib/robot/RobotFrame.svelte` | 4,404 | 125 | The narrator robot, framed into the page. Mount it inside the element the | code-11.md |
 | `src/lib/robot/assets.ts` | 757 | 19 | Where the robot's model, paint textures and the candidates' portraits live | code-11.md |

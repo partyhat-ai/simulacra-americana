@@ -1,6 +1,6 @@
-# synthetic-electorate-toy: source and docs, part 11 of 17
+# simulacra-americana: source and docs, part 11 of 17
 
-Generated from commit `6a200effe03e` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `4f68c2b917aa` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 Files `simharness/scenario.py` to `src/lib/robot/blast.test.ts`. Lines are numbered as in the repository.
 
 ## `simharness/scenario.py`
@@ -1712,7 +1712,7 @@ Files `simharness/scenario.py` to `src/lib/robot/blast.test.ts`. Lines are numbe
    23|     <meta name="twitter:card" content="summary" />
    24|     <meta name="twitter:title" content="Simulacra Americana" />
    25|     <meta name="twitter:description" content="Every American presidential election from 1789 to 2024, replayed as it happened and rerun with one thing changed: who could vote, who lived where, what people cared about, or who was on the ballot." />
-   26|     <script type="application/ld+json">{"@context": "https://schema.org", "@graph": [{"@type": "WebApplication", "@id": "https://simulacraamericana.com/#app", "name": "Simulacra Americana", "url": "https://simulacraamericana.com/", "description": "Every American presidential election from 1789 to 2024, replayed as it happened and rerun with one thing changed: who could vote, who lived where, what people cared about, or who was on the ballot.", "applicationCategory": "EducationalApplication", "operatingSystem": "Web browser", "inLanguage": "en", "isAccessibleForFree": true, "creator": {"@type": "Person", "@id": "https://cameronfeather.com/#cameron", "name": "Cameron Feather", "url": "https://cameronfeather.com"}, "about": [{"@type": "Thing", "name": "United States presidential elections"}, {"@type": "Thing", "name": "Counterfactual simulation"}], "isBasedOn": {"@id": "https://github.com/partyhat-ai/synthetic-electorate-toy"}}, {"@type": "SoftwareSourceCode", "@id": "https://github.com/partyhat-ai/synthetic-electorate-toy", "name": "synthetic-electorate-toy", "codeRepository": "https://github.com/partyhat-ai/synthetic-electorate-toy", "programmingLanguage": ["TypeScript", "Python", "Svelte"], "author": {"@id": "https://cameronfeather.com/#cameron"}}]}</script>
+   26|     <script type="application/ld+json">{"@context": "https://schema.org", "@graph": [{"@type": "WebApplication", "@id": "https://simulacraamericana.com/#app", "name": "Simulacra Americana", "url": "https://simulacraamericana.com/", "description": "Every American presidential election from 1789 to 2024, replayed as it happened and rerun with one thing changed: who could vote, who lived where, what people cared about, or who was on the ballot.", "applicationCategory": "EducationalApplication", "operatingSystem": "Web browser", "inLanguage": "en", "isAccessibleForFree": true, "creator": {"@type": "Person", "@id": "https://cameronfeather.com/#cameron", "name": "Cameron Feather", "url": "https://cameronfeather.com"}, "about": [{"@type": "Thing", "name": "United States presidential elections"}, {"@type": "Thing", "name": "Counterfactual simulation"}], "isBasedOn": {"@id": "https://github.com/partyhat-ai/simulacra-americana"}}, {"@type": "SoftwareSourceCode", "@id": "https://github.com/partyhat-ai/simulacra-americana", "name": "synthetic-electorate-toy", "codeRepository": "https://github.com/partyhat-ai/simulacra-americana", "programmingLanguage": ["TypeScript", "Python", "Svelte"], "author": {"@id": "https://cameronfeather.com/#cameron"}}]}</script>
    27|     <style>
    28|       @font-face { font-family: 'Geist'; src: url('/fonts/Geist-Regular.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: swap; }
    29|       @font-face { font-family: 'Geist'; src: url('/fonts/Geist-SemiBold.woff2') format('woff2'); font-weight: 600; font-style: normal; font-display: swap; }
@@ -1748,7 +1748,7 @@ Files `simharness/scenario.py` to `src/lib/robot/blast.test.ts`. Lines are numbe
    59|         <li>Turnout RMSE 2.9 points (persistence 16.5); Spearman rank correlation 0.92.</li>
    60|         <li>The checks it fails are published alongside the ones it passes.</li>
    61|       </ul>
-   62|       <p><a href="https://github.com/partyhat-ai/synthetic-electorate-toy/blob/main/EVAL.md">Evaluation, failures included</a> · <a href="https://github.com/partyhat-ai/synthetic-electorate-toy">Code</a> · <a href="/llms.txt">Plain-text overview</a> · Built by <a href="https://cameronfeather.com">Cameron Feather</a></p>
+   62|       <p><a href="https://github.com/partyhat-ai/simulacra-americana/blob/main/EVAL.md">Evaluation, failures included</a> · <a href="https://github.com/partyhat-ai/simulacra-americana">Code</a> · <a href="/llms.txt">Plain-text overview</a> · Built by <a href="https://cameronfeather.com">Cameron Feather</a></p>
    63|     </article>
    64|   </body>
    65| </html>

@@ -1,6 +1,6 @@
-# synthetic-electorate-toy: source and docs, part 2 of 17
+# simulacra-americana: source and docs, part 2 of 17
 
-Generated from commit `6a200effe03e` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `4f68c2b917aa` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 Files `EVAL.md` to `docs/DEPLOY.md`. Lines are numbered as in the repository.
 
 ## `EVAL.md`
@@ -875,53 +875,55 @@ Files `EVAL.md` to `docs/DEPLOY.md`. Lines are numbered as in the repository.
 ```markdown
     1| # Synthetic voters
     2| 
-    3| Developed in a private repository from September 2026; this is a snapshot of main as of 20 November 2026.
+    3| Live at https://simulacraamericana.com
     4| 
-    5| A page that replays American presidential elections and reruns them with one
-    6| thing changed: who could vote, who lived where, what people cared about, or
-    7| who was on the ballot.
-    8| 
-    9| Every election opens as it happened. A calibrated statistical backbone decides
-   10| the counts and reproduces the certified returns. Synthetic voters, interviewed
-   11| in both worlds, supply only within-person changes and the quotes. Every result
-   12| carries a confidence tier, and `DISCLOSURES.md` records what is assumed rather
-   13| than known.
-   14| 
-   15| Read `VALIDITY.md` for what the system can and cannot claim.
+    5| Developed in a private repository from September 2026; this is a snapshot of main as of 20 November 2026.
+    6| 
+    7| A page that replays American presidential elections and reruns them with one
+    8| thing changed: who could vote, who lived where, what people cared about, or
+    9| who was on the ballot.
+   10| 
+   11| Every election opens as it happened. A calibrated statistical backbone decides
+   12| the counts and reproduces the certified returns. Synthetic voters, interviewed
+   13| in both worlds, supply only within-person changes and the quotes. Every result
+   14| carries a confidence tier, and `DISCLOSURES.md` records what is assumed rather
+   15| than known.
    16| 
-   17| ## Layout
+   17| Read `VALIDITY.md` for what the system can and cannot claim.
    18| 
-   19| | Path | What |
-   20| |---|---|
-   21| | `src/` | The SvelteKit page (TypeScript, Svelte 5) and the robot narrator (`src/lib/robot`) |
-   22| | `serve/` | The API server: serves the published per-year bundles under `/api/simulacra` |
-   23| | `simharness/` | The simulation harness (Python): backbone, interviews, what-ifs, evaluation |
-   24| | `tests/` | Harness tests (pytest). Page and server tests sit next to their code (vitest) |
-   25| | `configs/`, `profiles/`, `whatifs/` | Run configs, per-election profiles, compiled what-ifs and their evidence |
-   26| | `METHOD.md`, `EVAL.md` | How the backbone works, and the 1920 prototype's results, failures included |
-   27| | `VALIDITY.md`, `DISCLOSURES.md` | What the system can claim, and the log of every known flaw |
-   28| | `docs/harness/README.md` | Running the harness: stages, typed what-ifs, interview runs |
-   29| 
-   30| ## Run it
+   19| ## Layout
+   20| 
+   21| | Path | What |
+   22| |---|---|
+   23| | `src/` | The SvelteKit page (TypeScript, Svelte 5) and the robot narrator (`src/lib/robot`) |
+   24| | `serve/` | The API server: serves the published per-year bundles under `/api/simulacra` |
+   25| | `simharness/` | The simulation harness (Python): backbone, interviews, what-ifs, evaluation |
+   26| | `tests/` | Harness tests (pytest). Page and server tests sit next to their code (vitest) |
+   27| | `configs/`, `profiles/`, `whatifs/` | Run configs, per-election profiles, compiled what-ifs and their evidence |
+   28| | `METHOD.md`, `EVAL.md` | How the backbone works, and the 1920 prototype's results, failures included |
+   29| | `VALIDITY.md`, `DISCLOSURES.md` | What the system can claim, and the log of every known flaw |
+   30| | `docs/harness/README.md` | Running the harness: stages, typed what-ifs, interview runs |
    31| 
-   32| ```sh
-   33| pnpm install
-   34| pnpm serve          # API on :8787
-   35| pnpm dev            # page on :5173, proxies /api to :8787
-   36| ```
-   37| 
-   38| `?sample=1` runs the page on an invented stand-in model, with no server, and
-   39| `?year=1896` opens a given year. `pnpm tsx scripts/model-check.ts` prints the
-   40| stand-in model's outcome for every story what-if.
-   41| 
-   42| ## Checks
+   32| ## Run it
+   33| 
+   34| ```sh
+   35| pnpm install
+   36| pnpm serve          # API on :8787
+   37| pnpm dev            # page on :5173, proxies /api to :8787
+   38| ```
+   39| 
+   40| `?sample=1` runs the page on an invented stand-in model, with no server, and
+   41| `?year=1896` opens a given year. `pnpm tsx scripts/model-check.ts` prints the
+   42| stand-in model's outcome for every story what-if.
    43| 
-   44| ```sh
-   45| pnpm lint && pnpm check && pnpm size && pnpm test
-   46| python -m pip install -e '.[test]' && python -m pytest -q
-   47| ```
-   48| 
-   49| The rules every change follows are in `AGENTS.md`, and the vocabulary is in `CONTEXT.md`.
+   44| ## Checks
+   45| 
+   46| ```sh
+   47| pnpm lint && pnpm check && pnpm size && pnpm test
+   48| python -m pip install -e '.[test]' && python -m pytest -q
+   49| ```
+   50| 
+   51| The rules every change follows are in `AGENTS.md`, and the vocabulary is in `CONTEXT.md`.
 ```
 
 ## `VALIDITY.md`
