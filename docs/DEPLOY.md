@@ -71,8 +71,9 @@ Steps marked (production) change production. Review the plan or dry-run output b
    --platform linux/arm64 --push`) or from the workflow's build step.
 6. Put the secret value, which never goes through Terraform:
    `aws secretsmanager put-secret-value --secret-id simulacra/prod --secret-string '{"ANTHROPIC_API_KEY":"…","SIMULACRA_ACCESS_KEYS":"{}"}'`.
-   Both fields must exist or the task can't start; `"{}"` means no one can
-   queue new text yet (see "Access keys").
+   Both fields must exist or the task can't start; `"{}"` means no keys yet,
+   so ledger lines carry no key names. Visitors can still queue text, within
+   the dollar caps (see "Access keys").
    Terraform creates the empty secret in step 7. If you want the value in
    place before the task first starts, run
    `terraform apply -target=aws_secretsmanager_secret.prod` first.
