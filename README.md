@@ -1,4 +1,4 @@
-# Synthetic voters (toy example)
+# Synthetic voters
 
 Developed in a private repository from September 2026; this is a snapshot of main as of 20 November 2026.
 
