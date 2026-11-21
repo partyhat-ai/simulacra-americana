@@ -41,6 +41,9 @@ is `src/lib/simulacra/schemas.ts`.
 | `simharness/world.py` | The staging pass for a compiled what-if's world, and the audit of the interviews' reasoning (DISCLOSURES D33) |
 | `simharness/evidence.py` | Historical evidence: web-search research, grounded extraction, source tiers, agreement, blend, confidence tiers |
 | `simharness/intake.py` | Typed what-if intake: compile → research → register → run → `serve/bundles/`; the router's queue |
+| `simharness/agent.py` | The research agent: the same stages as tools a model chooses, behind a permission gate; replay and approval |
+| `simharness/trace.py` | Step-level traces of the agent (`sessions/traces/`), their summaries and retention |
+| `simharness/agent_eval.py` | Golden tasks for the agent from the compiled what-ifs, scored field by field |
 | `simharness/profiles.py` | Loads one profile per election (names, blinded descriptors, label letters, ballot wording, sources): 1920 and 1924 in code, the other 58 from `profiles/<year>.json` |
 | `simharness/run.py` | The command line (`python3 -m simharness.run <stage>`) |
 | `simharness/pipeline.py` | The stages: backbone, plan, ask, analyze, verify, dryrun, evaluate (`Run`) |
@@ -115,6 +118,47 @@ How a typed what-if is modelled:
    confidence"), with the reasons. The tier reaches the page as
    `confidenceTier`, `confidenceFlags` and `confidenceReasons`, and as a
    sentence in the summary.
+
+### The research agent
+
+`simharness/agent.py` runs the same stages as tools, in an order a model chooses:
+it can compile again with a note when a reading is wrong, research again with
+sharper questions when the evidence is thin, take an existing what-if, or stop
+before any interview. It is off unless asked for.
+
+```sh
+$H -m simharness.run whatif --agent --text "..." --year 1920                 # held for approval (--publish ask)
+$H -m simharness.run whatif --agent --publish gate --text "..." --year 1920  # live if the bundle's checks pass
+$H -m simharness.run whatif --agent --dry-run --text "..." --year 1920       # no writes, interviews or publishing
+$H -m simharness.run trace                                                    # recent traces, and what is held
+$H -m simharness.run trace --id <trace>                                       # one trace: path, refusals, dollars
+$H -m simharness.run approve --id <trace>                                     # put a held bundle live
+$H -m simharness.run replay --id <trace> --model claude-sonnet-5-5            # recorded tool results, new model
+$H -m simharness.run agent-eval --year 1920 --limit 3                         # golden tasks, dry run (~$1-3 each)
+```
+
+Permissions are enforced in code, never by the prompt. Each tool has a tier (read,
+spend, write, publish), and the gate checks preconditions before it runs:
+- `register` needs a spec that passed `validate` unchanged since, plus evidence and,
+  for interviewed changes, a staged world.
+- `use_existing` attaches the reader's words only to the what-if the compiler matched.
+- `run_interviews` prices the uncached requests first, and refuses to run if the
+  typical cost exceeds what the text has left.
+- `publish` puts a bundle live only if it passes `bundle_checks` (the new what-if is
+  in it, no served result is missing, and the unchanged rerun is identical to the
+  served one) and the policy is `gate`. Otherwise the bundle is held in
+  `sessions/pending-publish/` for `approve`.
+
+The reader's words and anything from the web reach the model only as data. Raw
+pages never do: research returns graded findings that cite returned sources.
+Every model turn and tool call (arguments, decision, full result, dollars, time)
+is written to `sessions/traces/<id>.jsonl`. Traces are kept as long as the session
+logs (`SIMULACRA_RETAIN_DAYS`). A replay re-serves a trace's recorded tool results
+to a new model or prompt and compares the paths.
+
+The queue worker uses the agent when `SIMULACRA_AGENT=1`. `SIMULACRA_AGENT_PUBLISH`
+is `gate` by default; with `ask`, every new what-if waits for approval, and the
+waiting page is told it will go live once reviewed.
 
 With `SIMULACRA_LOG=1`, the server (`pnpm serve`) logs requests to `sessions/`, queues unknown text,
 and reloads a changed bundle without a restart. `SIMULACRA_AUTORUN=configs/live-1920.json`

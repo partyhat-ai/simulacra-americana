@@ -113,6 +113,10 @@ class Budget:
         if self.ceiling is not None and self.spent >= self.ceiling:
             raise SystemExit(OVER_CAP)
 
+    def remaining(self) -> float:
+        """Dollars this text may still spend (infinite without a ceiling)."""
+        return float('inf') if self.ceiling is None else max(self.ceiling - self.spent, 0.0)
+
 
 # Typical output tokens by call (measured: a compile answer ran ~1,300 tokens on Sonnet 5.5).
 TYPICAL_OUT = {'compile': 1600, 'compile-retry': 1600, 'extract': 3000, 'stage': 2500}
@@ -149,17 +153,21 @@ def _with_effort(req: dict, effort: str, fast: bool = False) -> dict:
     return out | {'speed': 'fast'} if fast and llm.fast_ok(req['model']) else out
 
 
-def compile_text(text: str, cfg: RunConfig, budget: Budget) -> dict:
+def compile_text(text: str, cfg: RunConfig, budget: Budget, note: str | None = None, registry: dict | None = None) -> dict:
+    """The reader's words → a compiled answer. note: guidance for this compile (the research agent's,
+    agent.py); registry: the what-ifs it may match (default every one)."""
     from . import profiles
     rc, prof = cfg.research, profiles.get(cfg.election)
+    registry = REGISTRY if registry is None else registry
     mt = max(3000, rc.pass_max_tokens)
-    raw = _structured(_with_effort(scenario.compile_request(text, REGISTRY, cfg.context_cutoff, rc.compile_model, prof=prof),
+    raw = _structured(_with_effort(scenario.compile_request(text, registry, cfg.context_cutoff, rc.compile_model, note, prof),
                                    rc.compile_effort, rc.fast), mt, budget, 'compile', text)
     bad = scenario.naming_violations(raw, cfg.election) if raw.get('modelable') else []
     if bad:
-        note = ('These sentences name a nominee, a party or the President, which the blinded briefs cannot show. '
-                'Rewrite them with the descriptions given: ' + json.dumps(bad))
-        raw = _structured(_with_effort(scenario.compile_request(text, REGISTRY, cfg.context_cutoff, rc.compile_model, note, prof),
+        retry = ('These sentences name a nominee, a party or the President, which the blinded briefs cannot show. '
+                 'Rewrite them with the descriptions given: ' + json.dumps(bad))
+        raw = _structured(_with_effort(scenario.compile_request(text, registry, cfg.context_cutoff, rc.compile_model,
+                                                                f'{note}\n\n{retry}' if note else retry, prof),
                                        rc.compile_effort, rc.fast), mt, budget, 'compile-retry', text)
     return raw
 
@@ -268,36 +276,62 @@ def _add_to_config(config_path: Path, key: str):
         config_path.write_text(json.dumps(raw, indent=2) + '\n')
 
 
+def prepare_run(config_path: Path):
+    """The run for a config, its backbone fitted and its requests planned (free: no model calls).
+    Returns (run, plan); plan['estimate'] prices every request before any is sent."""
+    from .run import Run
+    run = Run(RunConfig.load(config_path))
+    if not (run.dir / 'fit.pkl').exists():
+        run.backbone()
+    return run, run.plan()
+
+
+def interview(run, budget: Budget, progress: Progress | None = None):
+    """ask → refine → analyze for a planned run: the paid stages."""
+    progress = progress or Progress(None)
+    progress.step(f'Interviewing voters in your {run.cfg.election}, with the real one as a control.')
+    asked = run.ask()
+    budget.add(asked['dollars'], 'ask', None, record=False)  # ask records its own spend
+    if run.cfg.research.audit_model or run.cfg.agents.escalate_model:
+        progress.step('Checking that each voter took the change as true.')
+        refined = run.refine()
+        budget.add(refined['dollars'], 'refine', None, record=False)  # audit and ask record their own spend
+    progress.step('Comparing the interviews with the historical record.')
+    run.analyze()
+
+
+def build_bundle(run, progress: Progress | None = None) -> Path:
+    """The run's bundle in its own folder (runs/<id>/published/<year>.json). Nothing is served yet."""
+    (progress or Progress(None)).step(f'Rerunning the {run.cfg.election} election 100 times.')
+    run.publish()
+    return run.dir / 'published' / f'{run.cfg.election}.json'
+
+
+def serve_bundle(run_id: str, src: Path, year: int):
+    """Put a built bundle live: the router serves serve/bundles/<year>.json."""
+    SERVE_BUNDLES.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, SERVE_BUNDLES / f'{year}.json')
+    (SERVE_BUNDLES / 'RUN_ID').write_text(run_id + '\n')
+
+
 def run_pipeline(config_path: Path, budget: Budget, publish_only: bool = False, progress: Progress | None = None) -> dict:
     from .run import Run
     progress = progress or Progress(None)
-    run = Run(RunConfig.load(config_path))
-    if not publish_only:
-        if not (run.dir / 'fit.pkl').exists():
-            run.backbone()
-        run.plan()
-        progress.step(f'Interviewing voters in your {run.cfg.election}, with the real one as a control.')
-        asked = run.ask()
-        budget.add(asked['dollars'], 'ask', None, record=False)  # ask records its own spend
-        if run.cfg.research.audit_model or run.cfg.agents.escalate_model:
-            progress.step('Checking that each voter took the change as true.')
-            refined = run.refine()
-            budget.add(refined['dollars'], 'refine', None, record=False)  # audit and ask record their own spend
-        progress.step('Comparing the interviews with the historical record.')
-        run.analyze()
-    progress.step(f'Rerunning the {run.cfg.election} election 100 times.')
-    run.publish()
-    SERVE_BUNDLES.mkdir(parents=True, exist_ok=True)
-    src = run.dir / 'published' / f'{run.cfg.election}.json'
-    shutil.copyfile(src, SERVE_BUNDLES / f'{run.cfg.election}.json')
-    (SERVE_BUNDLES / 'RUN_ID').write_text(run.id + '\n')
+    if publish_only:
+        run = Run(RunConfig.load(config_path))
+    else:
+        run, _ = prepare_run(config_path)
+        interview(run, budget, progress)
+    src = build_bundle(run, progress)
+    serve_bundle(run.id, src, run.cfg.election)
     return {'run': run.id, 'bundle': str(src)}
 
 
-def report(year: int, key: str) -> dict:
-    b = json.loads((SERVE_BUNDLES / f'{year}.json').read_text())
+def report(year: int, key: str, bundle: Path | None = None, registry: dict | None = None) -> dict:
+    """What the page will say about one what-if, from the served bundle (or another one)."""
+    b = json.loads((bundle or SERVE_BUNDLES / f'{year}.json').read_text())
     r = b['runs'].get(key) or {}
-    return {'key': key, 'label': REGISTRY[key]['label'], 'summary': r.get('summary'), 'ev': r.get('ev'),
+    return {'key': key, 'label': (REGISTRY if registry is None else registry)[key]['label'], 'summary': r.get('summary'), 'ev': r.get('ev'),
             'confidence': r.get('confidenceTier'), 'flags': r.get('confidenceFlags'),
             'evidence': [{'strength': e['strength'], 'agreement': e['agreement'], 'detail': e.get('agreementDetail')}
                          for e in r.get('evidence', [])]}
@@ -311,7 +345,20 @@ def left(ledger: Path | None = None, daily: float | None = None, monthly: float 
     return max(rest, 0.0)
 
 
+def agent_mode() -> str | None:
+    """SIMULACRA_AGENT=1 hands typed text to the research agent (agent.py) instead of the fixed
+    stages below; SIMULACRA_AGENT_PUBLISH (gate, the default for the worker, or ask) says whether a
+    bundle that passes its checks goes live by itself or waits for `run approve`."""
+    if os.environ.get('SIMULACRA_AGENT') not in ('1', 'true', 'yes'):
+        return None
+    return os.environ.get('SIMULACRA_AGENT_PUBLISH') or 'gate'
+
+
 def whatif(text: str, config_path: str | Path, refresh: bool = False, ceiling: float | None = None) -> dict:
+    publish = agent_mode()
+    if publish:
+        from . import agent
+        return agent.run(text, config_path, ceiling, agent.Policy(publish=publish))
     config_path = Path(config_path)
     cfg = RunConfig.load(config_path)
     budget = Budget(ceiling)
@@ -406,6 +453,8 @@ def process_queue(config_path: str | Path, limit: int = 3) -> list[dict]:
     Each is modelled in its own year's live config, its spend recorded against the key that queued it, if any.
     A text that has failed MAX_ATTEMPTS times is given up (queue-dead.jsonl) instead of retried."""
     SESSIONS.mkdir(exist_ok=True)
+    from . import trace
+    trace.prune(SESSIONS / 'traces')  # traces hold the reader's words: kept as long as the session logs
     if LOCK.exists() and _pid_alive(int(LOCK.read_text().strip() or 0)):
         return [{'status': 'busy', 'pid': LOCK.read_text().strip()}]
     LOCK.write_text(str(os.getpid()))

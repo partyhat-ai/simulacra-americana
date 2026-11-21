@@ -14,6 +14,9 @@ Stages (each writes into runs/<run id>/ and can be rerun alone):
   dryrun     free: backbone (if needed) → verify → plan, with brief samples and counts
              (`python -m simharness.run dryrun --year 1880`)
   all        backbone → plan → ask → analyze → publish → evaluate
+
+Typed what-ifs (intake.py, agent.py): research, stage, whatif [--agent], and for the
+research agent: trace, replay, approve, agent-eval (see docs/harness/README.md).
 """
 from __future__ import annotations
 
@@ -33,7 +36,7 @@ __all__ = ['CONF', 'KIND_ORDER', 'LEGISLATURE_EV', 'SOURCES', 'Run', 'briefs_rec
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument('stage', choices=['backbone', 'plan', 'ask', 'refine', 'analyze', 'publish', 'evaluate', 'verify', 'dryrun', 'all',
-                                      'id', 'research', 'whatif', 'stage'])
+                                      'id', 'research', 'whatif', 'stage', 'trace', 'replay', 'approve', 'agent-eval'])
     ap.add_argument('--config', default=str(ROOT / 'configs/prototype-1920.json'))
     ap.add_argument('--year', type=int, help='use configs/live-<year>.json (instead of --config)')
     ap.add_argument('--samples', type=int, default=1, help='dryrun: briefs to print per slice and per what-if')
@@ -45,9 +48,33 @@ def main(argv=None):
     ap.add_argument('--refresh', action='store_true', help='research again even if evidence is saved')
     ap.add_argument('--key', help='research: only this what-if')
     ap.add_argument('--reextract', action='store_true', help='research: extract findings again from the saved notes (no search)')
+    ap.add_argument('--agent', action='store_true', help='whatif: the research agent (agent.py) chooses the stages')
+    ap.add_argument('--publish', choices=['ask', 'gate', 'never'], default='ask',
+                    help='whatif --agent: hold the bundle for approve (ask), put it live if its checks pass (gate), or never')
+    ap.add_argument('--dry-run', action='store_true', help='whatif --agent: no writes, interviews or publishing')
+    ap.add_argument('--ceiling', type=float, help='whatif --agent, agent-eval: the most one text may spend, in dollars')
+    ap.add_argument('--model', help='whatif --agent, replay, agent-eval: the agent\'s model (default: the compile model)')
+    ap.add_argument('--id', help='trace, replay, approve: the trace id')
+    ap.add_argument('--force', action='store_true', help='approve: even if the bundle fails its checks now')
     args = ap.parse_args(argv)
     if args.year:
         args.config = str(ROOT / f'configs/live-{args.year}.json')
+    if args.stage in ('trace', 'replay', 'approve', 'agent-eval') or (args.stage == 'whatif' and args.agent):
+        from . import agent, agent_eval, trace
+        if args.stage == 'trace':
+            out = trace.summary(trace.load(args.id)) | {'id': args.id} if args.id else \
+                {'recent': trace.recent(), 'held': agent.pending()}
+        elif args.stage == 'replay':
+            out = agent.replay(args.id or ap.error('replay needs --id'), args.model)
+        elif args.stage == 'approve':
+            out = agent.approve(args.id or ap.error('approve needs --id'), args.force)
+        elif args.stage == 'agent-eval':
+            out = agent_eval.evaluate(RunConfig.load(args.config).election, args.limit, args.model, args.ceiling or 4.0)
+        else:
+            out = agent.run(args.text or ap.error('whatif --agent needs --text'), args.config, args.ceiling,
+                            agent.Policy(publish=args.publish, dry_run=args.dry_run, model=args.model))
+        print(json.dumps(out, indent=1, default=float))
+        return
     if args.stage in ('research', 'whatif', 'stage'):
         from . import intake
         if args.stage == 'research':

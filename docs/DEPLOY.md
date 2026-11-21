@@ -265,6 +265,12 @@ always fails is billed at most twice and never holds up the texts behind it.
 
 To change a cap, edit its value in `infra/taskdef.json.tftpl` and deploy.
 
+The research agent (`simharness/agent.py`) is off in production. It runs only
+when the task definition sets `SIMULACRA_AGENT=1`. It spends under the same caps
+and `Budget`, and its own model turns are recorded in the ledger as stage `agent`.
+With `SIMULACRA_AGENT_PUBLISH=ask`, nothing it builds goes live until
+`python -m simharness.run approve --id <trace>` is run in a one-off task.
+
 The per-IP limits (`serve/simulacra.ts`, `DEFAULT_LIMITS`): 1,200
 requests per 10 minutes, 120 runs per 10 minutes, and 10 queued texts an
 hour; past the last, POST /runs answers 429. The rate limits read the
