@@ -25,9 +25,9 @@ Certified returns from the Clerk of the House, the Federal Election Commission a
 ## Links
 
 - Site: https://simulacraamericana.com
-- Code: https://github.com/partyhat-ai/synthetic-electorate-toy
-- Evaluation, failures included: https://github.com/partyhat-ai/synthetic-electorate-toy/blob/main/EVAL.md
-- Method: https://github.com/partyhat-ai/synthetic-electorate-toy/blob/main/METHOD.md
-- What it can and can't claim: https://github.com/partyhat-ai/synthetic-electorate-toy/blob/main/VALIDITY.md
-- Known flaws: https://github.com/partyhat-ai/synthetic-electorate-toy/blob/main/DISCLOSURES.md
+- Code: https://github.com/partyhat-ai/simulacra-americana
+- Evaluation, failures included: https://github.com/partyhat-ai/simulacra-americana/blob/main/EVAL.md
+- Method: https://github.com/partyhat-ai/simulacra-americana/blob/main/METHOD.md
+- What it can and can't claim: https://github.com/partyhat-ai/simulacra-americana/blob/main/VALIDITY.md
+- Known flaws: https://github.com/partyhat-ai/simulacra-americana/blob/main/DISCLOSURES.md
 - Built by Cameron Feather: https://cameronfeather.com
