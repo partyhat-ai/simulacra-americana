@@ -1,8 +1,8 @@
 # simulacra-americana: file map
 
-Generated from commit `6f14dc41b9fa` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `61ba45dc3c4c` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 
-1121 tracked files. 196 are reproduced in full in the `code-N.md` parts; the rest are listed with the reason they are not.
+1125 tracked files. 196 are reproduced in full in the `code-N.md` parts; the rest are listed with the reason they are not.
 
 Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/ (append the path to fetch the raw file).
 
@@ -18,7 +18,7 @@ Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/si
 | `CONTEXT.md` | 1,382 | 19 | Vocabulary | code-1.md |
 | `DISCLOSURES.md` | 72,717 | 1,314 | Disclosures: inaccuracies and intellectual-honesty flags | code-1.md |
 | `Dockerfile` | 4,134 | 95 | syntax=docker/dockerfile:1 | code-1.md |
-| `EVAL.md` | 19,332 | 350 | EVAL: the 1920 prototype | code-2.md |
+| `EVAL.md` | 22,061 | 392 | EVAL: the 1920 prototype | code-2.md |
 | `LICENSE` | 1,065 | 21 |  | code-2.md |
 | `METHOD.md` | 24,001 | 489 | Simulacra Americana: how the harness works | code-2.md |
 | `README.md` | 2,113 | 51 | Synthetic voters | code-2.md |
@@ -100,7 +100,7 @@ Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/si
 | `simharness/evidence.py` | 38,028 | 609 | Historical evidence for a what-if: what reliable sources say about how the | code-9.md |
 | `simharness/geo.py` | 3,224 | 52 | States, regions and 1920 electoral votes (and AK, HI, DC for 1960 on). | code-9.md |
 | `simharness/intake.py` | 28,129 | 546 | Typed what-if intake: a reader's words → a what-if the page can serve. | code-9.md |
-| `simharness/llm.py` | 18,976 | 415 | The voice layer's model calls, behind one interface with three backends. | code-9.md |
+| `simharness/llm.py` | 19,328 | 421 | The voice layer's model calls, behind one interface with three backends. | code-9.md |
 | `simharness/paired.py` | 8,367 | 180 | Paired control/counterfactual answers → per-cohort effects on the backbone. | code-9.md |
 | `simharness/pipeline.py` | 45,929 | 767 | The pipeline's stages other than publish (publish.py): backbone, plan, ask, | code-10.md |
 | `simharness/profiles.py` | 7,064 | 122 | Everything about one election that the pipeline needs and the data can't say: | code-10.md |
@@ -212,7 +212,7 @@ Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/si
 | `tests/test_evaluate.py` | 3,400 | 60 | The evaluate-stage checks (EVAL.md). | code-17.md |
 | `tests/test_intake_spend.py` | 5,404 | 120 | The intake's spend: daily and monthly caps across every visitor, and how a | code-17.md |
 | `tests/test_isolation.py` | 7,700 | 150 | Held-out benchmark isolation. | code-17.md |
-| `tests/test_reliability.py` | 5,667 | 135 | The worker lock, the batch wait's deadline, and prices for models the table doesn't list. | code-17.md |
+| `tests/test_reliability.py` | 6,074 | 143 | The worker lock, the batch wait's deadline, and prices for models the table doesn't list. | code-17.md |
 | `tests/test_whatif.py` | 3,554 | 57 | What-ifs and their evidence: source tiers, grounding, blending and confidence (evidence.py). | code-17.md |
 | `tsconfig.json` | 795 | 32 |  | code-17.md |
 | `vercel.json` | 396 | 11 |  | code-17.md |
@@ -226,7 +226,7 @@ Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/si
 | `data/` | 7 | 1,007,856 |
 | `extracts/` | 2 | 47,047 |
 | `profiles/` | 58 | 235,910 |
-| `runs/` | 612 | 47,322,924 |
+| `runs/` | 616 | 48,045,272 |
 | `serve/` | 60 | 13,024,850 |
 | `tests/` | 1 | 54,943 |
 | `whatifs/` | 109 | 1,623,304 |

@@ -1,10 +1,11 @@
 # simulacra-americana: commit history
 
-Generated from commit `6f14dc41b9fa` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `61ba45dc3c4c` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 
-14 commit(s), verbatim from `git log` (commits that only regenerate this digest are left out):
+15 commit(s), verbatim from `git log` (commits that only regenerate this digest are left out):
 
 ```
+61ba45d  2026-11-20  Cameron Feather  Rerun the 1920 pilot on the Batch API; score EVAL.md from it
 6f14dc4  2026-11-20  Cameron Feather  Regenerate EVAL.md from a re-scored, reproducible prototype run
 e836df7  2026-11-20  Cameron Feather  tests: rename the no-ceiling budget test to say what it checks
 4f68c2b  2026-11-20  Cameron Feather  README: link the live site; point links at the renamed repo

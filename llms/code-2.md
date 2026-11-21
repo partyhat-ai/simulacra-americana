@@ -1,6 +1,6 @@
 # simulacra-americana: source and docs, part 2 of 17
 
-Generated from commit `6f14dc41b9fa` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `61ba45dc3c4c` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 Files `EVAL.md` to `docs/DEPLOY.md`. Lines are numbered as in the repository.
 
 ## `EVAL.md`
@@ -8,354 +8,396 @@ Files `EVAL.md` to `docs/DEPLOY.md`. Lines are numbered as in the repository.
 ```markdown
     1| # EVAL: the 1920 prototype
     2| 
-    3| **Run.** `runs/1920-2c8ce73571`, seed 1920, 400 draws, truth mode, prompt p1.
-    4| 
-    5| Every number below is copied from `runs/1920-2c8ce73571/validation.json`,
-    6| `analysis.json` and `published/1920.json`. The run re-scores the prototype's
-    7| interviews (the same answers as `runs/1920-bcbd86b43f`, in `agents/`) with
-    8| today's code, on the public inputs in `data/1920/`. To rerun it from the repo
-    9| alone, with no model calls:
-   10| 
-   11| ```sh
-   12| export SIMHARNESS_CACHE=data/1920
-   13| python3 -m simharness.run backbone --config configs/prototype-1920.json
-   14| python3 -m simharness.run analyze  --config configs/prototype-1920.json
-   15| python3 -m simharness.run evaluate --config configs/prototype-1920.json
-   16| python3 -m simharness.run publish  --config configs/prototype-1920.json
-   17| ```
-   18| 
-   19| The run id hashes the code (DISCLOSURES G1), so this reproduces `1920-2c8ce73571` at the
-   20| code that wrote it; after a code change, copy its `agents/` into the new run folder first.
-   21| 
-   22| This is not the run the server publishes. `serve/bundles/1920.json` comes
-   23| from a later run (its `runId`), with typed what-ifs added, 100 draws, two
-   24| Haiku 4.5 interviews in each of six cohorts, and no `validation.json`. The
-   25| scores below are the prototype's and haven't been rerun.
-   26| 
-   27| ## Summary
-   28| 
-   29| - **Reproduction is exact.** Every one of 400 draws reproduces each state's
-   30|   certified R, D and other vote to within 0.33 votes. Every draw gives 404–127.
-   31| - **The backbone beats its baselines on held-out states:**
-   32|   - two-party RMSE 7.5 points (uniform swing 8.7, persistence 17.4);
-   33|   - turnout RMSE 2.9 points (persistence 16.5);
-   34|   - Spearman 0.93;
-   35|   - Brier 0.047 (uniform swing 0.069).
-   36| - **It fails two backbone checks:**
-   37|   - **B5.** It calls North Carolina for Harding.
-   38|   - **N1.** Its women's-turnout intervals are too narrow and run high in CT,
-   39|     MA and NY.
-   40| - **The 19th Amendment placebo passes.** In Georgia and Mississippi, where
-   41|   women couldn't register in time, the implied women's turnout is 2.1% and
-   42|   3.5%, near zero as it should be.
-   43| - **The agent layer:**
-   44|   - It is fully memorization-exposed: 56 of 56 probes named 1920, both
-   45|     candidates and the winner.
-   46|   - It follows platforms, not labels (label swap 0%).
-   47|   - It is **badly homogenized**: 90% of eligible cohorts answered unanimously.
-   48|   - It **overstates turnout** by about 12 points on average (15.5 points for
-   49|     women, N3).
-   50|   - Its paired effect for the League what-if has a stable sign across three
-   51|     paraphrases and two models.
-   52| - **The biggest uncertainty is β_B**, how Black voters split. The state
-   53|   returns can't identify it. It swings the `fifteenth` result from 416 to 449
-   54|   Harding electoral votes (see "The biggest uncertainty" below).
-   55| 
-   56| ## What-if results (the prototype's bundle)
-   57| 
-   58| Harding is A; Cox is B. Ranges are the central 80% of Harding's electoral
-   59| votes across 400 draws.
-   60| 
-   61| | What-if | Harding EV (point, 80% range) | Cox wins in | States flipped (point) | States with P(flip) > 10% | Popular vote, Harding / Cox |
-   62| |---|---|---|---|---|---|
-   63| | None (history) | 404 (404–404) | 0 / 400 | none | none | 60.2% / 34.1% of 26.80M |
-   64| | `no-19th` (franchise, high) | 429 (417–429) | 0 / 400 | KY, NC | KY 0.99, NC 0.64 | 62.0% / 32.1% of 23.33M |
-   65| | `fifteenth` (franchise, high) | 416 (404–475) | 0 / 400 | NC | NC 0.51, AR 0.29, VA 0.19, AL 0.19, FL 0.16, LA 0.16 | 60.8% / 33.6% of 27.41M |
-   66| | `league` (issue, low) | 404 (392–404) | 0 / 400 | none (TN holds by 0.3 points) | TN 0.12 | 57.8% / 36.7% of 26.35M |
-   67| | `everyone` (franchise) | 416 (403–456) | 0 / 400 | NC | NC 0.52, AL 0.20, VA 0.16, FL 0.12, LA 0.11 | 58.0% / 36.1% of 61.75M |
-   68| 
-   69| Combinations are in the bundle. For example, `fifteenth+no-19th` gives 441
-   70| (417–488) and flips KY, NC and VA.
-   71| 
-   72| Verdicts as the robot says them:
-   73| 
-   74| > **`no-19th`:** 3.5 million women who voted can't, outside the states that
-   75| > already let them. Kentucky, North Carolina flip, but Harding still wins,
-   76| > 429–102. The closest call is Tennessee, which holds for Harding by 3.0
-   77| > points. Cox wins in 0 of 400 draws.
-   78| 
-   79| > **`league`:** With the treaty settled, the voters lean 2.7
-   80| > points further toward Cox than the same people did in the world as it was.
-   81| > No state flips. Harding wins, 404–127. The closest call is Tennessee, which
-   82| > holds for Harding by 0.3 points. Cox wins in 0 of 400 draws.
-   83| 
-   84| **How to read these:**
-   85| - **`no-19th`** helps Harding. The backbone's women's tilt δ is −0.66 logit
-   86|   (80% interval −0.98 to −0.37), meaning women leaned *toward Cox* relative to
-   87|   men of their state, so removing them helps Harding. This comes from a
-   88|   regression of the 1916 → 1920 swing on the new-women share. It is
-   89|   identified mostly by the West/East contrast, which region can confound (see
-   90|   limitations).
-   91| - **`league`** moves every group toward Cox. The simulated voters lose a
-   92|   reason to vote against the administration's party. Nothing flips.
+    3| **Scored run.** `runs/1920-0cd41d0857`, seed 1920, 400 draws, truth mode, prompt p1.
+    4| Its 434 agent requests went through the Messages Batch API (`anthropic-batch`):
+    5| Sonnet 5.5 for the bulk, Opus 5.5 for the checks. Run on 20 November 2026; the
+    6| requests cost $1.23.
+    7| 
+    8| **Comparison run.** `runs/1920-2c8ce73571` re-scores the original prototype's
+    9| interviews (the same answers as `runs/1920-bcbd86b43f`, in `agents/`), which
+   10| Claude Code subagents answered instead of the API (deviation 10). Both runs use
+   11| the same config, prompt, seed, models and code (apart from the batch-id fix in
+   12| deviation 10), on the public inputs in
+   13| `data/1920/`. Only who answered the agents differs, so every backbone check is
+   14| identical. The summary and "API rerun" below use the API run. The sections after
+   15| them describe the comparison run, and every number there is copied from
+   16| `runs/1920-2c8ce73571/validation.json`, `analysis.json` and `published/1920.json`.
+   17| 
+   18| To rerun the comparison run from the repo alone, with no model calls:
+   19| 
+   20| ```sh
+   21| export SIMHARNESS_CACHE=data/1920
+   22| python3 -m simharness.run backbone --config configs/prototype-1920.json
+   23| python3 -m simharness.run analyze  --config configs/prototype-1920.json
+   24| python3 -m simharness.run evaluate --config configs/prototype-1920.json
+   25| python3 -m simharness.run publish  --config configs/prototype-1920.json
+   26| ```
+   27| 
+   28| The run id hashes the code (DISCLOSURES G1), so this reproduces `1920-2c8ce73571` at the
+   29| code that wrote it; after a code change, copy its `agents/` into the new run folder first.
+   30| 
+   31| This is not the run the server publishes. `serve/bundles/1920.json` comes
+   32| from a later run (its `runId`), with typed what-ifs added, 100 draws, two
+   33| Haiku 4.5 interviews in each of six cohorts, and no `validation.json`.
+   34| 
+   35| ## Summary
+   36| 
+   37| - **Reproduction is exact.** Every one of 400 draws reproduces each state's
+   38|   certified R, D and other vote to within 0.33 votes. Every draw gives 404–127.
+   39| - **The backbone beats its baselines on held-out states:**
+   40|   - two-party RMSE 7.5 points (uniform swing 8.7, persistence 17.4);
+   41|   - turnout RMSE 2.9 points (persistence 16.5);
+   42|   - Spearman 0.93;
+   43|   - Brier 0.047 (uniform swing 0.069).
+   44| - **It fails two backbone checks:**
+   45|   - **B5.** It calls North Carolina for Harding.
+   46|   - **N1.** Its women's-turnout intervals are too narrow and run high in CT,
+   47|     MA and NY.
+   48| - **The 19th Amendment placebo passes.** In Georgia and Mississippi, where
+   49|   women couldn't register in time, the implied women's turnout is 2.1% and
+   50|   3.5%, near zero as it should be.
+   51| - **The agent layer:**
+   52|   - It is fully memorization-exposed: 56 of 56 probes named 1920, both
+   53|     candidates and the winner.
+   54|   - It follows platforms, not labels (label swap 3%).
+   55|   - It is **badly homogenized**: 80% of eligible cohorts answered unanimously
+   56|     (90% with subagents).
+   57|   - It **overstates women's turnout** by 15.4 points on average (N3).
+   58|   - **Its League effect is not robust.** It is small (−0.027) and changes sign
+   59|     across paraphrases and between Sonnet and Opus, so A3 fails. With subagents
+   60|     it looked stable at −0.091.
+   61| - **The biggest uncertainty is β_B**, how Black voters split. The state
+   62|   returns can't identify it. It swings the `fifteenth` result from 416 to 449
+   63|   Harding electoral votes (see "The biggest uncertainty" below).
+   64| 
+   65| ## API rerun vs the original (subagent) run
+   66| 
+   67| Both runs: same config, prompt p1, seed, models and code. Only the backend differs.
+   68| Values come from each run's `validation.json`.
+   69| 
+   70| | ID | Check | Subagents, re-scored (`1920-2c8ce73571`) | API (`1920-0cd41d0857`) |
+   71| |---|---|---|---|
+   72| | R1, B1–B5, N1, N2 | Backbone checks | as in the table below | identical |
+   73| | A1 | Cohort bias, median \|bias\| (report-only) | 0.41 logit | 0.32 logit |
+   74| | N3 | Agents' women's turnout, MAE | 15.5 points | 15.4 points |
+   75| | L2 | Label swap, follows label | 0% (n = 39) | 3% (n = 36) — **Pass** |
+   76| | A2 | Homogenization index | 0.90 (21 cohorts) | 0.80 (20 cohorts) — still **Fail** |
+   77| | A3 (`league`) | Effect; paraphrase SD; Sonnet vs Opus | −0.091; 0.054; −0.18 vs −0.03 — **Pass** | −0.027; 0.050; +0.12 vs −0.05 — **Fail** |
+   78| | A3 (`no-19th`) | Effect; paraphrase SD (report-only) | −0.121; 0.026 | −0.045; 0.038 |
+   79| | A3 (`fifteenth`) | Effect; paraphrase SD (report-only) | +0.198; 0.066 | +0.038; 0.212 |
+   80| | A4 | Stereotype audit | 0 of 66 flagged | 1 of 64 flagged — **Pass** |
+   81| | | **Score** | 9 passed, 4 failed | 8 passed, 5 failed (B5, N1, N3, A2, A3 `league`) |
+   82| 
+   83| What changed with independent API calls:
+   84| 
+   85| - **Less homogenization,** as deviation 10 suspected: unanimity falls from 90%
+   86|   to 80% of eligible cohorts. That is still far above the 25% threshold.
+   87| - **The paired what-if effects shrink about 3 to 5 times.** With subagents,
+   88|   each answering 18–59 requests in one context, they were larger.
+   89| - **The League effect doesn't survive.** Its sign flips across paraphrases
+   90|   (+0.058, 0.0, −0.043) and between models, so its stable sign in the
+   91|   original run was most likely an artifact of the subagents' shared contexts.
+   92| - **Backbone checks don't involve the agents,** so they are identical in both runs.
    93| 
-   94| ## Validation checks
+   94| ## What-if results (the prototype's bundle)
    95| 
-   96| | ID | Check | Value | Threshold | Result |
-   97| |---|---|---|---|---|
-   98| | R1 | Unchanged rerun reproduces every state | max error 0.33 votes; EV 404–127 in 400/400 draws | ≤ 1 vote; exact EV | **Pass** |
-   99| | B1 | Holdout two-party RMSE | backbone 7.47; uniform swing 8.68; persistence 17.41; demographic 7.62 | ≤ uniform swing and persistence | **Pass** |
-  100| | B2 | Holdout turnout RMSE | backbone 2.92; persistence 16.46 | ≤ persistence | **Pass** (after a bug fix: see deviation 1) |
-  101| | B3 | Holdout Spearman | 0.93 | ≥ 0.8 | **Pass** |
-  102| | B4 | Holdout Brier | backbone 0.047; uniform swing 0.069 | ≤ uniform swing | **Pass** |
-  103| | B5 | Holdout EV error | 12 (predicted 160, actual 148; NC called for Harding: 54.6% predicted, 43.3% actual) | ≤ 0 (no holdout state was decided by < 5 points) | **Fail** |
-  104| | N1 | Women's turnout vs Corder–Wolbrecht | MAE 3.3 points; 3 of 5 inside the 90% interval | MAE ≤ 8 and ≥ 70% inside | **Fail** (coverage 60%) |
-  105| | N2 | Placebo, GA and MS | GA 2.1% (−1.8 to 5.5); MS 3.5% (−0.2 to 6.3) | within ±5 points of 0 | **Pass** |
-  106| | N3 | Agents' stated women's turnout vs Corder–Wolbrecht | MAE 15.5 points (11 women agents in 5 states) | ≤ 10 | **Fail** |
-  107| | L1 | Recall probe | year 100%; candidates 100%; winner 100% (n = 56) | reported | 1920 is **memorization-exposed**, as expected |
-  108| | L2 | Label swap | follows label 0%; follows platform 100% (n = 39) | < 20% | **Pass** |
-  109| | A1 | Cohort bias | median \|bias\| 0.41 logit; 0 cohorts over 1 logit (after smoothing); mean TVD 0.43 | reported | See below |
-  110| | A2 | Homogenization index | 0.90 (21 eligible cohorts) | ≤ 25% | **Fail** |
-  111| | A3 (`league`) | Paraphrase and model sensitivity | effect −0.091; paraphrase SD 0.054; Sonnet −0.18 vs Opus −0.03 (shared subsample) | SD < \|effect\|; signs agree | **Pass** (the models agree on sign, not size) |
-  112| | A3 (franchise) | same | no Opus arm for backbone-mode what-ifs | — | Not run (not applicable: these effects aren't applied) |
-  113| | A4 | Stereotype audit | 0 of 66 reasons flagged by the heuristic | ≤ 10% | **Pass** (heuristic only; not read by a person) |
-  114| 
-  115| **Score:** 9 passed, 4 failed (B5, N1, N3, A2); L1 and A1 are report-only.
+   96| Harding is A; Cox is B. Ranges are the central 80% of Harding's electoral
+   97| votes across 400 draws.
+   98| 
+   99| | What-if | Harding EV (point, 80% range) | Cox wins in | States flipped (point) | States with P(flip) > 10% | Popular vote, Harding / Cox |
+  100| |---|---|---|---|---|---|
+  101| | None (history) | 404 (404–404) | 0 / 400 | none | none | 60.2% / 34.1% of 26.80M |
+  102| | `no-19th` (franchise, high) | 429 (417–429) | 0 / 400 | KY, NC | KY 0.99, NC 0.64 | 62.0% / 32.1% of 23.33M |
+  103| | `fifteenth` (franchise, high) | 416 (404–475) | 0 / 400 | NC | NC 0.51, AR 0.29, VA 0.19, AL 0.19, FL 0.16, LA 0.16 | 60.8% / 33.6% of 27.41M |
+  104| | `league` (issue, low) | 404 (392–404) | 0 / 400 | none (TN holds by 0.3 points) | TN 0.12 | 57.8% / 36.7% of 26.35M |
+  105| | `everyone` (franchise) | 416 (403–456) | 0 / 400 | NC | NC 0.52, AL 0.20, VA 0.16, FL 0.12, LA 0.11 | 58.0% / 36.1% of 61.75M |
+  106| 
+  107| Combinations are in the bundle. For example, `fifteenth+no-19th` gives 441
+  108| (417–488) and flips KY, NC and VA.
+  109| 
+  110| Verdicts as the robot says them:
+  111| 
+  112| > **`no-19th`:** 3.5 million women who voted can't, outside the states that
+  113| > already let them. Kentucky, North Carolina flip, but Harding still wins,
+  114| > 429–102. The closest call is Tennessee, which holds for Harding by 3.0
+  115| > points. Cox wins in 0 of 400 draws.
   116| 
-  117| ### N1 detail
-  118| 
-  119| Women's turnout, as a share of all women 21+ (Corder–Wolbrecht's
-  120| denominator):
+  117| > **`league`:** With the treaty settled, the voters lean 2.7
+  118| > points further toward Cox than the same people did in the world as it was.
+  119| > No state flips. Harding wins, 404–127. The closest call is Tennessee, which
+  120| > holds for Harding by 0.3 points. Cox wins in 0 of 400 draws.
   121| 
-  122| | State | Backbone (90% interval) | Corder–Wolbrecht (95% interval) | Method |
-  123| |---|---|---|---|
-  124| | CT | 36.7 (32.7–41.4) | 32.6 (28.1–35.9) | residual |
-  125| | IL | 46.3 (33.1–55.5) | 45.6 (44.3–46.8) | ratio (IL women voted in 1916) |
-  126| | MA | 39.3 (34.6–44.1) | 33.6 (32.2–34.9) | residual |
-  127| | MI | 37.2 (32.0–43.2) | 40.6 (38.5–42.4) | residual |
-  128| | NY | 37.7 (33.1–42.7) | 35.2 (33.8–36.3) | residual |
-  129| 
-  130| - **The residual method runs high in the East.** κ, the men's-turnout change
-  131|   from 1916 to 1920, comes from the western "old" states, where turnout per
-  132|   eligible adult fell 0.31 logit. If men's turnout fell further in the East,
-  133|   the residual hands too many votes to women.
-  134| - **This is the key identifying assumption, and N1 is where it shows.** The
-  135|   fix is to estimate κ with regional variation, with county returns: the
-  136|   Corder–Wolbrecht approach.
-  137| 
-  138| ## Leakage
-  139| 
-  140| - **Probes (L1).** A separate instance, given the blinded brief, named 1920,
-  141|   Cox for the administration's party, Harding for the other, and Harding as
-  142|   the winner in 56 of 56 probes.
-  143|   - Blinding does not hide 1920 from a current model, and no current model
-  144|     will be clean for 1920.
-  145|   - Every quote is therefore flagged `memorizationExposed: true`, and cohort
-  146|     bias uses the national bias (the rule in `paired.py`).
-  147| - **Label swap (L2).** In all 39 usable pairs, the agent followed the platform
-  148|   to its new label. Answers track positions, not letters.
-  149| - **De-blinding in the voice.** 98 of 386 voter answers (25%) name a party
-  150|   ("I'll vote Republican", "the Lincoln ticket") that no brief ever named.
-  151|   - None names a candidate.
-  152|   - None uses hindsight language ("landslide", "will win").
-  153|   - Quotes are published with `namesRestored: true`. A party name in a quote
-  154|     is the model's own inference, now documented.
-  155| - **Dates.**
-  156|   - Every source item is dated 1920-06-01 to 1920-11-01.
-  157|   - p1 briefs were dated 30 October but could include items from 31 October
-  158|     and 1 November (deviation 11). A subagent noticed one and didn't use it.
+  122| **How to read these:**
+  123| - **`no-19th`** helps Harding. The backbone's women's tilt δ is −0.66 logit
+  124|   (80% interval −0.98 to −0.37), meaning women leaned *toward Cox* relative to
+  125|   men of their state, so removing them helps Harding. This comes from a
+  126|   regression of the 1916 → 1920 swing on the new-women share. It is
+  127|   identified mostly by the West/East contrast, which region can confound (see
+  128|   limitations).
+  129| - **`league`** moves every group toward Cox. The simulated voters lose a
+  130|   reason to vote against the administration's party. Nothing flips.
+  131| 
+  132| ## Validation checks
+  133| 
+  134| | ID | Check | Value | Threshold | Result |
+  135| |---|---|---|---|---|
+  136| | R1 | Unchanged rerun reproduces every state | max error 0.33 votes; EV 404–127 in 400/400 draws | ≤ 1 vote; exact EV | **Pass** |
+  137| | B1 | Holdout two-party RMSE | backbone 7.47; uniform swing 8.68; persistence 17.41; demographic 7.62 | ≤ uniform swing and persistence | **Pass** |
+  138| | B2 | Holdout turnout RMSE | backbone 2.92; persistence 16.46 | ≤ persistence | **Pass** (after a bug fix: see deviation 1) |
+  139| | B3 | Holdout Spearman | 0.93 | ≥ 0.8 | **Pass** |
+  140| | B4 | Holdout Brier | backbone 0.047; uniform swing 0.069 | ≤ uniform swing | **Pass** |
+  141| | B5 | Holdout EV error | 12 (predicted 160, actual 148; NC called for Harding: 54.6% predicted, 43.3% actual) | ≤ 0 (no holdout state was decided by < 5 points) | **Fail** |
+  142| | N1 | Women's turnout vs Corder–Wolbrecht | MAE 3.3 points; 3 of 5 inside the 90% interval | MAE ≤ 8 and ≥ 70% inside | **Fail** (coverage 60%) |
+  143| | N2 | Placebo, GA and MS | GA 2.1% (−1.8 to 5.5); MS 3.5% (−0.2 to 6.3) | within ±5 points of 0 | **Pass** |
+  144| | N3 | Agents' stated women's turnout vs Corder–Wolbrecht | MAE 15.5 points (11 women agents in 5 states) | ≤ 10 | **Fail** |
+  145| | L1 | Recall probe | year 100%; candidates 100%; winner 100% (n = 56) | reported | 1920 is **memorization-exposed**, as expected |
+  146| | L2 | Label swap | follows label 0%; follows platform 100% (n = 39) | < 20% | **Pass** |
+  147| | A1 | Cohort bias | median \|bias\| 0.41 logit; 0 cohorts over 1 logit (after smoothing); mean TVD 0.43 | reported | See below |
+  148| | A2 | Homogenization index | 0.90 (21 eligible cohorts) | ≤ 25% | **Fail** |
+  149| | A3 (`league`) | Paraphrase and model sensitivity | effect −0.091; paraphrase SD 0.054; Sonnet −0.18 vs Opus −0.03 (shared subsample) | SD < \|effect\|; signs agree | **Pass** (the models agree on sign, not size) |
+  150| | A3 (franchise) | same | no Opus arm for backbone-mode what-ifs | — | Not run (not applicable: these effects aren't applied) |
+  151| | A4 | Stereotype audit | 0 of 66 reasons flagged by the heuristic | ≤ 10% | **Pass** (heuristic only; not read by a person) |
+  152| 
+  153| **Score:** 9 passed, 4 failed (B5, N1, N3, A2); L1 and A1 are report-only.
+  154| 
+  155| ### N1 detail
+  156| 
+  157| Women's turnout, as a share of all women 21+ (Corder–Wolbrecht's
+  158| denominator):
   159| 
-  160| ## Agent layer, beyond the thresholds
-  161| 
-  162| - **Turnout overstatement.** Agents' stated turnout exceeds the backbone's
-  163|   calibrated turnout by 11.8 points on average.
-  164|   - Northeastern native men: 0.76 vs 0.60.
-  165|   - Southern white men: 0.61 vs 0.36.
-  166|   - Figures are half-count smoothed (deviation 8).
+  160| | State | Backbone (90% interval) | Corder–Wolbrecht (95% interval) | Method |
+  161| |---|---|---|---|
+  162| | CT | 36.7 (32.7–41.4) | 32.6 (28.1–35.9) | residual |
+  163| | IL | 46.3 (33.1–55.5) | 45.6 (44.3–46.8) | ratio (IL women voted in 1916) |
+  164| | MA | 39.3 (34.6–44.1) | 33.6 (32.2–34.9) | residual |
+  165| | MI | 37.2 (32.0–43.2) | 40.6 (38.5–42.4) | residual |
+  166| | NY | 37.7 (33.1–42.7) | 35.2 (33.8–36.3) | residual |
   167| 
-  168|   This is the survey self-report bias in a new form. It's harmless here,
-  169|   because levels come from the backbone, but it's why agents must never set
-  170|   levels.
-  171| - **Cohort bias (A1).** Agents' Republican two-party share is within ±0.5
-  172|   logit of the backbone for most white cohorts.
-  173| 
-  174|   | Cohort | Bias (logit) |
-  175|   |---|---|
-  176|   | border:F:black | +0.90 |
-  177|   | south:F:black | −0.86 |
-  178|   | south:M:native_white | −0.76 |
-  179|   | south:M:black | −0.61 |
-  180| 
-  181|   - Before half-count smoothing (see deviation 8), Black cohorts outside the
-  182|     South ran +0.8 to +1.6. The agents say "strongly Republican", which fits
-  183|     the documented history better than the backbone's weakly identified β_B.
-  184|     See the next section.
-  185|   - Southern white men: agents 23% Republican (smoothed) vs backbone 39%. The agents
-  186|     voice the Solid South; the backbone averages in Tennessee and North
-  187|     Carolina, where Harding took about 43% or more.
-  188| - **Homogenization (A2).** In 19 of 21 cohorts whose backbone share lies
-  189|   between 0.2 and 0.8, every agent gave the same choice. With four agents at
-  190|   a 60/40 split, chance unanimity is about 15%, so this is strong variance
-  191|   compression. The Bisbee et al. failure is present. Persona diversity at
-  192|   four agents per cohort didn't fix it, and Sonnet 5.5 has no temperature
-  193|   lever.
-  194|   - Consequences for this design: the agents' choices are not usable as
-  195|     distributions. Their *paired changes* can still be. Production should
-  196|     ask for `p_choice` (done), weight by it rather than by the discrete
-  197|     choice (done), and raise agents per cohort to 12 or more to measure
-  198|     compression properly.
-  199| - **Paired effect, `league`.**
-  200|   - The national two-party effect is −0.091 logit, 80% interval −0.129 to
-  201|     −0.047, adult-weighted.
-  202|   - Cohort effects run from −0.24 (naturalized men in the Northeast) to +0.13
-  203|     (Southern white men).
-  204|   - The shrinkage weights are 0.33–0.43, because four or five agents per
-  205|     cohort is small against the shrinkage pseudo-count of 8. Every
-  206|     cohort's effect is therefore pulled strongly toward its region.
-  207| - **Cross-checks on the franchise what-ifs.** These are not applied.
-  208|   - In `fifteenth`, Black Southern agents who could now register raised their
-  209|     stated turnout sharply: +0.93 logit nationally for the reached cohorts.
-  210|     Their quotes back the borrowed assumption: "I'm registered. I'll vote
-  211|     Republican Tuesday, same as my people."
-  212|   - In `no-19th`, women who lost the vote said so. The men asked showed a
-  213|     small shift toward Cox (−0.12 logit), which the backbone ignores by
-  214|     design.
-  215| 
-  216| ## The biggest uncertainty: how Black voters split
-  217| 
-  218| - **The data can't pin β_B.** Across the 37 states outside the South, a
-  219|   Goodman regression puts Black voters' shift toward Harding at −3.4 ± 1.9
-  220|   logit (region intercepts, 1916 lag). That runs against the documented
-  221|   history, and it is carried by six border states with larger Black shares
-  222|   and smaller swings.
-  223| - **What the published run uses.** The prior, N(1.5, 1),
-  224|   updated by that regression, gives a median of 0.50 (80% interval −0.70 to
-  225|   1.67).
-  226| - **The sensitivity**, same seed:
-  227| 
-  228| | β_B from | Black voters outside the South, Harding share | `fifteenth` Harding EV (80% range) | P(flip) > 10% |
-  229| |---|---|---|---|
-  230| | Prior updated by Goodman (published) | 73% (48–88%) | 416 (404–475) | NC 0.51, AR 0.29, VA 0.19, AL 0.19, FL 0.16, LA 0.16 |
-  231| | Prior only, N(1.5, 1) | 88% (67–96%) | 449 (404–489) | NC 0.82, AR 0.66, VA 0.55, AL 0.52, LA 0.48, FL 0.47, GA 0.35, MS 0.34 |
-  232| 
-  233| - **Which is closer to history?** The prior-only row encodes the
-  234|   documented loyalty of Black voters to the Republican party before 1932. The
-  235|   published row lets the confounded regression pull it down.
-  236| - **What would settle it:** county returns against county composition (NHGIS,
-  237|   needs registration), or a documented estimate of Black voters' choice in
-  238|   1920 from the literature (not found by the research agents).
-  239| 
-  240| The page should present `fifteenth` with its range, as the bundle does:
-  241| "Harding carries 404–475". The flips in AR, VA, AL, FL and LA are live
-  242| possibilities, not results.
-  243| 
-  244| ## Uncertainty budget
-  245| 
-  246| These are standard deviations across draws.
-  247| 
-  248| | What-if | National R two-party (points), full | Backbone parameters only (population noise off) | Agents only (one backbone draw) | Harding EV SD, full / params only |
-  249| |---|---|---|---|---|
-  250| | `no-19th` | 0.48 | 0.52 | — | 6.5 / 7.1 |
-  251| | `fifteenth` | 0.55 | 0.56 | — | 27.4 / 22.8 |
-  252| | `league` | 0.78 | 0.78 | 0.79 | 6.6 / 6.4 |
+  168| - **The residual method runs high in the East.** κ, the men's-turnout change
+  169|   from 1916 to 1920, comes from the western "old" states, where turnout per
+  170|   eligible adult fell 0.31 logit. If men's turnout fell further in the East,
+  171|   the residual hands too many votes to women.
+  172| - **This is the key identifying assumption, and N1 is where it shows.** The
+  173|   fix is to estimate κ with regional variation, with county returns: the
+  174|   Corder–Wolbrecht approach.
+  175| 
+  176| ## Leakage
+  177| 
+  178| - **Probes (L1).** A separate instance, given the blinded brief, named 1920,
+  179|   Cox for the administration's party, Harding for the other, and Harding as
+  180|   the winner in 56 of 56 probes.
+  181|   - Blinding does not hide 1920 from a current model, and no current model
+  182|     will be clean for 1920.
+  183|   - Every quote is therefore flagged `memorizationExposed: true`, and cohort
+  184|     bias uses the national bias (the rule in `paired.py`).
+  185| - **Label swap (L2).** In all 39 usable pairs, the agent followed the platform
+  186|   to its new label. Answers track positions, not letters.
+  187| - **De-blinding in the voice.** 98 of 386 voter answers (25%) name a party
+  188|   ("I'll vote Republican", "the Lincoln ticket") that no brief ever named.
+  189|   - None names a candidate.
+  190|   - None uses hindsight language ("landslide", "will win").
+  191|   - Quotes are published with `namesRestored: true`. A party name in a quote
+  192|     is the model's own inference, now documented.
+  193| - **Dates.**
+  194|   - Every source item is dated 1920-06-01 to 1920-11-01.
+  195|   - p1 briefs were dated 30 October but could include items from 31 October
+  196|     and 1 November (deviation 11). A subagent noticed one and didn't use it.
+  197| 
+  198| ## Agent layer, beyond the thresholds
+  199| 
+  200| - **Turnout overstatement.** Agents' stated turnout exceeds the backbone's
+  201|   calibrated turnout by 11.8 points on average.
+  202|   - Northeastern native men: 0.76 vs 0.60.
+  203|   - Southern white men: 0.61 vs 0.36.
+  204|   - Figures are half-count smoothed (deviation 8).
+  205| 
+  206|   This is the survey self-report bias in a new form. It's harmless here,
+  207|   because levels come from the backbone, but it's why agents must never set
+  208|   levels.
+  209| - **Cohort bias (A1).** Agents' Republican two-party share is within ±0.5
+  210|   logit of the backbone for most white cohorts.
+  211| 
+  212|   | Cohort | Bias (logit) |
+  213|   |---|---|
+  214|   | border:F:black | +0.90 |
+  215|   | south:F:black | −0.86 |
+  216|   | south:M:native_white | −0.76 |
+  217|   | south:M:black | −0.61 |
+  218| 
+  219|   - Before half-count smoothing (see deviation 8), Black cohorts outside the
+  220|     South ran +0.8 to +1.6. The agents say "strongly Republican", which fits
+  221|     the documented history better than the backbone's weakly identified β_B.
+  222|     See the next section.
+  223|   - Southern white men: agents 23% Republican (smoothed) vs backbone 39%. The agents
+  224|     voice the Solid South; the backbone averages in Tennessee and North
+  225|     Carolina, where Harding took about 43% or more.
+  226| - **Homogenization (A2).** In 19 of 21 cohorts whose backbone share lies
+  227|   between 0.2 and 0.8, every agent gave the same choice. With four agents at
+  228|   a 60/40 split, chance unanimity is about 15%, so this is strong variance
+  229|   compression. The Bisbee et al. failure is present. Persona diversity at
+  230|   four agents per cohort didn't fix it, and Sonnet 5.5 has no temperature
+  231|   lever.
+  232|   - Consequences for this design: the agents' choices are not usable as
+  233|     distributions. Their *paired changes* can still be. Production should
+  234|     ask for `p_choice` (done), weight by it rather than by the discrete
+  235|     choice (done), and raise agents per cohort to 12 or more to measure
+  236|     compression properly.
+  237| - **Paired effect, `league`.**
+  238|   - The national two-party effect is −0.091 logit, 80% interval −0.129 to
+  239|     −0.047, adult-weighted.
+  240|   - Cohort effects run from −0.24 (naturalized men in the Northeast) to +0.13
+  241|     (Southern white men).
+  242|   - The shrinkage weights are 0.33–0.43, because four or five agents per
+  243|     cohort is small against the shrinkage pseudo-count of 8. Every
+  244|     cohort's effect is therefore pulled strongly toward its region.
+  245| - **Cross-checks on the franchise what-ifs.** These are not applied.
+  246|   - In `fifteenth`, Black Southern agents who could now register raised their
+  247|     stated turnout sharply: +0.93 logit nationally for the reached cohorts.
+  248|     Their quotes back the borrowed assumption: "I'm registered. I'll vote
+  249|     Republican Tuesday, same as my people."
+  250|   - In `no-19th`, women who lost the vote said so. The men asked showed a
+  251|     small shift toward Cox (−0.12 logit), which the backbone ignores by
+  252|     design.
   253| 
-  254| **How to read this:**
-  255| - **Population noise is a small part of every what-if.** Turning it off
-  256|   barely changes the spread, and the full-draw SD for `fifteenth`'s EV
-  257|   (27.4) exceeds the params-only SD (22.8) only by what the flip-prone
-  258|   Southern states add.
-  259| - **For `league`, almost all the spread comes from the agent layer.** The
-  260|   calibrated baseline has no national spread, so only the agent bootstrap
-  261|   varies.
-  262| - **For `fifteenth`, β_B dominates.**
-  263| 
-  264| ## Deviations from the plan, in order
+  254| ## The biggest uncertainty: how Black voters split
+  255| 
+  256| - **The data can't pin β_B.** Across the 37 states outside the South, a
+  257|   Goodman regression puts Black voters' shift toward Harding at −3.4 ± 1.9
+  258|   logit (region intercepts, 1916 lag). That runs against the documented
+  259|   history, and it is carried by six border states with larger Black shares
+  260|   and smaller swings.
+  261| - **What the published run uses.** The prior, N(1.5, 1),
+  262|   updated by that regression, gives a median of 0.50 (80% interval −0.70 to
+  263|   1.67).
+  264| - **The sensitivity**, same seed:
   265| 
-  266| Each change was made after seeing the output it fixes. Each is listed with
-  267| its effect. None changes a threshold.
-  268| 
-  269| 1. **B2 predictor bug.** The holdout turnout predictor counted old-suffrage
-  270|    states' 1916 votes, which included women's, as men's.
-  271|    - First value: 16.90 (fail).
-  272|    - Fixed to project turnout per eligible adult by κ, as the backbone does:
-  273|      2.92 (pass).
-  274|    - Both values are reported here.
-  275| 2. **N1 denominator.** Corder–Wolbrecht's "eligible" counts equal the census
-  276|    21+ totals, non-citizens included. The backbone had divided by citizens.
-  277|    - Citizen-denominator result: MAE 9.6, coverage 40%.
-  278|    - Like-for-like result: MAE 3.3, coverage 60%.
-  279|    - Fail either way.
-  280| 3. **β_B specification.**
-  281|    - The first fit's Goodman regression (intercept, lag) gave β_B = −1.5
-  282|      after the prior, driven by region.
-  283|    - Changed to region intercepts: 0.50 after the prior.
-  284|    - The sensitivity table above covers the choice.
-  285| 4. **Black Southern turnout.** The first fit clipped a negative Goodman
-  286|    estimate to 0 in every draw. Changed to the regression posterior truncated
-  287|    to [0, white rate], which is Goodman with Duncan–Davis bounds: median 9%
-  288|    of the white rate (1–25%).
-  289| 5. **Black Southern choice.** The first fit gave Black Southern voters a
-  290|    shift relative to white Southerners, which made them lean Cox, against the
-  291|    `fifteenth` assumption.
-  292|    - Changed to the borrowed Northern split, with an accounting bound: their
-  293|      votes for either party are at most 80% of its certified vote.
-  294|    - The bound binds in South Carolina (70% of draws) and Mississippi (18%).
-  295| 6. **Sex turnout cap.** R1 first failed in Utah in 4 of 400 draws: a drawn
-  296|    men/women ratio implied men's turnout above 100%. Each sex is now capped at
-  297|    98%, and the excess moves to the other sex, so state totals stay exact.
-  298| 7. **Minor-party ledger.** R1 failed again after deviation 5: in NC and GA,
-  299|    whose certified minor-party vote is 0, the borrowed Black split carried a
-  300|    minor-party share. Fixed; R1 passes.
-  301| 8. **Paired smoothing.** Cohorts whose agents all said "won't vote" produced
-  302|    effects of −10 logit. A half-count (Jeffreys-style) smoothing was added,
-  303|    and the national effect is now adult-weighted.
-  304| 9. **A1 denominator.** Backbone turnout for A1 is now per legally eligible
-  305|    adult (exclusion included), matching what an agent's `p_vote` means.
-  306| 10. **The agents were answered by Claude Code subagents, not the Messages
-  307|     API.**
-  308|     - No `ANTHROPIC_API_KEY` was available. Credential exploration was
-  309|       declined, correctly.
-  310|     - The 442 requests went through the `transcript` backend to 9
-  311|       subagents: 7 Sonnet and 2 Opus, via the Agent tool's `model`
-  312|       setting. The exact model versions behind those settings aren't
-  313|       recorded by the tool.
-  314|     - Each subagent answered 18–59 requests in one context. No subagent saw
-  315|       both arms of the same person.
-  316|     - The subagents' own reports:
-  317|       - The probe subagent answered 28 of 56 probes by script, having read
-  318|         the first 28. All 56 name Harding.
-  319|       - The control-sonnet-2 subagent built answers with a helper script.
-  320|         All 56 reasons and quotes are distinct.
-  321|       - The control-sonnet-1 subagent says its later answers are shorter and
-  322|         more generic. Its quotes fall from 26 to 16 words.
-  323|     - This is a weaker instrument than independent API calls. The
-  324|       homogenization in A2 may be partly an artifact of batching.
-  325|     - **The production path is `anthropic-batch`**, and this pilot should be
-  326|       rerun on it before any agent-layer number is cited.
-  327| 11. **p1 prompt bugs,** found after the answers came back and fixed in p2.
-  328|     The p1 requests that were answered are unchanged on disk.
-  329|     - Non-citizen women were given the `no-19th` counterfactual, and their
-  330|       brief contradicted itself. Two subagents flagged it. Those pairs are
-  331|       excluded from the analysis.
-  332|     - Briefs were dated 30 October while admitting items dated up to
-  333|       1 November.
-  334|     - Surnames were drawn from one mixed list ("Mary Lindqvist", a Black
-  335|       North Carolina woman).
-  336|     - Before any answer, the Ohio line "women have voted for president since
-  337|       1917" was corrected: no presidential election fell in 1917–19.
-  338| 
-  339| ## What wasn't done
-  340| 
-  341| - **County-level ecological inference.** County returns are cached; county
-  342|   composition needs NHGIS registration.
-  343| - **Strict mode.** The 1910 census would be aged ten years.
-  344| - **Other holdouts.** The 26th Amendment, VRA and Amendment 4 holdouts are
-  345|   designed but not run.
-  346| - **Population what-ifs.** Huntington–Hill and Webster are implemented and
-  347|   unit-tested, but not exercised.
-  348| - **Reading the stereotype audit.** A4 used the regex pass only.
-  349| - **Alien declarant voting in 1920.** Not coded in any dataset found; treated
-  350|   as barred everywhere.
+  266| | β_B from | Black voters outside the South, Harding share | `fifteenth` Harding EV (80% range) | P(flip) > 10% |
+  267| |---|---|---|---|
+  268| | Prior updated by Goodman (published) | 73% (48–88%) | 416 (404–475) | NC 0.51, AR 0.29, VA 0.19, AL 0.19, FL 0.16, LA 0.16 |
+  269| | Prior only, N(1.5, 1) | 88% (67–96%) | 449 (404–489) | NC 0.82, AR 0.66, VA 0.55, AL 0.52, LA 0.48, FL 0.47, GA 0.35, MS 0.34 |
+  270| 
+  271| - **Which is closer to history?** The prior-only row encodes the
+  272|   documented loyalty of Black voters to the Republican party before 1932. The
+  273|   published row lets the confounded regression pull it down.
+  274| - **What would settle it:** county returns against county composition (NHGIS,
+  275|   needs registration), or a documented estimate of Black voters' choice in
+  276|   1920 from the literature (not found by the research agents).
+  277| 
+  278| The page should present `fifteenth` with its range, as the bundle does:
+  279| "Harding carries 404–475". The flips in AR, VA, AL, FL and LA are live
+  280| possibilities, not results.
+  281| 
+  282| ## Uncertainty budget
+  283| 
+  284| These are standard deviations across draws.
+  285| 
+  286| | What-if | National R two-party (points), full | Backbone parameters only (population noise off) | Agents only (one backbone draw) | Harding EV SD, full / params only |
+  287| |---|---|---|---|---|
+  288| | `no-19th` | 0.48 | 0.52 | — | 6.5 / 7.1 |
+  289| | `fifteenth` | 0.55 | 0.56 | — | 27.4 / 22.8 |
+  290| | `league` | 0.78 | 0.78 | 0.79 | 6.6 / 6.4 |
+  291| 
+  292| **How to read this:**
+  293| - **Population noise is a small part of every what-if.** Turning it off
+  294|   barely changes the spread, and the full-draw SD for `fifteenth`'s EV
+  295|   (27.4) exceeds the params-only SD (22.8) only by what the flip-prone
+  296|   Southern states add.
+  297| - **For `league`, almost all the spread comes from the agent layer.** The
+  298|   calibrated baseline has no national spread, so only the agent bootstrap
+  299|   varies.
+  300| - **For `fifteenth`, β_B dominates.**
+  301| 
+  302| ## Deviations from the plan, in order
+  303| 
+  304| Each change was made after seeing the output it fixes. Each is listed with
+  305| its effect. None changes a threshold.
+  306| 
+  307| 1. **B2 predictor bug.** The holdout turnout predictor counted old-suffrage
+  308|    states' 1916 votes, which included women's, as men's.
+  309|    - First value: 16.90 (fail).
+  310|    - Fixed to project turnout per eligible adult by κ, as the backbone does:
+  311|      2.92 (pass).
+  312|    - Both values are reported here.
+  313| 2. **N1 denominator.** Corder–Wolbrecht's "eligible" counts equal the census
+  314|    21+ totals, non-citizens included. The backbone had divided by citizens.
+  315|    - Citizen-denominator result: MAE 9.6, coverage 40%.
+  316|    - Like-for-like result: MAE 3.3, coverage 60%.
+  317|    - Fail either way.
+  318| 3. **β_B specification.**
+  319|    - The first fit's Goodman regression (intercept, lag) gave β_B = −1.5
+  320|      after the prior, driven by region.
+  321|    - Changed to region intercepts: 0.50 after the prior.
+  322|    - The sensitivity table above covers the choice.
+  323| 4. **Black Southern turnout.** The first fit clipped a negative Goodman
+  324|    estimate to 0 in every draw. Changed to the regression posterior truncated
+  325|    to [0, white rate], which is Goodman with Duncan–Davis bounds: median 9%
+  326|    of the white rate (1–25%).
+  327| 5. **Black Southern choice.** The first fit gave Black Southern voters a
+  328|    shift relative to white Southerners, which made them lean Cox, against the
+  329|    `fifteenth` assumption.
+  330|    - Changed to the borrowed Northern split, with an accounting bound: their
+  331|      votes for either party are at most 80% of its certified vote.
+  332|    - The bound binds in South Carolina (70% of draws) and Mississippi (18%).
+  333| 6. **Sex turnout cap.** R1 first failed in Utah in 4 of 400 draws: a drawn
+  334|    men/women ratio implied men's turnout above 100%. Each sex is now capped at
+  335|    98%, and the excess moves to the other sex, so state totals stay exact.
+  336| 7. **Minor-party ledger.** R1 failed again after deviation 5: in NC and GA,
+  337|    whose certified minor-party vote is 0, the borrowed Black split carried a
+  338|    minor-party share. Fixed; R1 passes.
+  339| 8. **Paired smoothing.** Cohorts whose agents all said "won't vote" produced
+  340|    effects of −10 logit. A half-count (Jeffreys-style) smoothing was added,
+  341|    and the national effect is now adult-weighted.
+  342| 9. **A1 denominator.** Backbone turnout for A1 is now per legally eligible
+  343|    adult (exclusion included), matching what an agent's `p_vote` means.
+  344| 10. **The agents were answered by Claude Code subagents, not the Messages
+  345|     API.**
+  346|     - No `ANTHROPIC_API_KEY` was available. Credential exploration was
+  347|       declined, correctly.
+  348|     - The 442 requests went through the `transcript` backend to 9
+  349|       subagents: 7 Sonnet and 2 Opus, via the Agent tool's `model`
+  350|       setting. The exact model versions behind those settings aren't
+  351|       recorded by the tool.
+  352|     - Each subagent answered 18–59 requests in one context. No subagent saw
+  353|       both arms of the same person.
+  354|     - The subagents' own reports:
+  355|       - The probe subagent answered 28 of 56 probes by script, having read
+  356|         the first 28. All 56 name Harding.
+  357|       - The control-sonnet-2 subagent built answers with a helper script.
+  358|         All 56 reasons and quotes are distinct.
+  359|       - The control-sonnet-1 subagent says its later answers are shorter and
+  360|         more generic. Its quotes fall from 26 to 16 words.
+  361|     - This is a weaker instrument than independent API calls. The
+  362|       homogenization in A2 may be partly an artifact of batching.
+  363|     - **The production path is `anthropic-batch`**, and this pilot should be
+  364|       rerun on it before any agent-layer number is cited.
+  365|     - **Rerun on `anthropic-batch` on 20 November 2026** as
+  366|       `runs/1920-0cd41d0857`: see "API rerun". The rerun needed one fix first:
+  367|       the Batch API rejects request ids containing `|`, `:` or `+`, so the batch
+  368|       backend now sends a hash of each id (`llm.batch_custom_id`).
+  369| 11. **p1 prompt bugs,** found after the answers came back and fixed in p2.
+  370|     The p1 requests that were answered are unchanged on disk.
+  371|     - Non-citizen women were given the `no-19th` counterfactual, and their
+  372|       brief contradicted itself. Two subagents flagged it. Those pairs are
+  373|       excluded from the analysis.
+  374|     - Briefs were dated 30 October while admitting items dated up to
+  375|       1 November.
+  376|     - Surnames were drawn from one mixed list ("Mary Lindqvist", a Black
+  377|       North Carolina woman).
+  378|     - Before any answer, the Ohio line "women have voted for president since
+  379|       1917" was corrected: no presidential election fell in 1917–19.
+  380| 
+  381| ## What wasn't done
+  382| 
+  383| - **County-level ecological inference.** County returns are cached; county
+  384|   composition needs NHGIS registration.
+  385| - **Strict mode.** The 1910 census would be aged ten years.
+  386| - **Other holdouts.** The 26th Amendment, VRA and Amendment 4 holdouts are
+  387|   designed but not run.
+  388| - **Population what-ifs.** Huntington–Hill and Webster are implemented and
+  389|   unit-tested, but not exercised.
+  390| - **Reading the stereotype audit.** A4 used the regex pass only.
+  391| - **Alien declarant voting in 1920.** Not coded in any dataset found; treated
+  392|   as barred everywhere.
 ```
 
 ## `LICENSE`

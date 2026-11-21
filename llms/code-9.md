@@ -1,6 +1,6 @@
 # simulacra-americana: source and docs, part 9 of 17
 
-Generated from commit `6f14dc41b9fa` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `61ba45dc3c4c` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 Files `simharness/evidence.py` to `simharness/paired.py`. Lines are numbered as in the repository.
 
 ## `simharness/evidence.py`
@@ -1411,238 +1411,244 @@ Files `simharness/evidence.py` to `simharness/paired.py`. Lines are numbered as 
   181|             return list(pool.map(self._one, requests))
   182| 
   183| 
-  184| class AnthropicBatchBackend(AnthropicBackend):
-  185|     name = 'anthropic-batch'
-  186| 
-  187|     # A batch normally ends within the hour; the API expires one after 24.
-  188|     MAX_WAIT = 6 * 3600
-  189|     CANCEL_WAIT = 600
-  190| 
-  191|     def run(self, requests, poll_seconds: int = 30, max_wait: float | None = None, sleep=time.sleep, clock=time.monotonic):
-  192|         """Waits at most max_wait (default MAX_WAIT) seconds. Past it the batch is cancelled: answers already
-  193|         made are kept (they are paid for) and the rest come back as failed. If even the cancellation hasn't
-  194|         ended after CANCEL_WAIT more seconds, it raises TimeoutError with the batch id."""
-  195|         from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
-  196|         from anthropic.types.messages.batch_create_params import Request
-  197|         batch = self.client.messages.batches.create(requests=[
-  198|             Request(custom_id=r['id'], params=MessageCreateParamsNonStreaming(**self.params(r))) for r in requests
-  199|         ])
-  200|         self.wait(batch.id, poll_seconds, self.MAX_WAIT if max_wait is None else max_wait, sleep, clock)
-  201|         return self.collect(batch.id, requests)
-  202| 
-  203|     def wait(self, batch_id: str, poll_seconds: float, max_wait: float, sleep=time.sleep, clock=time.monotonic):
-  204|         deadline, cancelled = clock() + max_wait, False
-  205|         while self.client.messages.batches.retrieve(batch_id).processing_status != 'ended':
-  206|             if clock() >= deadline:
-  207|                 if cancelled:
-  208|                     raise TimeoutError(f'batch {batch_id} did not end within {self.CANCEL_WAIT}s of its cancellation')
-  209|                 print(f'batch {batch_id}: not done after {max_wait:.0f}s; cancelling and keeping the answers made', flush=True)
-  210|                 self.client.messages.batches.cancel(batch_id)
-  211|                 deadline, cancelled = clock() + self.CANCEL_WAIT, True
-  212|             sleep(poll_seconds)
-  213| 
-  214|     def collect(self, batch_id: str, requests: list[dict]) -> list[dict]:
-  215|         by_id = {r['id']: r for r in requests}
-  216|         out = []
-  217|         for res in self.client.messages.batches.results(batch_id):
-  218|             r = by_id[res.custom_id]
-  219|             if res.result.type != 'succeeded':
-  220|                 out.append({'id': r['id'], 'model': r['model'], 'backend': self.name, 'ok': False, 'error': res.result.type})
-  221|                 continue
-  222|             msg = res.result.message
-  223|             text = next((b.text for b in msg.content if b.type == 'text'), '')
-  224|             try:
-  225|                 data = json.loads(text)
-  226|                 out.append({'id': r['id'], 'model': r['model'], 'backend': self.name, 'ok': True,
-  227|                             'data': data, 'usage': msg.usage.model_dump(), 'raw': text})
-  228|             except json.JSONDecodeError as e:  # truncated: paid for, so keep the usage (as _one does)
-  229|                 out.append({'id': r['id'], 'model': r['model'], 'backend': self.name, 'ok': False, 'error': str(e),
-  230|                             'usage': msg.usage.model_dump()})
-  231|         return out
-  232| 
-  233| 
-  234| class TranscriptBackend(Backend):
-  235|     """Hands requests to an external runner through files.
-  236| 
-  237|     `run` writes every request without an answer to `requests.jsonl` and returns
-  238|     the answers already present in `responses.jsonl` (one JSON object per line:
-  239|     {"id", "model", "answer": <text or object>}). Call it again after the runner
-  240|     has written its answers.
-  241|     """
-  242|     name = 'transcript'
-  243| 
-  244|     def __init__(self, folder: Path):
-  245|         self.folder = Path(folder)
-  246|         self.folder.mkdir(parents=True, exist_ok=True)
-  247| 
-  248|     def answers(self) -> dict:
-  249|         path = self.folder / 'responses.jsonl'
-  250|         got = {}
-  251|         if path.exists():
-  252|             for line in path.read_text().splitlines():
-  253|                 if line.strip():
-  254|                     row = json.loads(line)
-  255|                     got[row['id']] = row
-  256|         return got
-  257| 
-  258|     def run(self, requests):
-  259|         got = self.answers()
-  260|         pending = [r for r in requests if r['id'] not in got]
-  261|         if pending:
-  262|             with open(self.folder / 'requests.jsonl', 'w') as f:
-  263|                 for r in pending:
-  264|                     f.write(json.dumps(r) + '\n')
-  265|         out = []
-  266|         for r in requests:
-  267|             row = got.get(r['id'])
-  268|             if row is None:
-  269|                 continue
-  270|             try:
-  271|                 data = row['answer'] if isinstance(row['answer'], dict) else _parse(row['answer'])
-  272|                 out.append({'id': r['id'], 'model': row.get('model', r['model']), 'backend': self.name, 'ok': True,
-  273|                             'data': data, 'usage': row.get('usage', {}), 'raw': row['answer']})
-  274|             except Exception as e:  # a malformed answer is logged, not guessed at
-  275|                 out.append({'id': r['id'], 'model': r['model'], 'backend': self.name, 'ok': False, 'error': repr(e)})
-  276|         return out
-  277| 
-  278| 
-  279| def merge_answers(folder: Path, requests: list[dict]) -> dict:
-  280|     """Fold answers/<batch>.jsonl files into responses.jsonl, checking each
-  281|     answer against its request's schema (required keys, enums, p_choice)."""
-  282|     folder = Path(folder)
-  283|     by_id = {r['id']: r for r in requests}
-  284|     good, bad = {}, []
-  285|     for f in sorted((folder / 'answers').glob('*.jsonl')):
-  286|         for line in f.read_text().splitlines():
-  287|             if not line.strip():
-  288|                 continue
-  289|             try:
-  290|                 row = json.loads(line)
-  291|                 req = by_id[row['id']]
-  292|                 ans = row['answer'] if isinstance(row['answer'], dict) else _parse(row['answer'])
-  293|                 sch = req['schema']
-  294|                 missing = [k for k in sch['required'] if k not in ans]
-  295|                 if missing:
-  296|                     raise ValueError(f'missing {missing}')
-  297|                 for k, spec in sch['properties'].items():
-  298|                     if 'enum' in spec and ans.get(k) not in spec['enum']:
-  299|                         raise ValueError(f'{k}={ans.get(k)!r} not in enum')
-  300|                 row['answer'] = ans
-  301|                 good[row['id']] = row
-  302|             except Exception as e:
-  303|                 bad.append({'file': f.name, 'line': line[:120], 'error': repr(e)})
-  304|     with open(folder / 'responses.jsonl', 'w') as out:
-  305|         for row in good.values():
-  306|             out.write(json.dumps(row) + '\n')
-  307|     return {'merged': len(good), 'rejected': bad, 'missing': sorted(set(by_id) - set(good))}
-  308| 
-  309| 
-  310| def backend(name: str, folder: Path | None = None, effort: str = 'low', max_tokens: int = 4000) -> Backend:
-  311|     if name == 'anthropic':
-  312|         return AnthropicBackend(effort=effort, max_tokens=max_tokens)
-  313|     if name == 'anthropic-batch':
-  314|         return AnthropicBatchBackend(effort=effort, max_tokens=max_tokens)
-  315|     if name == 'transcript':
-  316|         return TranscriptBackend(folder)
-  317|     raise ValueError(name)
-  318| 
-  319| 
-  320| # ── Answer cache: an identical request is the same instrument ──
-  321| # Keyed on model, system, user and schema (never on meta, run or prompt-version
-  322| # labels), so a run that adds one what-if pays only for its new briefs. Only
-  323| # live API answers are cached; transcript (subagent) answers never are.
+  184| def batch_custom_id(request_id: str) -> str:
+  185|     """The Batch API's custom_id must match ^[a-zA-Z0-9_-]{1,64}$; request ids hold '|', ':' and '+'.
+  186|     A hash of the id fits, is stable across a resumed collect, and maps back through `collect`."""
+  187|     return 'r' + hashlib.sha256(request_id.encode()).hexdigest()[:40]
+  188| 
+  189| 
+  190| class AnthropicBatchBackend(AnthropicBackend):
+  191|     name = 'anthropic-batch'
+  192| 
+  193|     # A batch normally ends within the hour; the API expires one after 24.
+  194|     MAX_WAIT = 6 * 3600
+  195|     CANCEL_WAIT = 600
+  196| 
+  197|     def run(self, requests, poll_seconds: int = 30, max_wait: float | None = None, sleep=time.sleep, clock=time.monotonic):
+  198|         """Waits at most max_wait (default MAX_WAIT) seconds. Past it the batch is cancelled: answers already
+  199|         made are kept (they are paid for) and the rest come back as failed. If even the cancellation hasn't
+  200|         ended after CANCEL_WAIT more seconds, it raises TimeoutError with the batch id."""
+  201|         from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
+  202|         from anthropic.types.messages.batch_create_params import Request
+  203|         batch = self.client.messages.batches.create(requests=[
+  204|             Request(custom_id=batch_custom_id(r['id']), params=MessageCreateParamsNonStreaming(**self.params(r))) for r in requests
+  205|         ])
+  206|         self.wait(batch.id, poll_seconds, self.MAX_WAIT if max_wait is None else max_wait, sleep, clock)
+  207|         return self.collect(batch.id, requests)
+  208| 
+  209|     def wait(self, batch_id: str, poll_seconds: float, max_wait: float, sleep=time.sleep, clock=time.monotonic):
+  210|         deadline, cancelled = clock() + max_wait, False
+  211|         while self.client.messages.batches.retrieve(batch_id).processing_status != 'ended':
+  212|             if clock() >= deadline:
+  213|                 if cancelled:
+  214|                     raise TimeoutError(f'batch {batch_id} did not end within {self.CANCEL_WAIT}s of its cancellation')
+  215|                 print(f'batch {batch_id}: not done after {max_wait:.0f}s; cancelling and keeping the answers made', flush=True)
+  216|                 self.client.messages.batches.cancel(batch_id)
+  217|                 deadline, cancelled = clock() + self.CANCEL_WAIT, True
+  218|             sleep(poll_seconds)
+  219| 
+  220|     def collect(self, batch_id: str, requests: list[dict]) -> list[dict]:
+  221|         by_id = {batch_custom_id(r['id']): r for r in requests}
+  222|         out = []
+  223|         for res in self.client.messages.batches.results(batch_id):
+  224|             r = by_id[res.custom_id]
+  225|             if res.result.type != 'succeeded':
+  226|                 out.append({'id': r['id'], 'model': r['model'], 'backend': self.name, 'ok': False, 'error': res.result.type})
+  227|                 continue
+  228|             msg = res.result.message
+  229|             text = next((b.text for b in msg.content if b.type == 'text'), '')
+  230|             try:
+  231|                 data = json.loads(text)
+  232|                 out.append({'id': r['id'], 'model': r['model'], 'backend': self.name, 'ok': True,
+  233|                             'data': data, 'usage': msg.usage.model_dump(), 'raw': text})
+  234|             except json.JSONDecodeError as e:  # truncated: paid for, so keep the usage (as _one does)
+  235|                 out.append({'id': r['id'], 'model': r['model'], 'backend': self.name, 'ok': False, 'error': str(e),
+  236|                             'usage': msg.usage.model_dump()})
+  237|         return out
+  238| 
+  239| 
+  240| class TranscriptBackend(Backend):
+  241|     """Hands requests to an external runner through files.
+  242| 
+  243|     `run` writes every request without an answer to `requests.jsonl` and returns
+  244|     the answers already present in `responses.jsonl` (one JSON object per line:
+  245|     {"id", "model", "answer": <text or object>}). Call it again after the runner
+  246|     has written its answers.
+  247|     """
+  248|     name = 'transcript'
+  249| 
+  250|     def __init__(self, folder: Path):
+  251|         self.folder = Path(folder)
+  252|         self.folder.mkdir(parents=True, exist_ok=True)
+  253| 
+  254|     def answers(self) -> dict:
+  255|         path = self.folder / 'responses.jsonl'
+  256|         got = {}
+  257|         if path.exists():
+  258|             for line in path.read_text().splitlines():
+  259|                 if line.strip():
+  260|                     row = json.loads(line)
+  261|                     got[row['id']] = row
+  262|         return got
+  263| 
+  264|     def run(self, requests):
+  265|         got = self.answers()
+  266|         pending = [r for r in requests if r['id'] not in got]
+  267|         if pending:
+  268|             with open(self.folder / 'requests.jsonl', 'w') as f:
+  269|                 for r in pending:
+  270|                     f.write(json.dumps(r) + '\n')
+  271|         out = []
+  272|         for r in requests:
+  273|             row = got.get(r['id'])
+  274|             if row is None:
+  275|                 continue
+  276|             try:
+  277|                 data = row['answer'] if isinstance(row['answer'], dict) else _parse(row['answer'])
+  278|                 out.append({'id': r['id'], 'model': row.get('model', r['model']), 'backend': self.name, 'ok': True,
+  279|                             'data': data, 'usage': row.get('usage', {}), 'raw': row['answer']})
+  280|             except Exception as e:  # a malformed answer is logged, not guessed at
+  281|                 out.append({'id': r['id'], 'model': r['model'], 'backend': self.name, 'ok': False, 'error': repr(e)})
+  282|         return out
+  283| 
+  284| 
+  285| def merge_answers(folder: Path, requests: list[dict]) -> dict:
+  286|     """Fold answers/<batch>.jsonl files into responses.jsonl, checking each
+  287|     answer against its request's schema (required keys, enums, p_choice)."""
+  288|     folder = Path(folder)
+  289|     by_id = {r['id']: r for r in requests}
+  290|     good, bad = {}, []
+  291|     for f in sorted((folder / 'answers').glob('*.jsonl')):
+  292|         for line in f.read_text().splitlines():
+  293|             if not line.strip():
+  294|                 continue
+  295|             try:
+  296|                 row = json.loads(line)
+  297|                 req = by_id[row['id']]
+  298|                 ans = row['answer'] if isinstance(row['answer'], dict) else _parse(row['answer'])
+  299|                 sch = req['schema']
+  300|                 missing = [k for k in sch['required'] if k not in ans]
+  301|                 if missing:
+  302|                     raise ValueError(f'missing {missing}')
+  303|                 for k, spec in sch['properties'].items():
+  304|                     if 'enum' in spec and ans.get(k) not in spec['enum']:
+  305|                         raise ValueError(f'{k}={ans.get(k)!r} not in enum')
+  306|                 row['answer'] = ans
+  307|                 good[row['id']] = row
+  308|             except Exception as e:
+  309|                 bad.append({'file': f.name, 'line': line[:120], 'error': repr(e)})
+  310|     with open(folder / 'responses.jsonl', 'w') as out:
+  311|         for row in good.values():
+  312|             out.write(json.dumps(row) + '\n')
+  313|     return {'merged': len(good), 'rejected': bad, 'missing': sorted(set(by_id) - set(good))}
+  314| 
+  315| 
+  316| def backend(name: str, folder: Path | None = None, effort: str = 'low', max_tokens: int = 4000) -> Backend:
+  317|     if name == 'anthropic':
+  318|         return AnthropicBackend(effort=effort, max_tokens=max_tokens)
+  319|     if name == 'anthropic-batch':
+  320|         return AnthropicBatchBackend(effort=effort, max_tokens=max_tokens)
+  321|     if name == 'transcript':
+  322|         return TranscriptBackend(folder)
+  323|     raise ValueError(name)
   324| 
-  325| def request_key(r: dict) -> str:
-  326|     # A request's own effort is part of the instrument; requests without one keep their old keys.
-  327|     blob = json.dumps([r['model'], r['system'], r['user'], r['schema']] + ([r['effort']] if r.get('effort') else []), sort_keys=True)
-  328|     return hashlib.sha256(blob.encode()).hexdigest()
-  329| 
+  325| 
+  326| # ── Answer cache: an identical request is the same instrument ──
+  327| # Keyed on model, system, user and schema (never on meta, run or prompt-version
+  328| # labels), so a run that adds one what-if pays only for its new briefs. Only
+  329| # live API answers are cached; transcript (subagent) answers never are.
   330| 
-  331| class AnswerCache:
-  332|     LIVE = ('anthropic', 'anthropic-batch')
-  333| 
-  334|     def __init__(self, runs_dir: Path):
-  335|         self.runs = Path(runs_dir)
-  336|         self.file = self.runs / '_cache/answers.jsonl'
-  337|         self.index = {}
-  338|         if self.file.exists():
-  339|             for line in self.file.read_text().splitlines():
-  340|                 if line.strip():
-  341|                     row = json.loads(line)
-  342|                     self.index[row['key']] = row['answer']
-  343|         # Backfill from earlier runs' requests and live answers.
-  344|         for req_file in self.runs.glob('*/agents/all_requests.jsonl'):
-  345|             ans_file = req_file.parent / 'answers.jsonl'
-  346|             if not ans_file.exists():
-  347|                 continue
-  348|             answers = {}
-  349|             for line in ans_file.read_text().splitlines():
-  350|                 if line.strip():
-  351|                     g = json.loads(line)
-  352|                     if g.get('ok') and g.get('backend') in self.LIVE:
-  353|                         answers[g['id']] = g | {'cached_from': req_file.parent.parent.name}
-  354|             for line in req_file.read_text().splitlines():
-  355|                 if line.strip():
-  356|                     r = json.loads(line)
-  357|                     if r['id'] in answers:
-  358|                         self.index.setdefault(request_key(r), answers[r['id']])
-  359| 
-  360|     def get(self, r: dict) -> dict | None:
-  361|         hit = self.index.get(request_key(r))
-  362|         if not hit:
-  363|             return None
-  364|         return {**hit, 'id': r['id'], 'cached': True, 'usage': {}}
+  331| def request_key(r: dict) -> str:
+  332|     # A request's own effort is part of the instrument; requests without one keep their old keys.
+  333|     blob = json.dumps([r['model'], r['system'], r['user'], r['schema']] + ([r['effort']] if r.get('effort') else []), sort_keys=True)
+  334|     return hashlib.sha256(blob.encode()).hexdigest()
+  335| 
+  336| 
+  337| class AnswerCache:
+  338|     LIVE = ('anthropic', 'anthropic-batch')
+  339| 
+  340|     def __init__(self, runs_dir: Path):
+  341|         self.runs = Path(runs_dir)
+  342|         self.file = self.runs / '_cache/answers.jsonl'
+  343|         self.index = {}
+  344|         if self.file.exists():
+  345|             for line in self.file.read_text().splitlines():
+  346|                 if line.strip():
+  347|                     row = json.loads(line)
+  348|                     self.index[row['key']] = row['answer']
+  349|         # Backfill from earlier runs' requests and live answers.
+  350|         for req_file in self.runs.glob('*/agents/all_requests.jsonl'):
+  351|             ans_file = req_file.parent / 'answers.jsonl'
+  352|             if not ans_file.exists():
+  353|                 continue
+  354|             answers = {}
+  355|             for line in ans_file.read_text().splitlines():
+  356|                 if line.strip():
+  357|                     g = json.loads(line)
+  358|                     if g.get('ok') and g.get('backend') in self.LIVE:
+  359|                         answers[g['id']] = g | {'cached_from': req_file.parent.parent.name}
+  360|             for line in req_file.read_text().splitlines():
+  361|                 if line.strip():
+  362|                     r = json.loads(line)
+  363|                     if r['id'] in answers:
+  364|                         self.index.setdefault(request_key(r), answers[r['id']])
   365| 
-  366|     def put(self, r: dict, answer: dict):
-  367|         if not answer.get('ok') or answer.get('backend') not in self.LIVE:
-  368|             return
-  369|         k = request_key(r)
-  370|         self.index[k] = answer
-  371|         self.file.parent.mkdir(parents=True, exist_ok=True)
-  372|         with open(self.file, 'a') as f:
-  373|             f.write(json.dumps({'key': k, 'answer': answer}) + '\n')
-  374| 
-  375| 
-  376| # ── Spend ledger: every paid call, for the record (sessions-report) ──
-  377| 
-  378| LEDGER = ROOT / 'sessions/spend.jsonl'
-  379| # Who the spend is for: the access key's name while the intake worker models
-  380| # that key's text (intake.process_queue), else None. For the record only: the
-  381| # caps count every line, whoever's it was.
-  382| SPEND_WHO: str | None = None
+  366|     def get(self, r: dict) -> dict | None:
+  367|         hit = self.index.get(request_key(r))
+  368|         if not hit:
+  369|             return None
+  370|         return {**hit, 'id': r['id'], 'cached': True, 'usage': {}}
+  371| 
+  372|     def put(self, r: dict, answer: dict):
+  373|         if not answer.get('ok') or answer.get('backend') not in self.LIVE:
+  374|             return
+  375|         k = request_key(r)
+  376|         self.index[k] = answer
+  377|         self.file.parent.mkdir(parents=True, exist_ok=True)
+  378|         with open(self.file, 'a') as f:
+  379|             f.write(json.dumps({'key': k, 'answer': answer}) + '\n')
+  380| 
+  381| 
+  382| # ── Spend ledger: every paid call, for the record (sessions-report) ──
   383| 
-  384| 
-  385| def record_spend(stage: str, dollars: float, run: str = '', note: str = ''):
-  386|     if dollars <= 0:
-  387|         return
-  388|     LEDGER.parent.mkdir(parents=True, exist_ok=True)
-  389|     now = time.gmtime()
-  390|     with open(LEDGER, 'a') as f:
-  391|         f.write(json.dumps({'ts': time.strftime('%Y-%m-%dT%H:%M:%SZ', now), 'day': time.strftime('%Y-%m-%d', now),
-  392|                             'stage': stage, 'dollars': round(dollars, 5), 'run': run, 'note': note, 'who': SPEND_WHO}) + '\n')
-  393| 
-  394| 
-  395| def spent(day: str | None = None, ledger: Path = LEDGER) -> tuple[float, float]:
-  396|     """(dollars recorded on `day`, UTC, default today; dollars recorded in that day's
-  397|     calendar month), counting every line whoever's text it was. These are what the
-  398|     intake's caps are measured against (intake.left). serve/guard.ts `spent` reads
-  399|     the ledger the same way before it queues text."""
-  400|     day = day or time.strftime('%Y-%m-%d', time.gmtime())
-  401|     month = day[:7]
-  402|     today, this_month = 0.0, 0.0
-  403|     for line in ledger.read_text().splitlines() if ledger.exists() else []:
-  404|         try:
-  405|             r = json.loads(line)
-  406|             d = float(r['dollars'])
-  407|             line_day = str(r['day'])
-  408|         except (ValueError, KeyError, TypeError):
-  409|             continue
-  410|         if line_day.startswith(month):
-  411|             this_month += d
-  412|         if line_day == day:
-  413|             today += d
-  414|     return today, this_month
-  415| 
+  384| LEDGER = ROOT / 'sessions/spend.jsonl'
+  385| # Who the spend is for: the access key's name while the intake worker models
+  386| # that key's text (intake.process_queue), else None. For the record only: the
+  387| # caps count every line, whoever's it was.
+  388| SPEND_WHO: str | None = None
+  389| 
+  390| 
+  391| def record_spend(stage: str, dollars: float, run: str = '', note: str = ''):
+  392|     if dollars <= 0:
+  393|         return
+  394|     LEDGER.parent.mkdir(parents=True, exist_ok=True)
+  395|     now = time.gmtime()
+  396|     with open(LEDGER, 'a') as f:
+  397|         f.write(json.dumps({'ts': time.strftime('%Y-%m-%dT%H:%M:%SZ', now), 'day': time.strftime('%Y-%m-%d', now),
+  398|                             'stage': stage, 'dollars': round(dollars, 5), 'run': run, 'note': note, 'who': SPEND_WHO}) + '\n')
+  399| 
+  400| 
+  401| def spent(day: str | None = None, ledger: Path = LEDGER) -> tuple[float, float]:
+  402|     """(dollars recorded on `day`, UTC, default today; dollars recorded in that day's
+  403|     calendar month), counting every line whoever's text it was. These are what the
+  404|     intake's caps are measured against (intake.left). serve/guard.ts `spent` reads
+  405|     the ledger the same way before it queues text."""
+  406|     day = day or time.strftime('%Y-%m-%d', time.gmtime())
+  407|     month = day[:7]
+  408|     today, this_month = 0.0, 0.0
+  409|     for line in ledger.read_text().splitlines() if ledger.exists() else []:
+  410|         try:
+  411|             r = json.loads(line)
+  412|             d = float(r['dollars'])
+  413|             line_day = str(r['day'])
+  414|         except (ValueError, KeyError, TypeError):
+  415|             continue
+  416|         if line_day.startswith(month):
+  417|             this_month += d
+  418|         if line_day == day:
+  419|             today += d
+  420|     return today, this_month
+  421| 
 ```
 
 ## `simharness/paired.py`
