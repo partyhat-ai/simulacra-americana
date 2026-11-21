@@ -1,12 +1,21 @@
 # EVAL: the 1920 prototype
 
-**Run.** `runs/1920-2c8ce73571`, seed 1920, 400 draws, truth mode, prompt p1.
+**Scored run.** `runs/1920-0cd41d0857`, seed 1920, 400 draws, truth mode, prompt p1.
+Its 434 agent requests went through the Messages Batch API (`anthropic-batch`):
+Sonnet 5.5 for the bulk, Opus 5.5 for the checks. Run on 20 November 2026; the
+requests cost $1.23.
 
-Every number below is copied from `runs/1920-2c8ce73571/validation.json`,
-`analysis.json` and `published/1920.json`. The run re-scores the prototype's
-interviews (the same answers as `runs/1920-bcbd86b43f`, in `agents/`) with
-today's code, on the public inputs in `data/1920/`. To rerun it from the repo
-alone, with no model calls:
+**Comparison run.** `runs/1920-2c8ce73571` re-scores the original prototype's
+interviews (the same answers as `runs/1920-bcbd86b43f`, in `agents/`), which
+Claude Code subagents answered instead of the API (deviation 10). Both runs use
+the same config, prompt, seed, models and code (apart from the batch-id fix in
+deviation 10), on the public inputs in
+`data/1920/`. Only who answered the agents differs, so every backbone check is
+identical. The summary and "API rerun" below use the API run. The sections after
+them describe the comparison run, and every number there is copied from
+`runs/1920-2c8ce73571/validation.json`, `analysis.json` and `published/1920.json`.
+
+To rerun the comparison run from the repo alone, with no model calls:
 
 ```sh
 export SIMHARNESS_CACHE=data/1920
@@ -21,8 +30,7 @@ code that wrote it; after a code change, copy its `agents/` into the new run fol
 
 This is not the run the server publishes. `serve/bundles/1920.json` comes
 from a later run (its `runId`), with typed what-ifs added, 100 draws, two
-Haiku 4.5 interviews in each of six cohorts, and no `validation.json`. The
-scores below are the prototype's and haven't been rerun.
+Haiku 4.5 interviews in each of six cohorts, and no `validation.json`.
 
 ## Summary
 
@@ -43,15 +51,45 @@ scores below are the prototype's and haven't been rerun.
 - **The agent layer:**
   - It is fully memorization-exposed: 56 of 56 probes named 1920, both
     candidates and the winner.
-  - It follows platforms, not labels (label swap 0%).
-  - It is **badly homogenized**: 90% of eligible cohorts answered unanimously.
-  - It **overstates turnout** by about 12 points on average (15.5 points for
-    women, N3).
-  - Its paired effect for the League what-if has a stable sign across three
-    paraphrases and two models.
+  - It follows platforms, not labels (label swap 3%).
+  - It is **badly homogenized**: 80% of eligible cohorts answered unanimously
+    (90% with subagents).
+  - It **overstates women's turnout** by 15.4 points on average (N3).
+  - **Its League effect is not robust.** It is small (−0.027) and changes sign
+    across paraphrases and between Sonnet and Opus, so A3 fails. With subagents
+    it looked stable at −0.091.
 - **The biggest uncertainty is β_B**, how Black voters split. The state
   returns can't identify it. It swings the `fifteenth` result from 416 to 449
   Harding electoral votes (see "The biggest uncertainty" below).
+
+## API rerun vs the original (subagent) run
+
+Both runs: same config, prompt p1, seed, models and code. Only the backend differs.
+Values come from each run's `validation.json`.
+
+| ID | Check | Subagents, re-scored (`1920-2c8ce73571`) | API (`1920-0cd41d0857`) |
+|---|---|---|---|
+| R1, B1–B5, N1, N2 | Backbone checks | as in the table below | identical |
+| A1 | Cohort bias, median \|bias\| (report-only) | 0.41 logit | 0.32 logit |
+| N3 | Agents' women's turnout, MAE | 15.5 points | 15.4 points |
+| L2 | Label swap, follows label | 0% (n = 39) | 3% (n = 36) — **Pass** |
+| A2 | Homogenization index | 0.90 (21 cohorts) | 0.80 (20 cohorts) — still **Fail** |
+| A3 (`league`) | Effect; paraphrase SD; Sonnet vs Opus | −0.091; 0.054; −0.18 vs −0.03 — **Pass** | −0.027; 0.050; +0.12 vs −0.05 — **Fail** |
+| A3 (`no-19th`) | Effect; paraphrase SD (report-only) | −0.121; 0.026 | −0.045; 0.038 |
+| A3 (`fifteenth`) | Effect; paraphrase SD (report-only) | +0.198; 0.066 | +0.038; 0.212 |
+| A4 | Stereotype audit | 0 of 66 flagged | 1 of 64 flagged — **Pass** |
+| | **Score** | 9 passed, 4 failed | 8 passed, 5 failed (B5, N1, N3, A2, A3 `league`) |
+
+What changed with independent API calls:
+
+- **Less homogenization,** as deviation 10 suspected: unanimity falls from 90%
+  to 80% of eligible cohorts. That is still far above the 25% threshold.
+- **The paired what-if effects shrink about 3 to 5 times.** With subagents,
+  each answering 18–59 requests in one context, they were larger.
+- **The League effect doesn't survive.** Its sign flips across paraphrases
+  (+0.058, 0.0, −0.043) and between models, so its stable sign in the
+  original run was most likely an artifact of the subagents' shared contexts.
+- **Backbone checks don't involve the agents,** so they are identical in both runs.
 
 ## What-if results (the prototype's bundle)
 
@@ -324,6 +362,10 @@ its effect. None changes a threshold.
       homogenization in A2 may be partly an artifact of batching.
     - **The production path is `anthropic-batch`**, and this pilot should be
       rerun on it before any agent-layer number is cited.
+    - **Rerun on `anthropic-batch` on 20 November 2026** as
+      `runs/1920-0cd41d0857`: see "API rerun". The rerun needed one fix first:
+      the Batch API rejects request ids containing `|`, `:` or `+`, so the batch
+      backend now sends a hash of each id (`llm.batch_custom_id`).
 11. **p1 prompt bugs,** found after the answers came back and fixed in p2.
     The p1 requests that were answered are unchanged on disk.
     - Non-citizen women were given the `no-19th` counterfactual, and their

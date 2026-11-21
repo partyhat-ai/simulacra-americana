@@ -95,6 +95,14 @@ def test_a_batch_that_never_ends_raises_instead_of_hanging():
     assert b.cancelled and clock.t <= 300 + llm.AnthropicBatchBackend.CANCEL_WAIT + 30
 
 
+def test_batch_custom_ids_meet_the_api_pattern_and_map_back():
+    import re
+    ids = ['control|border+midwest+south+west:F:foreign_white_alien-0|sonnet', 'swap|x:M:y-1|opus']
+    cids = [llm.batch_custom_id(i) for i in ids]
+    assert all(re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', c) for c in cids)
+    assert len(set(cids)) == len(ids) and cids == [llm.batch_custom_id(i) for i in ids]   # distinct, stable
+
+
 def test_prices_never_undercharge_an_unknown_model(capsys):
     assert llm.prices('claude-opus-5-5') == llm.PRICES['claude-opus-5-5']
     assert llm.prices('claude-opus-5-5-20261001') == llm.PRICES['claude-opus-5-5']    # a dated id: its base

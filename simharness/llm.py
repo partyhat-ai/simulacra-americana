@@ -181,6 +181,12 @@ class AnthropicBackend(Backend):
             return list(pool.map(self._one, requests))
 
 
+def batch_custom_id(request_id: str) -> str:
+    """The Batch API's custom_id must match ^[a-zA-Z0-9_-]{1,64}$; request ids hold '|', ':' and '+'.
+    A hash of the id fits, is stable across a resumed collect, and maps back through `collect`."""
+    return 'r' + hashlib.sha256(request_id.encode()).hexdigest()[:40]
+
+
 class AnthropicBatchBackend(AnthropicBackend):
     name = 'anthropic-batch'
 
@@ -195,7 +201,7 @@ class AnthropicBatchBackend(AnthropicBackend):
         from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
         from anthropic.types.messages.batch_create_params import Request
         batch = self.client.messages.batches.create(requests=[
-            Request(custom_id=r['id'], params=MessageCreateParamsNonStreaming(**self.params(r))) for r in requests
+            Request(custom_id=batch_custom_id(r['id']), params=MessageCreateParamsNonStreaming(**self.params(r))) for r in requests
         ])
         self.wait(batch.id, poll_seconds, self.MAX_WAIT if max_wait is None else max_wait, sleep, clock)
         return self.collect(batch.id, requests)
@@ -212,7 +218,7 @@ class AnthropicBatchBackend(AnthropicBackend):
             sleep(poll_seconds)
 
     def collect(self, batch_id: str, requests: list[dict]) -> list[dict]:
-        by_id = {r['id']: r for r in requests}
+        by_id = {batch_custom_id(r['id']): r for r in requests}
         out = []
         for res in self.client.messages.batches.results(batch_id):
             r = by_id[res.custom_id]
