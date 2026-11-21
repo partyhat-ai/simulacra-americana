@@ -10,9 +10,8 @@ SIMHARNESS_CACHE=data/1920 python3 -m simharness.run evaluate --config configs/p
 ```
 
 Checked on 2026-11-20: this folder and the full private cache give identical
-results (B1 7.47, B2 2.92, B3 0.93, B4 0.047, R1 0.33; uniform swing 8.68,
-persistence 17.41). `EVAL.md` reports B1 7.55 and B4 0.052 from an earlier run
-(`runs/1920-bcbd86b43f`); the difference comes from code changes since then, not from the data.
+results, and `EVAL.md`'s numbers come from this folder (`runs/1920-2c8ce73571`; its
+"Run" note has the four commands that rerun the whole table).
 
 Not here, because the backbone doesn't read them: the interviews' newspaper
 corpus (`sources/corpus_1920.jsonl`) and party platforms

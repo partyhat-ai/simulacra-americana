@@ -181,7 +181,7 @@ Within a state and sex, native-born, naturalized and Northern Black voters
 are assumed to turn out at the same rate.
 
 **B4 · Medium · open · C1 (δ)**
-Women's partisan tilt (δ = −0.67, toward Cox) comes from a regression that is
+Women's partisan tilt (δ = −0.66, toward Cox) comes from a regression that is
 identified mostly by the West-versus-East contrast. Region may confound it.
 The `no-19th` result (helps Harding) depends on its sign.
 
@@ -1061,7 +1061,7 @@ The five 1920 groups are a partition, but they carry small misfits:
 
 **F6 · Low · open · verdict copy**
 - A multi-what-if verdict concatenates single-what-if sentences, so a
-  combination can say "3.1 million women" measured in a different world
+  combination can say "3.5 million women" measured in a different world
   from the combined one.
 - The League verdict's "2.7 points" is measured in the point draw only.
 
@@ -1110,7 +1110,9 @@ were planned and answered (p1 → p2, deviations 1–9), so that run id can't be
 regenerated from today's code with identical results.
 
 **Fixed:** `run_id` now also hashes `simharness/*.py`, so a code change gives a
-new run id. Runs recorded before the change keep their old ids.
+new run id. Runs recorded before the change keep their old ids. The prototype's
+interviews were re-scored with today's code as `1920-2c8ce73571` (EVAL.md), which commits
+its `agents/` and reads only `data/1920/`, so it reruns from the repo.
 
 **G2 · Low · open · timing**
 The backbone was refitted after the agent answers existed. The cohort bias
@@ -1175,7 +1177,7 @@ has 23). The served bundle, `serve/bundles/<year>.json`, is whichever run
 published last: `run_pipeline` copies it over the previous one. Nothing
 records why a run is the served one, and nothing requires it to have been
 validated. 1920 serves `1920-1a2dcd24ad`, which has no `validation.json`;
-EVAL.md scores the prototype run `1920-bcbd86b43f`. `serve/bundles/RUN_ID`
+EVAL.md scores `1920-2c8ce73571`, the prototype's interviews re-scored with today's code. `serve/bundles/RUN_ID`
 holds only the last run published for any year.
 
 **Next:** a registry of served runs (year, run id, date, why), and evaluate

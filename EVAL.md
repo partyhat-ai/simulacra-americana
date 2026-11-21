@@ -1,9 +1,23 @@
 # EVAL: the 1920 prototype
 
-**Run.** `runs/1920-bcbd86b43f`, seed 1920, 400 draws, truth mode, prompt p1.
+**Run.** `runs/1920-2c8ce73571`, seed 1920, 400 draws, truth mode, prompt p1.
 
-Every number below is copied from `runs/1920-bcbd86b43f/validation.json`,
-`analysis.json` and `published/1920.json`.
+Every number below is copied from `runs/1920-2c8ce73571/validation.json`,
+`analysis.json` and `published/1920.json`. The run re-scores the prototype's
+interviews (the same answers as `runs/1920-bcbd86b43f`, in `agents/`) with
+today's code, on the public inputs in `data/1920/`. To rerun it from the repo
+alone, with no model calls:
+
+```sh
+export SIMHARNESS_CACHE=data/1920
+python3 -m simharness.run backbone --config configs/prototype-1920.json
+python3 -m simharness.run analyze  --config configs/prototype-1920.json
+python3 -m simharness.run evaluate --config configs/prototype-1920.json
+python3 -m simharness.run publish  --config configs/prototype-1920.json
+```
+
+The run id hashes the code (DISCLOSURES G1), so this reproduces `1920-2c8ce73571` at the
+code that wrote it; after a code change, copy its `agents/` into the new run folder first.
 
 This is not the run the server publishes. `serve/bundles/1920.json` comes
 from a later run (its `runId`), with typed what-ifs added, 100 draws, two
@@ -15,10 +29,10 @@ scores below are the prototype's and haven't been rerun.
 - **Reproduction is exact.** Every one of 400 draws reproduces each state's
   certified R, D and other vote to within 0.33 votes. Every draw gives 404–127.
 - **The backbone beats its baselines on held-out states:**
-  - two-party RMSE 7.6 points (uniform swing 8.7, persistence 17.4);
+  - two-party RMSE 7.5 points (uniform swing 8.7, persistence 17.4);
   - turnout RMSE 2.9 points (persistence 16.5);
-  - Spearman 0.92;
-  - Brier 0.052 (uniform swing 0.069).
+  - Spearman 0.93;
+  - Brier 0.047 (uniform swing 0.069).
 - **It fails two backbone checks:**
   - **B5.** It calls North Carolina for Harding.
   - **N1.** Its women's-turnout intervals are too narrow and run high in CT,
@@ -47,29 +61,29 @@ votes across 400 draws.
 | What-if | Harding EV (point, 80% range) | Cox wins in | States flipped (point) | States with P(flip) > 10% | Popular vote, Harding / Cox |
 |---|---|---|---|---|---|
 | None (history) | 404 (404–404) | 0 / 400 | none | none | 60.2% / 34.1% of 26.80M |
-| `no-19th` (franchise, high) | 429 (417–429) | 0 / 400 | KY, NC | KY 0.99, NC 0.64 | 62.2% / 32.0% of 23.66M |
-| `fifteenth` (franchise, high) | 416 (404–475) | 0 / 400 | NC | NC 0.51, AR 0.29, VA 0.20, AL 0.19, FL 0.16, LA 0.16 | 60.8% / 33.6% of 27.41M |
-| `league` (issue, low) | 404 (392–404) | 0 / 400 | none (TN holds by 0.3 points) | TN 0.12 | 57.8% / 36.7% of 26.36M |
-| `everyone` (franchise) | 416 (392–455) | 0 / 400 | NC | NC 0.52, AL 0.20, VA 0.16 | 58.1% / 36.0% of 61.75M |
+| `no-19th` (franchise, high) | 429 (417–429) | 0 / 400 | KY, NC | KY 0.99, NC 0.64 | 62.0% / 32.1% of 23.33M |
+| `fifteenth` (franchise, high) | 416 (404–475) | 0 / 400 | NC | NC 0.51, AR 0.29, VA 0.19, AL 0.19, FL 0.16, LA 0.16 | 60.8% / 33.6% of 27.41M |
+| `league` (issue, low) | 404 (392–404) | 0 / 400 | none (TN holds by 0.3 points) | TN 0.12 | 57.8% / 36.7% of 26.35M |
+| `everyone` (franchise) | 416 (403–456) | 0 / 400 | NC | NC 0.52, AL 0.20, VA 0.16, FL 0.12, LA 0.11 | 58.0% / 36.1% of 61.75M |
 
 Combinations are in the bundle. For example, `fifteenth+no-19th` gives 441
 (417–488) and flips KY, NC and VA.
 
 Verdicts as the robot says them:
 
-> **`no-19th`:** 3.1 million women who voted can't, outside the states that
+> **`no-19th`:** 3.5 million women who voted can't, outside the states that
 > already let them. Kentucky, North Carolina flip, but Harding still wins,
 > 429–102. The closest call is Tennessee, which holds for Harding by 3.0
 > points. Cox wins in 0 of 400 draws.
 
-> **`league`:** With the treaty settled, the voters I interviewed lean 2.7
+> **`league`:** With the treaty settled, the voters lean 2.7
 > points further toward Cox than the same people did in the world as it was.
 > No state flips. Harding wins, 404–127. The closest call is Tennessee, which
 > holds for Harding by 0.3 points. Cox wins in 0 of 400 draws.
 
 **How to read these:**
-- **`no-19th`** helps Harding. The backbone's women's tilt δ is −0.67 logit
-  (80% interval −0.98 to −0.35), meaning women leaned *toward Cox* relative to
+- **`no-19th`** helps Harding. The backbone's women's tilt δ is −0.66 logit
+  (80% interval −0.98 to −0.37), meaning women leaned *toward Cox* relative to
   men of their state, so removing them helps Harding. This comes from a
   regression of the 1916 → 1920 swing on the new-women share. It is
   identified mostly by the West/East contrast, which region can confound (see
@@ -79,20 +93,14 @@ Verdicts as the robot says them:
 
 ## Validation checks
 
-To rerun these with the repo alone (no private cache), use the 1920 inputs in `data/1920/`
-(`data/1920/PROVENANCE.md`): `SIMHARNESS_CACHE=data/1920 python3 -m simharness.run backbone`, then
-`evaluate`, both with `--config configs/prototype-1920.json`. Today's code gives B1 7.47, B3 0.93 and B4 0.047
-where the table below has 7.55, 0.923 and 0.052. That comes from code changes since this run, not the data;
-every other figure is the same.
-
 | ID | Check | Value | Threshold | Result |
 |---|---|---|---|---|
 | R1 | Unchanged rerun reproduces every state | max error 0.33 votes; EV 404–127 in 400/400 draws | ≤ 1 vote; exact EV | **Pass** |
-| B1 | Holdout two-party RMSE | backbone 7.55; uniform swing 8.68; persistence 17.41; demographic 7.62 | ≤ uniform swing and persistence | **Pass** |
+| B1 | Holdout two-party RMSE | backbone 7.47; uniform swing 8.68; persistence 17.41; demographic 7.62 | ≤ uniform swing and persistence | **Pass** |
 | B2 | Holdout turnout RMSE | backbone 2.92; persistence 16.46 | ≤ persistence | **Pass** (after a bug fix: see deviation 1) |
-| B3 | Holdout Spearman | 0.923 | ≥ 0.8 | **Pass** |
-| B4 | Holdout Brier | backbone 0.052; uniform swing 0.069 | ≤ uniform swing | **Pass** |
-| B5 | Holdout EV error | 12 (predicted 160, actual 148; NC called for Harding: 55.1% predicted, 43.3% actual) | ≤ 0 (no holdout state was decided by < 5 points) | **Fail** |
+| B3 | Holdout Spearman | 0.93 | ≥ 0.8 | **Pass** |
+| B4 | Holdout Brier | backbone 0.047; uniform swing 0.069 | ≤ uniform swing | **Pass** |
+| B5 | Holdout EV error | 12 (predicted 160, actual 148; NC called for Harding: 54.6% predicted, 43.3% actual) | ≤ 0 (no holdout state was decided by < 5 points) | **Fail** |
 | N1 | Women's turnout vs Corder–Wolbrecht | MAE 3.3 points; 3 of 5 inside the 90% interval | MAE ≤ 8 and ≥ 70% inside | **Fail** (coverage 60%) |
 | N2 | Placebo, GA and MS | GA 2.1% (−1.8 to 5.5); MS 3.5% (−0.2 to 6.3) | within ±5 points of 0 | **Pass** |
 | N3 | Agents' stated women's turnout vs Corder–Wolbrecht | MAE 15.5 points (11 women agents in 5 states) | ≤ 10 | **Fail** |
@@ -165,7 +173,7 @@ denominator):
 
   | Cohort | Bias (logit) |
   |---|---|
-  | border:F:black | +0.92 |
+  | border:F:black | +0.90 |
   | south:F:black | −0.86 |
   | south:M:native_white | −0.76 |
   | south:M:black | −0.61 |
@@ -214,12 +222,12 @@ denominator):
   and smaller swings.
 - **What the published run uses.** The prior, N(1.5, 1),
   updated by that regression, gives a median of 0.50 (80% interval −0.70 to
-  1.68).
+  1.67).
 - **The sensitivity**, same seed:
 
 | β_B from | Black voters outside the South, Harding share | `fifteenth` Harding EV (80% range) | P(flip) > 10% |
 |---|---|---|---|
-| Prior updated by Goodman (published) | 73% (48–88%) | 416 (404–475) | NC 0.51, AR 0.29, VA 0.20, AL 0.19, FL 0.16, LA 0.16 |
+| Prior updated by Goodman (published) | 73% (48–88%) | 416 (404–475) | NC 0.51, AR 0.29, VA 0.19, AL 0.19, FL 0.16, LA 0.16 |
 | Prior only, N(1.5, 1) | 88% (67–96%) | 449 (404–489) | NC 0.82, AR 0.66, VA 0.55, AL 0.52, LA 0.48, FL 0.47, GA 0.35, MS 0.34 |
 
 - **Which is closer to history?** The prior-only row encodes the
@@ -239,14 +247,14 @@ These are standard deviations across draws.
 
 | What-if | National R two-party (points), full | Backbone parameters only (population noise off) | Agents only (one backbone draw) | Harding EV SD, full / params only |
 |---|---|---|---|---|
-| `no-19th` | 0.48 | 0.51 | — | 6.6 / 7.0 |
-| `fifteenth` | 0.55 | 0.56 | — | 27.4 / 22.9 |
-| `league` | 0.78 | 0.78 | 0.79 | 6.6 / 6.5 |
+| `no-19th` | 0.48 | 0.52 | — | 6.5 / 7.1 |
+| `fifteenth` | 0.55 | 0.56 | — | 27.4 / 22.8 |
+| `league` | 0.78 | 0.78 | 0.79 | 6.6 / 6.4 |
 
 **How to read this:**
 - **Population noise is a small part of every what-if.** Turning it off
   barely changes the spread, and the full-draw SD for `fifteenth`'s EV
-  (27.4) exceeds the params-only SD (22.9) only by what the flip-prone
+  (27.4) exceeds the params-only SD (22.8) only by what the flip-prone
   Southern states add.
 - **For `league`, almost all the spread comes from the agent layer.** The
   calibrated baseline has no national spread, so only the agent bootstrap
