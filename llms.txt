@@ -18,13 +18,13 @@ than known.
 
 Read `VALIDITY.md` for what the system can and cannot claim.
 
-Generated from commit `e836df7c977d` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `6f14dc41b9fa` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 
 ## Start here
 
 - [README](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/README.md): overview
-- [File map](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/MAP.md): all 1113 files with size, line count, description, and which digest part holds each one
-- [Commit history](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/HISTORY.md): 13 commit(s)
+- [File map](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/MAP.md): all 1121 files with size, line count, description, and which digest part holds each one
+- [Commit history](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/HISTORY.md): 14 commit(s)
 
 ## Documentation
 
@@ -38,10 +38,10 @@ Generated from commit `e836df7c977d` (2026-11-20) of github.com/partyhat-ai/simu
 - [docs/DEPLOY.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/docs/DEPLOY.md)
 - [docs/harness/README.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/docs/harness/README.md)
 
-## Full source text (1,809,230 characters, about 452,307 tokens, in 17 part(s))
+## Full source text (1,809,694 characters, about 452,423 tokens, in 17 part(s))
 
-- [llms/code-1.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-1.md): 10 files, `.dockerignore` to `Dockerfile` (102,167 characters)
-- [llms/code-2.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-2.md): 9 files, `EVAL.md` to `docs/DEPLOY.md` (109,929 characters)
+- [llms/code-1.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-1.md): 10 files, `.dockerignore` to `Dockerfile` (102,396 characters)
+- [llms/code-2.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-2.md): 9 files, `EVAL.md` to `docs/DEPLOY.md` (110,164 characters)
 - [llms/code-3.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-3.md): 24 files, `docs/harness/README.md` to `requirements.lock` (75,472 characters)
 - [llms/code-4.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-4.md): 5 files, `scripts/harness/build_corpus.py` to `scripts/harness/build_population_mid.py` (119,537 characters)
 - [llms/code-5.md](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/code-5.md): 11 files, `scripts/harness/build_population_modern.py` to `scripts/harness/sessions-report.py` (115,728 characters)
@@ -60,4 +60,4 @@ Generated from commit `e836df7c977d` (2026-11-20) of github.com/partyhat-ai/simu
 
 ## Data
 
-- [Data samples](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/data-samples.md): 904 data files in 8 folder(s), one sample each
+- [Data samples](https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/llms/data-samples.md): 912 data files in 8 folder(s), one sample each

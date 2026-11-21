@@ -1,6 +1,6 @@
 # simulacra-americana: source and docs, part 1 of 17
 
-Generated from commit `e836df7c977d` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `6f14dc41b9fa` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 Files `.dockerignore` to `Dockerfile`. Lines are numbered as in the repository.
 
 ## `.dockerignore`
@@ -580,7 +580,7 @@ Files `.dockerignore` to `Dockerfile`. Lines are numbered as in the repository.
   181| are assumed to turn out at the same rate.
   182| 
   183| **B4 · Medium · open · C1 (δ)**
-  184| Women's partisan tilt (δ = −0.67, toward Cox) comes from a regression that is
+  184| Women's partisan tilt (δ = −0.66, toward Cox) comes from a regression that is
   185| identified mostly by the West-versus-East contrast. Region may confound it.
   186| The `no-19th` result (helps Harding) depends on its sign.
   187| 
@@ -1460,7 +1460,7 @@ Files `.dockerignore` to `Dockerfile`. Lines are numbered as in the repository.
  1061| 
  1062| **F6 · Low · open · verdict copy**
  1063| - A multi-what-if verdict concatenates single-what-if sentences, so a
- 1064|   combination can say "3.1 million women" measured in a different world
+ 1064|   combination can say "3.5 million women" measured in a different world
  1065|   from the combined one.
  1066| - The League verdict's "2.7 points" is measured in the point draw only.
  1067| 
@@ -1509,206 +1509,208 @@ Files `.dockerignore` to `Dockerfile`. Lines are numbered as in the repository.
  1110| regenerated from today's code with identical results.
  1111| 
  1112| **Fixed:** `run_id` now also hashes `simharness/*.py`, so a code change gives a
- 1113| new run id. Runs recorded before the change keep their old ids.
- 1114| 
- 1115| **G2 · Low · open · timing**
- 1116| The backbone was refitted after the agent answers existed. The cohort bias
- 1117| (A1) and shrinkage use the final backbone, not the one in place when the
- 1118| requests were planned.
- 1119| 
- 1120| **G3 · Low · fixed · environment**
- 1121| The installed Anthropic SDK was 0.46, which predates `output_config`. The API
- 1122| backends need `anthropic>=1.0`, which the `llm` extra now requires
- 1123| (`pyproject.toml`). They have since run live, from the quick and rung 1 runs
- 1124| on.
- 1125| 
- 1126| **G4 · Low · by design · answer cache (`llm.AnswerCache`)**
- 1127| Identical requests reuse earlier live answers across runs. A request is
- 1128| identical when it has the same model, system, user text and schema; meta,
- 1129| run id and prompt-version labels are ignored. So p4 requests whose text
- 1130| equals p3's reuse p3 answers. Transcript answers are never cached.
- 1131| Each answer records `cached_from`.
- 1132| 
- 1133| **G5 · Medium · open · evidence reproducibility**
- 1134| Web search results change over time. The saved
- 1135| `whatifs/evidence/<key>.json` is the record: queries, every source, the
- 1136| cited text and the notes. It is hashed into the run id. Re-researching
- 1137| (`--refresh`) makes a new instrument.
- 1138| 
- 1139| **G6 · Low · open · spend ledger**
- 1140| `sessions/spend.jsonl` started mid-day. The earlier sessions' $0.26 is
- 1141| backfilled from runs' usage, and D15's $0.052 is estimated. Since the intake
- 1142| caps, each line also records the access key's name (`who`) and its `ts` and
- 1143| `day` are UTC (earlier lines are local time), and the server drops a line's
- 1144| `note`, which holds the typed words, after 7 days.
- 1145| 
- 1146| **G7 · Medium · open · generators outside the repo**
- 1147| The all-years profiles, configs and platform files were written by scratch
- 1148| scripts kept in session scratchpads (`gen_d1.py`, `d3_build.py`,
- 1149| `d3_planks.py` and unnamed ones for the other years). So was the 1920/1924
- 1150| invariant capture (`inv/capture.py`). The felony-rate parsers live in the
- 1151| cache beside their PDFs. None can be rerun from the repo; the outputs are
- 1152| the record.
- 1153| 
- 1154| **Next:** move the generators into `scripts/`.
+ 1113| new run id. Runs recorded before the change keep their old ids. The prototype's
+ 1114| interviews were re-scored with today's code as `1920-2c8ce73571` (EVAL.md), which commits
+ 1115| its `agents/` and reads only `data/1920/`, so it reruns from the repo.
+ 1116| 
+ 1117| **G2 · Low · open · timing**
+ 1118| The backbone was refitted after the agent answers existed. The cohort bias
+ 1119| (A1) and shrinkage use the final backbone, not the one in place when the
+ 1120| requests were planned.
+ 1121| 
+ 1122| **G3 · Low · fixed · environment**
+ 1123| The installed Anthropic SDK was 0.46, which predates `output_config`. The API
+ 1124| backends need `anthropic>=1.0`, which the `llm` extra now requires
+ 1125| (`pyproject.toml`). They have since run live, from the quick and rung 1 runs
+ 1126| on.
+ 1127| 
+ 1128| **G4 · Low · by design · answer cache (`llm.AnswerCache`)**
+ 1129| Identical requests reuse earlier live answers across runs. A request is
+ 1130| identical when it has the same model, system, user text and schema; meta,
+ 1131| run id and prompt-version labels are ignored. So p4 requests whose text
+ 1132| equals p3's reuse p3 answers. Transcript answers are never cached.
+ 1133| Each answer records `cached_from`.
+ 1134| 
+ 1135| **G5 · Medium · open · evidence reproducibility**
+ 1136| Web search results change over time. The saved
+ 1137| `whatifs/evidence/<key>.json` is the record: queries, every source, the
+ 1138| cited text and the notes. It is hashed into the run id. Re-researching
+ 1139| (`--refresh`) makes a new instrument.
+ 1140| 
+ 1141| **G6 · Low · open · spend ledger**
+ 1142| `sessions/spend.jsonl` started mid-day. The earlier sessions' $0.26 is
+ 1143| backfilled from runs' usage, and D15's $0.052 is estimated. Since the intake
+ 1144| caps, each line also records the access key's name (`who`) and its `ts` and
+ 1145| `day` are UTC (earlier lines are local time), and the server drops a line's
+ 1146| `note`, which holds the typed words, after 7 days.
+ 1147| 
+ 1148| **G7 · Medium · open · generators outside the repo**
+ 1149| The all-years profiles, configs and platform files were written by scratch
+ 1150| scripts kept in session scratchpads (`gen_d1.py`, `d3_build.py`,
+ 1151| `d3_planks.py` and unnamed ones for the other years). So was the 1920/1924
+ 1152| invariant capture (`inv/capture.py`). The felony-rate parsers live in the
+ 1153| cache beside their PDFs. None can be rerun from the repo; the outputs are
+ 1154| the record.
  1155| 
- 1156| **G8 · Low · open · holdout states**
- 1157| Holdout sets were drawn three ways. live-1924 reuses 1920's draw. 1789–1836
- 1158| take a quarter of the hand-listed popular-vote states, some of them
- 1159| uncertain (TN 1800). 1880–2024 take
- 1160| `sorted(random.Random(year).sample(states, 12))`.
- 1161| 
- 1162| **Next:** one formula, written down before any holdout check is run.
+ 1156| **Next:** move the generators into `scripts/`.
+ 1157| 
+ 1158| **G8 · Low · open · holdout states**
+ 1159| Holdout sets were drawn three ways. live-1924 reuses 1920's draw. 1789–1836
+ 1160| take a quarter of the hand-listed popular-vote states, some of them
+ 1161| uncertain (TN 1800). 1880–2024 take
+ 1162| `sorted(random.Random(year).sample(states, 12))`.
  1163| 
- 1164| **G9 · Low · by design · 1920/1924 invariant**
- 1165| The generalisation was checked against a capture taken before any edit.
- 1166| Every plan request, compile request and publish bundle for 1920 and 1924 is
- 1167| byte-identical, except 1924's compile prompt: its list of existing what-ifs
- 1168| now includes `no-19th`. Each typed 1924 text misses the compile cache once
- 1169| (about $0.02); no brief changes. Legacy 1916–1924 data still goes through
- 1170| the untouched loaders.
- 1171| 
- 1172| **G10 · Medium · open · which run is served (`intake.run_pipeline`)**
- 1173| A year can have many run folders (a code change makes a new one, G1; 1920
- 1174| has 23). The served bundle, `serve/bundles/<year>.json`, is whichever run
- 1175| published last: `run_pipeline` copies it over the previous one. Nothing
- 1176| records why a run is the served one, and nothing requires it to have been
- 1177| validated. 1920 serves `1920-1a2dcd24ad`, which has no `validation.json`;
- 1178| EVAL.md scores the prototype run `1920-bcbd86b43f`. `serve/bundles/RUN_ID`
- 1179| holds only the last run published for any year.
- 1180| 
- 1181| **Next:** a registry of served runs (year, run id, date, why), and evaluate
- 1182| or verify the served run before it replaces the last one.
- 1183| 
- 1184| **G11 · Low · by design · dependency audit (`package.json` `auditConfig`)**
- 1185| CI's `pnpm audit --audit-level=high` ignores one advisory:
- 1186| GHSA-3r8g-jcqq-3p5j (CVE-2026-128120), a denial of service while SvelteKit
- 1187| parses form data for remote functions' `form`. It is fixed only in SvelteKit
- 1188| 3.1.1, a major upgrade. It doesn't apply here: the page is a static,
- 1189| client-only build (`adapter-static`, `ssr = false`) with no SvelteKit server
- 1190| and no remote functions. The other SvelteKit 2 advisories still reported
- 1191| (GHSA-6cf5-gc4q-fm3x, moderate: remote `query.batch`; GHSA-pfhg-q3qv-9q6r and
- 1192| GHSA-27mw-82g8-phjj, low: enhanced forms and prerendered pages; and cookie
- 1193| GHSA-pxg6-pf52-xh8x, low) concern features the page doesn't use either.
- 1194| 
- 1195| **Next:** upgrade to SvelteKit 3 and drop the ignore if the page is ever
- 1196| developed again.
- 1197| 
- 1198| ---
+ 1164| **Next:** one formula, written down before any holdout check is run.
+ 1165| 
+ 1166| **G9 · Low · by design · 1920/1924 invariant**
+ 1167| The generalisation was checked against a capture taken before any edit.
+ 1168| Every plan request, compile request and publish bundle for 1920 and 1924 is
+ 1169| byte-identical, except 1924's compile prompt: its list of existing what-ifs
+ 1170| now includes `no-19th`. Each typed 1924 text misses the compile cache once
+ 1171| (about $0.02); no brief changes. Legacy 1916–1924 data still goes through
+ 1172| the untouched loaders.
+ 1173| 
+ 1174| **G10 · Medium · open · which run is served (`intake.run_pipeline`)**
+ 1175| A year can have many run folders (a code change makes a new one, G1; 1920
+ 1176| has 23). The served bundle, `serve/bundles/<year>.json`, is whichever run
+ 1177| published last: `run_pipeline` copies it over the previous one. Nothing
+ 1178| records why a run is the served one, and nothing requires it to have been
+ 1179| validated. 1920 serves `1920-1a2dcd24ad`, which has no `validation.json`;
+ 1180| EVAL.md scores `1920-2c8ce73571`, the prototype's interviews re-scored with today's code. `serve/bundles/RUN_ID`
+ 1181| holds only the last run published for any year.
+ 1182| 
+ 1183| **Next:** a registry of served runs (year, run id, date, why), and evaluate
+ 1184| or verify the served run before it replaces the last one.
+ 1185| 
+ 1186| **G11 · Low · by design · dependency audit (`package.json` `auditConfig`)**
+ 1187| CI's `pnpm audit --audit-level=high` ignores one advisory:
+ 1188| GHSA-3r8g-jcqq-3p5j (CVE-2026-128120), a denial of service while SvelteKit
+ 1189| parses form data for remote functions' `form`. It is fixed only in SvelteKit
+ 1190| 3.1.1, a major upgrade. It doesn't apply here: the page is a static,
+ 1191| client-only build (`adapter-static`, `ssr = false`) with no SvelteKit server
+ 1192| and no remote functions. The other SvelteKit 2 advisories still reported
+ 1193| (GHSA-6cf5-gc4q-fm3x, moderate: remote `query.batch`; GHSA-pfhg-q3qv-9q6r and
+ 1194| GHSA-27mw-82g8-phjj, low: enhanced forms and prerendered pages; and cookie
+ 1195| GHSA-pxg6-pf52-xh8x, low) concern features the page doesn't use either.
+ 1196| 
+ 1197| **Next:** upgrade to SvelteKit 3 and drop the ignore if the page is ever
+ 1198| developed again.
  1199| 
- 1200| ## H. Historical evidence
+ 1200| ---
  1201| 
- 1202| **H1 · by design · evidence never enters a brief**
- 1203| Research results are used only after the interviews:
- 1204| - **Agreement:** do the interviews move votes or turnout the way the record
- 1205|   does?
- 1206| - **Blend:** a prior on cohort effects, for compiled, exploratory what-ifs
- 1207|   only.
- 1208| - **Confidence tier.**
- 1209| 
- 1210| Hand-written what-ifs are never blended; their numbers follow
- 1211| METHOD.md.
- 1212| 
- 1213| **H2 · Medium · open · source grading**
- 1214| Tiers come from a domain list (`evidence.TIER_A`, `TIER_B`; everything else,
- 1215| including Wikipedia, is C). A .edu course page counts as A. A finding's
- 1216| grade is its tier × the extractor's match judgement (same-event …
- 1217| distant). Neither is validated.
- 1218| 
- 1219| **H3 · Medium · open · blend weights**
- 1220| Evidence sd grows as 1/√grade. The interview sd is floored at 0.2 logit,
- 1221| because a bootstrap over two or three people understates model error. Weak
- 1222| evidence barely moves numbers: Chaplin's evidence weight is under 1%.
- 1223| 
- 1224| **H4 · Medium · open · confidence tiers**
- 1225| `evidence.confidence` is a rule set:
- 1226| - a kind's base tier;
- 1227| - plausibility and anachronism;
- 1228| - evidence strength;
- 1229| - agreement;
- 1230| - interview stability, for agent-mode what-ifs only;
- 1231| - the number of interviews.
- 1232| 
- 1233| "Extremely low" (very-low) reaches the page as `confidence: low`, plus
- 1234| `confidenceTier` and a sentence in the summary. The rules were written
- 1235| after seeing the first three results, and nothing calibrates them.
- 1236| 
- 1237| ---
+ 1202| ## H. Historical evidence
+ 1203| 
+ 1204| **H1 · by design · evidence never enters a brief**
+ 1205| Research results are used only after the interviews:
+ 1206| - **Agreement:** do the interviews move votes or turnout the way the record
+ 1207|   does?
+ 1208| - **Blend:** a prior on cohort effects, for compiled, exploratory what-ifs
+ 1209|   only.
+ 1210| - **Confidence tier.**
+ 1211| 
+ 1212| Hand-written what-ifs are never blended; their numbers follow
+ 1213| METHOD.md.
+ 1214| 
+ 1215| **H2 · Medium · open · source grading**
+ 1216| Tiers come from a domain list (`evidence.TIER_A`, `TIER_B`; everything else,
+ 1217| including Wikipedia, is C). A .edu course page counts as A. A finding's
+ 1218| grade is its tier × the extractor's match judgement (same-event …
+ 1219| distant). Neither is validated.
+ 1220| 
+ 1221| **H3 · Medium · open · blend weights**
+ 1222| Evidence sd grows as 1/√grade. The interview sd is floored at 0.2 logit,
+ 1223| because a bootstrap over two or three people understates model error. Weak
+ 1224| evidence barely moves numbers: Chaplin's evidence weight is under 1%.
+ 1225| 
+ 1226| **H4 · Medium · open · confidence tiers**
+ 1227| `evidence.confidence` is a rule set:
+ 1228| - a kind's base tier;
+ 1229| - plausibility and anachronism;
+ 1230| - evidence strength;
+ 1231| - agreement;
+ 1232| - interview stability, for agent-mode what-ifs only;
+ 1233| - the number of interviews.
+ 1234| 
+ 1235| "Extremely low" (very-low) reaches the page as `confidence: low`, plus
+ 1236| `confidenceTier` and a sentence in the summary. The rules were written
+ 1237| after seeing the first three results, and nothing calibrates them.
  1238| 
- 1239| ## Log
+ 1239| ---
  1240| 
- 1241| | Entry | Change |
- 1242| |---|---|
- 1243| | all | File started from EVAL.md, METHOD.md, the agents' reports and the session's own mistakes |
- 1244| | G2 | Analysis paired control/cf/swap answers on a hardcoded `|sonnet` request id, so any run on another bulk model (the Haiku quick run) silently yielded no effects, no L2 and no voters. Now keyed on the configured bulk/check models. |
- 1245| | D9 | Quick run (Haiku, 2 agents): the recall probe named 1920, both candidates and the winner at 95% confidence from the blinded brief. One probe, but it matches L1's standing exposure. |
- 1246| | D10 | Quick run: in the no-19th counterfactual the Indiana woman still answered able_to_vote=yes, reasoning from Indiana's 1919 presidential-suffrage law; the Black North Carolina woman answered no in control, no-19th and league, yes only under fifteenth. Plausible, but the no-19th brief should say explicitly whether state-law suffrage survives. |
- 1247| | D11 | Rung 1 (run 1920-4502a6f977): a quote named the blinded ballot label ("K says the money got too loose…", south:M:native_white-0). The page would show a meaningless letter to readers. The prompt should tell agents to name candidates by description, not label, in `quote`; or quotes need a label→name pass before publish. |
- 1248| | D12 | Rung 1: the League effect's sign flips by paraphrase (dr −0.61, +0.49, +0.03 for paraphrases 0/1/2, n=12 agents). Two single-agent flips go in opposite directions (midwest woman R→D; northeast man D→R). The national dr CI [−0.19, +0.15] spans zero. At this n the paraphrase spread (A3) is larger than any effect. |
- 1249| | D13 | Prompt p3 (run 1920-423843d9ec): no quote used a letter label (0/24, fixes D11). Haiku ignored the 25-word cap (mean 30.5, max 40 words). A hard limit needs a trim at publish or a schema maxLength, not prompt wording. |
- 1250| | D14 | Live config: adding two cohorts reassigned every later agent's paraphrase (0 of 48 cache hits); reverted to rung 1's six cohorts. |
- 1251| | D15 | Chaplin research: Haiku extract gave 0 findings from rich notes; Sonnet extract truncated at 4,000 tokens (~$0.052 lost usage, estimated in ledger). |
- 1252| | D16 | League research, first call: 0 searches, answered from memory; grounding dropped all claims. Now ≥2 searches, one retry. |
- 1253| | D17 | Flu what-if compiled with T2/T3 dropped; hand-edited to none and re-asked; compiler c2. |
- 1254| | D18 | Flu cf quote named "Cox" from a blinded brief. |
- 1255| | D19 | Haiku choice/quote contradictions (Chaplin, flu runs). |
- 1256| | D20 | Extractor gave League findings the historical sign; `relation` field added, flip done in code. |
- 1257| | E5, E6 | Chaplin positions hand-edited (annotations visible to voters); ineligible candidate modelled and flagged. |
- 1258| | G4–G6 | Answer cache, evidence reproducibility, spend ledger. |
- 1259| | H1–H4 | New stage: historical evidence (research → extract → agreement, blend, confidence tiers). All exploratory. |
- 1260| | D21–D23 | Harding disclosure: misattribution fixed (ballot-line news + manipulation check, p5/c3; 0/12 misread on rerun); evidence by role; homogenized swing logged. |
- 1261| | C13–C16, D24 | 1924 added: population aged from 1920, carried-forward backbone (R1 exact; C–W women MAE 3.6), no 1924 corpus, platforms from APP; La Follette withdrawal via interview transfer (80% Davis). |
- 1262| | C17 | NHGIS extract 1 (1870–1970 state tables); 1920 rebuild matches exactly; 1930 NT10 label misalignment caught and fixed; 1930 Mexican race in `other`. |
- 1263| | A9 | All-years build: agents G, C and E sent the user's email in User-Agent headers to Wikipedia and loc.gov; removed from every script; sent requests can't be recalled. |
- 1264| | B7, B8 | Amended: per-era economy wording, ages 18–80 from 1972, 1920-era first names; IN/MO/TX/AR alien voting coded [I] for 1920 but not applied to legacy years. |
- 1265| | B10 | general_fit: every non-1916–24 year runs on literature priors plus exact calibration; no in-year identification. |
- 1266| | B11 | Gallup 1936/1940 show women slightly more R, contradicting the 1920 δ used to 1940. |
- 1267| | B12 | general_fit repairs (scaled adults, overridden rules, synthetic cells) make reproduction exact by construction; not on the page. |
- 1268| | B13 | All 60 elections, 1789–2024, reproduce certified R/D/O and history's EV: ev_fixed, ev_split, lumped-O rule (1860, 1892, 1912), pre-1868 EV counts electors who voted. |
- 1269| | C15 | Amended: corpus build stopped before 1924 (C30). |
- 1270| | C18 | 1870–1910 women from F/M ratios run 2.0% high against the 1910 hand table (foreign white +10.4%). |
- 1271| | C19 | 1870–1910 estimates: 1900 NT7 mislabel asserted; 1890 citizenship interpolated; 1870 IPF and clipped naturalized; colored splits. |
- 1272| | C20 | 1940 counts Mexican Americans as white: `other_races` 1.01M → 0.33M is classification, not population. |
- 1273| | C21 | 1960/1970 nativity carried from 1950: 1970 foreign-born whites ~3M high. |
- 1274| | C22 | 1940–1970 Negro share interpolated, 18–20 add-on, HI 1950 missing, GA 1944/48 18+ from 1950 ratio. |
- 1275| | C23 | Returns 1868–2024: 153 state-years fail the county-sum check (MO ~1.2×); A–A state file wrong for 1968 NC and 2020 NE. |
- 1276| | C24 | Pre-1868 adults all [I]: age-band splits, 1790 16+ conversion, no nativity before 1850. |
- 1277| | C25 | Alien-voting, property and taxpaying rules coded from memory of Keyssar/Hayduk; unchecked; GA 1840 turnout 102%. |
- 1278| | C26 | Felony rates 1972–2008 interpolated between 1980 bins and 2010; law changes smoothed; national fallback rates in agents. |
- 1279| | C27 | 1980–2024 adults: FB-by-race estimates, 1990 unraked, 2020 −1.96% to PL, borrowed files for 1972–2004. |
- 1280| | C28 | 1789–1824 popular votes fragmentary (~20 partial or lost rows; 1789, 1792, 1820 uncontested). |
- 1281| | C29 | Platforms 1789–2024: hand-copied Founders Online quotes, OCR sources, no platforms before 1840, 2020 R, 2024 D. |
- 1282| | C30 | Corpus build stopped by the user; schema inferred after blocked reads; per-year topics. |
- 1283| | D25 | Modern descriptors name offices: contamination total for 1988–2020. |
- 1284| | D26 | 1928 descriptors omit Catholicism and the wet stance; 1952 omits the war record. |
- 1285| | D27 | 1948 Wallace voters can only answer "other"; his planks never shown. |
- 1286| | D28 | Ballot access not expressible (1860, 1948 AL/LA/MS/SC, 1964 AL). |
- 1287| | D29 | Anderson 1980 and Perot 1992 planks from debates; Perot 1996 from janda.org; 1840/1844 Whig non-platform text. |
- 1288| | D30 | Unopposed 1789, 1792, 1820: one ballot line, no swap arm. |
- 1289| | D31 | Case-sensitive short-name masks, generic modern surnames, "the the", questionable label letters. |
- 1290| | D32 | Fixed: "Election Day is Tuesday" pre-1845, "independent Progressive" for every third candidate, `_lead` naming R. |
- 1291| | E7 | 1920 what-ifs run in other years by rewriting "1920"; text not reviewed per year. |
- 1292| | F7 | Profiles' slice-source sentences describe intended census builds, not the files used. |
- 1293| | F8 | Disputable ev_label conventions (pre-12th Amendment, 1824, 1832, 1860, 1872, 2000) and mixed slot order. |
- 1294| | G7 | Profile, config, platform and invariant generators live in scratchpads, not the repo. |
- 1295| | G8 | Holdout sets drawn three different ways. |
- 1296| | G9 | 1920/1924 byte-identity held except 1924's compile prompt (~$0.02 cache miss per typed text). |
- 1297| | E8 | 31 example what-ifs as chips; 1972/2000-FL specs hand-fixed, Nader made 2000's named third, 4 research cost stops, headline winner-first. |
- 1298| | A10 | Held-out benchmark read moved out of `Run.verify` into `benchmarks.py`; `test_benchmarks_isolated` passes again. |
- 1299| | C31 | Missouri 1820 and Michigan 1836 have electoral votes but no map tile. |
- 1300| | C32 | State electoral votes are electors allotted, not cast, in 8 years. |
- 1301| | C33 | Minor faithless and abstaining electors aren't listed in 7 years. |
- 1302| | F9 | "Washington, D.C." in typed text matches Washington state. |
- 1303| | G1 | Entry still said run ids don't hash the code; `run_id` already hashes `simharness/*.py`. Marked fixed. |
- 1304| | D33 | Staging, belief check (p6), reasoning audit, escalation, barred-slot replacement, focus and borrowed cohorts, spread floor; Opus at high effort for the once-per-change passes. |
- 1305| | D34 | Compiler c4: what-ifs modelled as asked (impossible timing gets its own world, graded fantastical); reinterpretations said first; substitutes never take the reader's words. |
- 1306| | D35 | Focus slots round-robin, unvotable cohorts skipped; belief check asks an unstated consequence; audit counts passing slips (staging w2). |
- 1307| | D36 | Live configs: interviews on Sonnet 5.5 at medium effort (was Haiku), escalations on Opus 5.5; fast mode (2x price) on every Opus call. Every year's controls are re-asked once on the new model. |
- 1308| | A11 | `verify` won't score Corder–Wolbrecht as held out where the women's-turnout prior uses its knots (1928–1948); it never had, since the file holds 1920 and 1924 only. |
- 1309| | A12 | `test_benchmarks_isolated` parses modules and scripts instead of grepping lines; each known bypass is tested. |
- 1310| | G6 | Ledger lines carry `who` and UTC days; old lines lose `note`. |
- 1311| | G10 | Which run each year serves is the one published last; 1920 serves `1920-1a2dcd24ad`, which has no `validation.json`. |
- 1312| | G11 | Dependency refresh (zod, express, vite, SvelteKit 2.70.4, adapter-static, vitest 4); audit ignores CVE-2026-128120, which doesn't apply to a static build. |
+ 1241| ## Log
+ 1242| 
+ 1243| | Entry | Change |
+ 1244| |---|---|
+ 1245| | all | File started from EVAL.md, METHOD.md, the agents' reports and the session's own mistakes |
+ 1246| | G2 | Analysis paired control/cf/swap answers on a hardcoded `|sonnet` request id, so any run on another bulk model (the Haiku quick run) silently yielded no effects, no L2 and no voters. Now keyed on the configured bulk/check models. |
+ 1247| | D9 | Quick run (Haiku, 2 agents): the recall probe named 1920, both candidates and the winner at 95% confidence from the blinded brief. One probe, but it matches L1's standing exposure. |
+ 1248| | D10 | Quick run: in the no-19th counterfactual the Indiana woman still answered able_to_vote=yes, reasoning from Indiana's 1919 presidential-suffrage law; the Black North Carolina woman answered no in control, no-19th and league, yes only under fifteenth. Plausible, but the no-19th brief should say explicitly whether state-law suffrage survives. |
+ 1249| | D11 | Rung 1 (run 1920-4502a6f977): a quote named the blinded ballot label ("K says the money got too loose…", south:M:native_white-0). The page would show a meaningless letter to readers. The prompt should tell agents to name candidates by description, not label, in `quote`; or quotes need a label→name pass before publish. |
+ 1250| | D12 | Rung 1: the League effect's sign flips by paraphrase (dr −0.61, +0.49, +0.03 for paraphrases 0/1/2, n=12 agents). Two single-agent flips go in opposite directions (midwest woman R→D; northeast man D→R). The national dr CI [−0.19, +0.15] spans zero. At this n the paraphrase spread (A3) is larger than any effect. |
+ 1251| | D13 | Prompt p3 (run 1920-423843d9ec): no quote used a letter label (0/24, fixes D11). Haiku ignored the 25-word cap (mean 30.5, max 40 words). A hard limit needs a trim at publish or a schema maxLength, not prompt wording. |
+ 1252| | D14 | Live config: adding two cohorts reassigned every later agent's paraphrase (0 of 48 cache hits); reverted to rung 1's six cohorts. |
+ 1253| | D15 | Chaplin research: Haiku extract gave 0 findings from rich notes; Sonnet extract truncated at 4,000 tokens (~$0.052 lost usage, estimated in ledger). |
+ 1254| | D16 | League research, first call: 0 searches, answered from memory; grounding dropped all claims. Now ≥2 searches, one retry. |
+ 1255| | D17 | Flu what-if compiled with T2/T3 dropped; hand-edited to none and re-asked; compiler c2. |
+ 1256| | D18 | Flu cf quote named "Cox" from a blinded brief. |
+ 1257| | D19 | Haiku choice/quote contradictions (Chaplin, flu runs). |
+ 1258| | D20 | Extractor gave League findings the historical sign; `relation` field added, flip done in code. |
+ 1259| | E5, E6 | Chaplin positions hand-edited (annotations visible to voters); ineligible candidate modelled and flagged. |
+ 1260| | G4–G6 | Answer cache, evidence reproducibility, spend ledger. |
+ 1261| | H1–H4 | New stage: historical evidence (research → extract → agreement, blend, confidence tiers). All exploratory. |
+ 1262| | D21–D23 | Harding disclosure: misattribution fixed (ballot-line news + manipulation check, p5/c3; 0/12 misread on rerun); evidence by role; homogenized swing logged. |
+ 1263| | C13–C16, D24 | 1924 added: population aged from 1920, carried-forward backbone (R1 exact; C–W women MAE 3.6), no 1924 corpus, platforms from APP; La Follette withdrawal via interview transfer (80% Davis). |
+ 1264| | C17 | NHGIS extract 1 (1870–1970 state tables); 1920 rebuild matches exactly; 1930 NT10 label misalignment caught and fixed; 1930 Mexican race in `other`. |
+ 1265| | A9 | All-years build: agents G, C and E sent the user's email in User-Agent headers to Wikipedia and loc.gov; removed from every script; sent requests can't be recalled. |
+ 1266| | B7, B8 | Amended: per-era economy wording, ages 18–80 from 1972, 1920-era first names; IN/MO/TX/AR alien voting coded [I] for 1920 but not applied to legacy years. |
+ 1267| | B10 | general_fit: every non-1916–24 year runs on literature priors plus exact calibration; no in-year identification. |
+ 1268| | B11 | Gallup 1936/1940 show women slightly more R, contradicting the 1920 δ used to 1940. |
+ 1269| | B12 | general_fit repairs (scaled adults, overridden rules, synthetic cells) make reproduction exact by construction; not on the page. |
+ 1270| | B13 | All 60 elections, 1789–2024, reproduce certified R/D/O and history's EV: ev_fixed, ev_split, lumped-O rule (1860, 1892, 1912), pre-1868 EV counts electors who voted. |
+ 1271| | C15 | Amended: corpus build stopped before 1924 (C30). |
+ 1272| | C18 | 1870–1910 women from F/M ratios run 2.0% high against the 1910 hand table (foreign white +10.4%). |
+ 1273| | C19 | 1870–1910 estimates: 1900 NT7 mislabel asserted; 1890 citizenship interpolated; 1870 IPF and clipped naturalized; colored splits. |
+ 1274| | C20 | 1940 counts Mexican Americans as white: `other_races` 1.01M → 0.33M is classification, not population. |
+ 1275| | C21 | 1960/1970 nativity carried from 1950: 1970 foreign-born whites ~3M high. |
+ 1276| | C22 | 1940–1970 Negro share interpolated, 18–20 add-on, HI 1950 missing, GA 1944/48 18+ from 1950 ratio. |
+ 1277| | C23 | Returns 1868–2024: 153 state-years fail the county-sum check (MO ~1.2×); A–A state file wrong for 1968 NC and 2020 NE. |
+ 1278| | C24 | Pre-1868 adults all [I]: age-band splits, 1790 16+ conversion, no nativity before 1850. |
+ 1279| | C25 | Alien-voting, property and taxpaying rules coded from memory of Keyssar/Hayduk; unchecked; GA 1840 turnout 102%. |
+ 1280| | C26 | Felony rates 1972–2008 interpolated between 1980 bins and 2010; law changes smoothed; national fallback rates in agents. |
+ 1281| | C27 | 1980–2024 adults: FB-by-race estimates, 1990 unraked, 2020 −1.96% to PL, borrowed files for 1972–2004. |
+ 1282| | C28 | 1789–1824 popular votes fragmentary (~20 partial or lost rows; 1789, 1792, 1820 uncontested). |
+ 1283| | C29 | Platforms 1789–2024: hand-copied Founders Online quotes, OCR sources, no platforms before 1840, 2020 R, 2024 D. |
+ 1284| | C30 | Corpus build stopped by the user; schema inferred after blocked reads; per-year topics. |
+ 1285| | D25 | Modern descriptors name offices: contamination total for 1988–2020. |
+ 1286| | D26 | 1928 descriptors omit Catholicism and the wet stance; 1952 omits the war record. |
+ 1287| | D27 | 1948 Wallace voters can only answer "other"; his planks never shown. |
+ 1288| | D28 | Ballot access not expressible (1860, 1948 AL/LA/MS/SC, 1964 AL). |
+ 1289| | D29 | Anderson 1980 and Perot 1992 planks from debates; Perot 1996 from janda.org; 1840/1844 Whig non-platform text. |
+ 1290| | D30 | Unopposed 1789, 1792, 1820: one ballot line, no swap arm. |
+ 1291| | D31 | Case-sensitive short-name masks, generic modern surnames, "the the", questionable label letters. |
+ 1292| | D32 | Fixed: "Election Day is Tuesday" pre-1845, "independent Progressive" for every third candidate, `_lead` naming R. |
+ 1293| | E7 | 1920 what-ifs run in other years by rewriting "1920"; text not reviewed per year. |
+ 1294| | F7 | Profiles' slice-source sentences describe intended census builds, not the files used. |
+ 1295| | F8 | Disputable ev_label conventions (pre-12th Amendment, 1824, 1832, 1860, 1872, 2000) and mixed slot order. |
+ 1296| | G7 | Profile, config, platform and invariant generators live in scratchpads, not the repo. |
+ 1297| | G8 | Holdout sets drawn three different ways. |
+ 1298| | G9 | 1920/1924 byte-identity held except 1924's compile prompt (~$0.02 cache miss per typed text). |
+ 1299| | E8 | 31 example what-ifs as chips; 1972/2000-FL specs hand-fixed, Nader made 2000's named third, 4 research cost stops, headline winner-first. |
+ 1300| | A10 | Held-out benchmark read moved out of `Run.verify` into `benchmarks.py`; `test_benchmarks_isolated` passes again. |
+ 1301| | C31 | Missouri 1820 and Michigan 1836 have electoral votes but no map tile. |
+ 1302| | C32 | State electoral votes are electors allotted, not cast, in 8 years. |
+ 1303| | C33 | Minor faithless and abstaining electors aren't listed in 7 years. |
+ 1304| | F9 | "Washington, D.C." in typed text matches Washington state. |
+ 1305| | G1 | Entry still said run ids don't hash the code; `run_id` already hashes `simharness/*.py`. Marked fixed. |
+ 1306| | D33 | Staging, belief check (p6), reasoning audit, escalation, barred-slot replacement, focus and borrowed cohorts, spread floor; Opus at high effort for the once-per-change passes. |
+ 1307| | D34 | Compiler c4: what-ifs modelled as asked (impossible timing gets its own world, graded fantastical); reinterpretations said first; substitutes never take the reader's words. |
+ 1308| | D35 | Focus slots round-robin, unvotable cohorts skipped; belief check asks an unstated consequence; audit counts passing slips (staging w2). |
+ 1309| | D36 | Live configs: interviews on Sonnet 5.5 at medium effort (was Haiku), escalations on Opus 5.5; fast mode (2x price) on every Opus call. Every year's controls are re-asked once on the new model. |
+ 1310| | A11 | `verify` won't score Corder–Wolbrecht as held out where the women's-turnout prior uses its knots (1928–1948); it never had, since the file holds 1920 and 1924 only. |
+ 1311| | A12 | `test_benchmarks_isolated` parses modules and scripts instead of grepping lines; each known bypass is tested. |
+ 1312| | G6 | Ledger lines carry `who` and UTC days; old lines lose `note`. |
+ 1313| | G10 | Which run each year serves is the one published last; 1920 serves `1920-1a2dcd24ad`, which has no `validation.json`. |
+ 1314| | G11 | Dependency refresh (zod, express, vite, SvelteKit 2.70.4, adapter-static, vitest 4); audit ignores CVE-2026-128120, which doesn't apply to a static build. |
 ```
 
 ## `Dockerfile`
