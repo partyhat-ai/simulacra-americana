@@ -51,6 +51,7 @@ is `src/lib/simulacra/schemas.ts`.
 | `serve/simulacra.ts`, `serve/index.ts` | The Express router that serves the bundles, and the server that mounts it at `/api/simulacra` next to the static page |
 | `serve/bundles/<year>.json` | The bundles the server serves (`SIMULACRA_BUNDLES` overrides the folder) |
 | `extracts/` | IPUMS extract definitions: we ship definitions, never microdata |
+| `data/1920/` | The public 1920 inputs (census tables, returns, franchise, a held-out benchmark), so `SIMHARNESS_CACHE=data/1920` reruns the 1920 backbone and checks; licences and sources in its `PROVENANCE.md` |
 | `runs/<id>/` | Everything a run wrote: config, fit, requests, answers, analysis, validation, `published/1920.json`. The repo keeps only `config.json`, `analysis.json`, `validation.json` and `published/`; `fit.pkl`, `effects.pkl` and `agents/` are regenerable and stay local |
 | `runs/_cache/` | Identical-request answer cache (regenerable from `runs/*`; gitignored) |
 | `whatifs/<key>.json`, `whatifs/evidence/<key>.json` | Compiled what-ifs (exploratory) and every what-if's researched evidence; both hashed into run ids |

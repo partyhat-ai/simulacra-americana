@@ -79,6 +79,12 @@ Verdicts as the robot says them:
 
 ## Validation checks
 
+To rerun these with the repo alone (no private cache), use the 1920 inputs in `data/1920/`
+(`data/1920/PROVENANCE.md`): `SIMHARNESS_CACHE=data/1920 python3 -m simharness.run backbone`, then
+`evaluate`, both with `--config configs/prototype-1920.json`. Today's code gives B1 7.47, B3 0.93 and B4 0.047
+where the table below has 7.55, 0.923 and 0.052. That comes from code changes since this run, not the data;
+every other figure is the same.
+
 | ID | Check | Value | Threshold | Result |
 |---|---|---|---|---|
 | R1 | Unchanged rerun reproduces every state | max error 0.33 votes; EV 404–127 in 400/400 draws | ≤ 1 vote; exact EV | **Pass** |

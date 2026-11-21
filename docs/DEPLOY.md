@@ -298,6 +298,10 @@ not for redistribution. They live only in `s3://simulacra-americana-data/cache/`
 (the derived part, everything except `*/raw/`) and on EFS. They are never in
 git, an image, Vercel or the assets bucket.
 
+The 1920 inputs in `data/1920/` are different: they are transcribed from the census
+volumes (public domain) or come from CC0 datasets, plus one CC BY-SA returns file, and are
+committed so the 1920 results can be rerun from the repo (`data/1920/PROVENANCE.md`).
+
 To re-sync after rebuilding the cache on a laptop, run
 `scripts/sync-data.sh upload-cache`, then `scripts/sync-data.sh cache`. Run
 ids hash the cache manifest, so a changed cache means new run ids.
