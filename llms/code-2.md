@@ -1,6 +1,6 @@
 # synthetic-electorate-toy: source and docs, part 2 of 17
 
-Generated from commit `4a07108d3ae4` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `e5e4f20fbaeb` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 Files `EVAL.md` to `infra/.gitignore`. Lines are numbered as in the repository.
 
 ## `EVAL.md`
@@ -867,7 +867,7 @@ Files `EVAL.md` to `infra/.gitignore`. Lines are numbered as in the repository.
 ## `README.md`
 
 ```markdown
-    1| # Synthetic voters (toy example)
+    1| # Synthetic voters
     2| 
     3| Developed in a private repository from September 2026; this is a snapshot of main as of 20 November 2026.
     4| 

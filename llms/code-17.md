@@ -1,6 +1,6 @@
 # synthetic-electorate-toy: source and docs, part 17 of 17
 
-Generated from commit `4a07108d3ae4` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `e5e4f20fbaeb` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 Files `tests/test_agents.py` to `vite.config.ts`. Lines are numbered as in the repository.
 
 ## `tests/test_agents.py`
