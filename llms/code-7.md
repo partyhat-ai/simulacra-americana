@@ -1,6 +1,6 @@
 # simulacra-americana: source and docs, part 7 of 17
 
-Generated from commit `caf86112f396` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `29f2a89724da` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 Files `simharness/agent.py` to `simharness/aggregate.py`. Lines are numbered as in the repository.
 
 ## `simharness/agent.py`

@@ -1,6 +1,6 @@
 # simulacra-americana: file map
 
-Generated from commit `caf86112f396` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `29f2a89724da` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 
 1129 tracked files. 196 are reproduced in full in the `code-N.md` parts; the rest are listed with the reason they are not.
 
@@ -115,7 +115,7 @@ Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/si
 | `simharness/whatifs.py` | 12,364 | 236 | The what-ifs: each edits one layer of the calibrated world and names its | code-11.md |
 | `simharness/world.py` | 16,346 | 224 | Staging a compiled what-if's world, and auditing whether the voices lived in it (D33). | code-11.md |
 | `src/app.d.ts` | 49 | 4 |  | code-11.md |
-| `src/app.html` | 6,882 | 65 | The four weights the page renders, fetched at parse time to avoid a late font swap. --> | code-11.md |
+| `src/app.html` | 6,877 | 65 | The four weights the page renders, fetched at parse time to avoid a late font swap. --> | code-11.md |
 | `src/app.html.test.ts` | 1,825 | 43 | The plain-text copy of the page in app.html is for crawlers and agents only. It must never be | code-11.md |
 | `src/lib/robot/RobotFrame.svelte` | 4,404 | 125 | The narrator robot, framed into the page. Mount it inside the element the | code-11.md |
 | `src/lib/robot/assets.ts` | 757 | 19 | Where the robot's model, paint textures and the candidates' portraits live | code-11.md |
@@ -198,7 +198,7 @@ Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/si
 | `static/fonts/GeistMono-Regular.woff2` | 50,284 | 0 |  | skip: binary |
 | `static/fonts/OFL.txt` | 4,368 | 92 |  | code-16.md |
 | `static/harness-faces/atlas-09.png` | 120,174 | 0 |  | skip: binary |
-| `static/llms.txt` | 2,847 | 33 | Simulacra Americana | code-16.md |
+| `static/llms.txt` | 2,822 | 33 | Simulacra Americana | code-16.md |
 | `static/robots.txt` | 290 | 8 | Simulacra Americana: every American presidential election, replayed and rerun with one thing changed | code-16.md |
 | `static/simulacra/chatpro-history.png` | 30,050 | 0 |  | skip: binary |
 | `static/simulacra/chatpro-rerun.png` | 29,388 | 0 |  | skip: binary |

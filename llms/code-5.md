@@ -1,6 +1,6 @@
 # simulacra-americana: source and docs, part 5 of 17
 
-Generated from commit `caf86112f396` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `29f2a89724da` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 Files `scripts/harness/build_population_modern.py` to `scripts/harness/sessions-report.py`. Lines are numbered as in the repository.
 
 ## `scripts/harness/build_population_modern.py`

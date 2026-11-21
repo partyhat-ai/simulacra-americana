@@ -1,6 +1,6 @@
 # simulacra-americana: source and docs, part 16 of 17
 
-Generated from commit `caf86112f396` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `29f2a89724da` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 Files `src/lib/simulacra/state.ts` to `tests/test_agent.py`. Lines are numbered as in the repository.
 
 ## `src/lib/simulacra/state.ts`
@@ -1615,11 +1615,11 @@ Files `src/lib/simulacra/state.ts` to `tests/test_agent.py`. Lines are numbered 
    25| ## Links
    26| 
    27| - Site: https://simulacraamericana.com
-   28| - Code: https://github.com/partyhat-ai/synthetic-electorate-toy
-   29| - Evaluation, failures included: https://github.com/partyhat-ai/synthetic-electorate-toy/blob/main/EVAL.md
-   30| - Method: https://github.com/partyhat-ai/synthetic-electorate-toy/blob/main/METHOD.md
-   31| - What it can and can't claim: https://github.com/partyhat-ai/synthetic-electorate-toy/blob/main/VALIDITY.md
-   32| - Known flaws: https://github.com/partyhat-ai/synthetic-electorate-toy/blob/main/DISCLOSURES.md
+   28| - Code: https://github.com/partyhat-ai/simulacra-americana
+   29| - Evaluation, failures included: https://github.com/partyhat-ai/simulacra-americana/blob/main/EVAL.md
+   30| - Method: https://github.com/partyhat-ai/simulacra-americana/blob/main/METHOD.md
+   31| - What it can and can't claim: https://github.com/partyhat-ai/simulacra-americana/blob/main/VALIDITY.md
+   32| - Known flaws: https://github.com/partyhat-ai/simulacra-americana/blob/main/DISCLOSURES.md
    33| - Built by Cameron Feather: https://cameronfeather.com
 ```
 
