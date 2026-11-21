@@ -47,7 +47,9 @@ def test_budget_stops_at_its_ceiling():
     assert b.spent == 5.5  # the stage that crossed is still counted
 
 
-def test_budget_without_a_ceiling_never_stops():
+def test_per_text_budget_is_unlimited_when_no_ceiling_is_passed():
+    # Only the per-text limit is unset here. The public intake always passes a ceiling: what is
+    # left under the $20/day and $200/month caps (see the cap tests below).
     b = intake.Budget()
     b.add(500.0, 'compile', record=False)
     assert b.spent == 500.0
