@@ -1177,7 +1177,8 @@ has 23). The served bundle, `serve/bundles/<year>.json`, is whichever run
 published last: `run_pipeline` copies it over the previous one. Nothing
 records why a run is the served one, and nothing requires it to have been
 validated. 1920 serves `1920-1a2dcd24ad`, which has no `validation.json`;
-EVAL.md scores `1920-2c8ce73571`, the prototype's interviews re-scored with today's code. `serve/bundles/RUN_ID`
+EVAL.md scores `1920-0cd41d0857`, the prototype rerun through the Batch API, and compares it with
+`1920-2c8ce73571`, the prototype's subagent interviews re-scored with today's code. `serve/bundles/RUN_ID`
 holds only the last run published for any year.
 
 **Next:** a registry of served runs (year, run id, date, why), and evaluate

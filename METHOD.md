@@ -481,8 +481,9 @@ interviews, down to "very low" (DISCLOSURES H4).
    - some answers produced with helper scripts.
 
    `EVAL.md` (deviation 10) says which. The production path is
-   `anthropic-batch`, and the agent-layer numbers should be rerun there
-   before they are cited.
+   `anthropic-batch`, and the pilot has been rerun there as
+   `runs/1920-0cd41d0857` (20 November 2026), which `EVAL.md` now scores. Its
+   "API rerun" section compares it with the subagent run.
 8. **The household economy is imputed** until the IPUMS full count is pulled.
 9. **β_B**, how Black voters split, is barely identified from state returns.
    It moves the `fifteenth` result from 416 to 449 Harding electoral votes

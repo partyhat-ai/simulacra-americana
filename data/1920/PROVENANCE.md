@@ -10,8 +10,10 @@ SIMHARNESS_CACHE=data/1920 python3 -m simharness.run evaluate --config configs/p
 ```
 
 Checked on 2026-11-20: this folder and the full private cache give identical
-results, and `EVAL.md`'s numbers come from this folder (`runs/1920-2c8ce73571`; its
-"Run" note has the four commands that rerun the whole table).
+results. `EVAL.md`'s comparison run, `runs/1920-2c8ce73571`, comes from this folder; the four
+commands under "Comparison run" in `EVAL.md` rerun it. Its scored run, `runs/1920-0cd41d0857`, used
+the same backbone inputs, but writing its Batch API requests also read the party platforms and the
+newspaper corpus, which aren't in this folder. Its requests and answers are committed in its `agents/`.
 
 Not here, because the backbone doesn't read them: the interviews' newspaper
 corpus (`sources/corpus_1920.jsonl`) and party platforms

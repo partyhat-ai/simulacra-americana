@@ -7,7 +7,8 @@ requests cost $1.23.
 
 **Comparison run.** `runs/1920-2c8ce73571` re-scores the original prototype's
 interviews (the same answers as `runs/1920-bcbd86b43f`, in `agents/`), which
-Claude Code subagents answered instead of the API (deviation 10). Both runs use
+Claude Code subagents answered instead of the API (deviation 10). Both runs commit their raw
+requests and answers in `agents/`. Both runs use
 the same config, prompt, seed, models and code (apart from the batch-id fix in
 deviation 10), on the public inputs in
 `data/1920/`. Only who answered the agents differs, so every backbone check is
@@ -119,6 +120,9 @@ Verdicts as the robot says them:
 > No state flips. Harding wins, 404–127. The closest call is Tennessee, which
 > holds for Harding by 0.3 points. Cox wins in 0 of 400 draws.
 
+*These what-if results come from the subagent run. In the API run the `league` effect is smaller
+and not robust: see "API rerun".*
+
 **How to read these:**
 - **`no-19th`** helps Harding. The backbone's women's tilt δ is −0.66 logit
   (80% interval −0.98 to −0.37), meaning women leaned *toward Cox* relative to
@@ -126,8 +130,11 @@ Verdicts as the robot says them:
   regression of the 1916 → 1920 swing on the new-women share. It is
   identified mostly by the West/East contrast, which region can confound (see
   limitations).
-- **`league`** moves every group toward Cox. The simulated voters lose a
-  reason to vote against the administration's party. Nothing flips.
+- **`league`** moves every group toward Cox in the published result. The raw
+  cohort effects (below) run from −0.24 to +0.13; each is pulled strongly
+  toward its region before it is applied. The simulated voters lose a reason to vote
+  against the administration's party. Nothing flips. This is the subagent
+  run; in the API run the effect is not robust (see "API rerun").
 
 ## Validation checks
 
@@ -234,7 +241,8 @@ denominator):
     ask for `p_choice` (done), weight by it rather than by the discrete
     choice (done), and raise agents per cohort to 12 or more to measure
     compression properly.
-- **Paired effect, `league`.**
+- **Paired effect, `league`** (subagent run; the API run's is −0.027 and fails
+  A3, see "API rerun").
   - The national two-party effect is −0.091 logit, 80% interval −0.129 to
     −0.047, adult-weighted.
   - Cohort effects run from −0.24 (naturalized men in the Northeast) to +0.13
