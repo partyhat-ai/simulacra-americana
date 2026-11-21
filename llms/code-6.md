@@ -1,7 +1,778 @@
 # synthetic-electorate-toy: source and docs, part 6 of 17
 
-Generated from commit `e5e4f20fbaeb` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
-Files `serve/contract.ts` to `simharness/__init__.py`. Lines are numbered as in the repository.
+Generated from commit `6a200effe03e` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Files `scripts/llms_digest.py` to `simharness/__init__.py`. Lines are numbered as in the repository.
+
+## `scripts/llms_digest.py`
+
+```python
+    1| #!/usr/bin/env python3
+    2| """Build llms.txt and llms/: a plain-text copy of this repository for tools that
+    3| read text at a URL rather than cloning (llmstxt.org convention).
+    4| 
+    5|     python3 scripts/llms_digest.py           # write llms.txt and llms/
+    6|     python3 scripts/llms_digest.py --check   # exit 1 if they don't match the code
+    7| 
+    8| .github/workflows/llms-digest.yml runs this on every push to main and commits
+    9| the result, so the text always matches the code at the commit it names.
+   10| Standard library only.
+   11| 
+   12|   llms.txt              index: the README's opening section, then links to everything below
+   13|   llms/MAP.md           every tracked file: size, lines, first descriptive line, digest part
+   14|   llms/HISTORY.md       commit history, verbatim from git (commits that only regenerate
+   15|                         the digest are left out)
+   16|   llms/code-N.md        full text of every source and doc file, line-numbered, in parts
+   17|                         small enough to fetch whole
+   18|   llms/data-samples.md  the first lines of one data file per top-level folder
+   19| """
+   20| from __future__ import annotations
+   21| 
+   22| import argparse
+   23| import os
+   24| import re
+   25| import shutil
+   26| import subprocess
+   27| import sys
+   28| import tempfile
+   29| from pathlib import Path
+   30| 
+   31| PART_CHARS = 120_000
+   32| OWN = ("llms.txt", "llms/")  # this script's output: never part of its own input
+   33| SKIP_DIRS = {"node_modules", "dist", "build", ".svelte-kit", "__pycache__", ".venv", "venv", ".git", ".next"}
+   34| LOCKFILES = {"package-lock.json", "pnpm-lock.yaml", "yarn.lock", "uv.lock", "poetry.lock", "Cargo.lock"}
+   35| DATA_EXT = {".json", ".jsonl", ".csv", ".tsv", ".parquet", ".npy", ".npz", ".arrow", ".pkl"}
+   36| BINARY_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".woff", ".woff2", ".ttf", ".otf", ".pdf",
+   37|               ".zip", ".gz", ".safetensors", ".bin", ".pt", ".onnx", ".mp4", ".mp3", ".wav"}
+   38| LANG = {".py": "python", ".ts": "ts", ".js": "js", ".svelte": "svelte", ".tf": "hcl", ".sh": "bash",
+   39|         ".md": "markdown", ".yml": "yaml", ".yaml": "yaml", ".toml": "toml", ".json": "json", ".html": "html",
+   40|         ".css": "css", ".txt": "text", ".sql": "sql", ".go": "go", ".rs": "rust"}
+   41| 
+   42| 
+   43| def git(*args: str, cwd: Path) -> str:
+   44|     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout
+   45| 
+   46| 
+   47| def first_descriptive_line(text: str, ext: str) -> str:
+   48|     """A file's own first line of description: a docstring, a leading comment, or a heading."""
+   49|     if ext == ".py":
+   50|         m = re.search(r'^\s*(?:#![^\n]*\n)?\s*(?:"""|\'\'\')\s*(.+)', text)
+   51|         if m:
+   52|             return m.group(1).strip().rstrip("\"'")
+   53|     for line in text.splitlines()[:15]:
+   54|         s = line.strip()
+   55|         m = re.match(r"^(?:#{1,6}\s+|//+\s*|#\s*|/\*+\s*|\*\s+|<!--\s*)(.{8,})", s)
+   56|         if m and not s.startswith("#!") and not s.startswith("// @ts"):
+   57|             return m.group(1).strip().rstrip("*/ -").strip()
+   58|     return ""
+   59| 
+   60| 
+   61| def classify(path: str, size: int, raw: bytes) -> str:
+   62|     name, ext = os.path.basename(path), os.path.splitext(path)[1].lower()
+   63|     parts = path.split("/")
+   64|     if any(p in SKIP_DIRS for p in parts[:-1]):
+   65|         return "skip: generated or vendored directory"
+   66|     if name in LOCKFILES:
+   67|         return "skip: lockfile"
+   68|     if ext in BINARY_EXT or b"\0" in raw[:4096]:
+   69|         return "skip: binary"
+   70|     if raw.startswith(b"version https://git-lfs"):
+   71|         return "skip: Git LFS pointer (content not in the repo)"
+   72|     if ext in DATA_EXT and not (len(parts) == 1 and size <= 20_000):  # root configs stay
+   73|         return "data: sampled in data-samples.md"
+   74|     if size > 200_000:
+   75|         return "skip: larger than 200 KB"
+   76|     return "include"
+   77| 
+   78| 
+   79| def repo_identity(root: Path) -> tuple[str, str, str]:
+   80|     """(owner, name, branch) from GitHub Actions, else from the origin remote."""
+   81|     full = os.environ.get("GITHUB_REPOSITORY")
+   82|     if not full:
+   83|         url = git("remote", "get-url", "origin", cwd=root).strip()
+   84|         m = re.search(r"github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?$", url)
+   85|         if not m:
+   86|             sys.exit(f"can't tell the GitHub repository from {url!r}; set GITHUB_REPOSITORY=owner/name")
+   87|         full = f"{m.group(1)}/{m.group(2)}"
+   88|     owner, name = full.split("/", 1)
+   89|     branch = os.environ.get("LLMS_BRANCH", "main")
+   90|     return owner, name, branch
+   91| 
+   92| 
+   93| def build(root: Path, out: Path) -> dict:
+   94|     owner, name, branch = repo_identity(root)
+   95|     # The last commit that changed anything besides the digest: rebuilding after a
+   96|     # digest-only commit then gives identical text, so the workflow never loops.
+   97|     code_only = ("--", ".", ":(exclude)llms.txt", ":(exclude)llms")
+   98|     sha = git("log", "-1", "--format=%H", *code_only, cwd=root).strip()
+   99|     date = git("log", "-1", "--format=%cs", *code_only, cwd=root).strip()
+  100|     raw_base = f"https://raw.githubusercontent.com/{owner}/{name}/{branch}/"
+  101|     files = [f for f in git("ls-files", cwd=root).splitlines() if f and not f.startswith(OWN)]
+  102|     stamp = (f"Generated from commit `{sha[:12]}` ({date}) of github.com/{owner}/{name} by "
+  103|              f"`scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to "
+  104|              f"`{branch}`, so this text matches the code at that commit.")
+  105| 
+  106|     rows, included, data_dirs = [], [], {}
+  107|     for f in files:
+  108|         raw = (root / f).read_bytes()
+  109|         verdict = classify(f, len(raw), raw)
+  110|         ext = os.path.splitext(f)[1].lower()
+  111|         text = "" if verdict == "skip: binary" else raw.decode("utf-8", "replace")
+  112|         lines = text.count("\n") + (1 if text and not text.endswith("\n") else 0)
+  113|         desc = first_descriptive_line(text, ext) if verdict == "include" else ""
+  114|         rows.append((f, len(raw), lines, desc, verdict))
+  115|         if verdict == "include":
+  116|             included.append((f, text, ext))
+  117|         elif verdict.startswith("data"):
+  118|             data_dirs.setdefault(f.split("/")[0] if "/" in f else "(root)", []).append((f, text))
+  119| 
+  120|     # Parts: whole files in path order, never split across parts.
+  121|     parts, cur, cur_len = [], [], 0
+  122|     for f, text, ext in included:
+  123|         numbered = "\n".join(f"{i:>5}| {l}" for i, l in enumerate(text.splitlines(), 1))
+  124|         block = f"\n## `{f}`\n\n```{LANG.get(ext, '')}\n{numbered}\n```\n"
+  125|         if cur and cur_len + len(block) > PART_CHARS:
+  126|             parts.append(cur)
+  127|             cur, cur_len = [], 0
+  128|         cur.append((f, block))
+  129|         cur_len += len(block)
+  130|     if cur:
+  131|         parts.append(cur)
+  132| 
+  133|     (out / "llms").mkdir(parents=True, exist_ok=True)
+  134|     part_index, file_part = [], {}
+  135|     for i, part in enumerate(parts, 1):
+  136|         fname = f"llms/code-{i}.md"
+  137|         body = "".join(b for _, b in part)
+  138|         (out / fname).write_text(
+  139|             f"# {name}: source and docs, part {i} of {len(parts)}\n\n{stamp}\nFiles `{part[0][0]}` to "
+  140|             f"`{part[-1][0]}`. Lines are numbered as in the repository.\n" + body)
+  141|         part_index.append((fname, part[0][0], part[-1][0], len(part), len(body)))
+  142|         for f, _ in part:
+  143|             file_part[f] = f"code-{i}.md"
+  144| 
+  145|     m = [f"# {name}: file map", "", stamp, "",
+  146|          f"{len(files)} tracked files. {len(included)} are reproduced in full in the `code-N.md` parts; "
+  147|          "the rest are listed with the reason they are not.", "",
+  148|          f"Every path below is relative to {raw_base} (append the path to fetch the raw file).", "",
+  149|          "| File | Bytes | Lines | Description | In digest |", "|---|---|---|---|---|"]
+  150|     for f, size, lines, desc, verdict in rows:
+  151|         if not verdict.startswith("data"):
+  152|             m.append(f"| `{f}` | {size:,} | {lines:,} | {desc.replace('|', '/')[:100]} | {file_part.get(f, verdict)} |")
+  153|     if data_dirs:
+  154|         m += ["", "### Data files (not reproduced; one sample per folder in `data-samples.md`)", "",
+  155|               "| Folder | Files | Bytes |", "|---|---|---|"]
+  156|         sizes = {r[0]: r[1] for r in rows}
+  157|         for d, items in sorted(data_dirs.items()):
+  158|             m.append(f"| `{d}/` | {len(items)} | {sum(sizes[f] for f, _ in items):,} |")
+  159|     (out / "llms" / "MAP.md").write_text("\n".join(m) + "\n")
+  160| 
+  161|     if data_dirs:
+  162|         ds = [f"# {name}: data samples", "", stamp, "",
+  163|               "Data files are not reproduced in full. One sample per top-level folder, first 40 lines:", ""]
+  164|         for d, items in sorted(data_dirs.items()):
+  165|             f, text = items[0]
+  166|             sample = "\n".join(text.splitlines()[:40])
+  167|             ds += [f"## `{d}/` ({len(items)} files)", "", f"Sample: `{f}`", "",
+  168|                    f"```{LANG.get(os.path.splitext(f)[1].lower(), '')}\n{sample}\n```", ""]
+  169|         (out / "llms" / "data-samples.md").write_text("\n".join(ds))
+  170| 
+  171|     # Commits that touched anything besides the digest itself, verbatim.
+  172|     log = git("log", "--format=%h  %ad  %an  %s", "--date=short", "--", ".", ":(exclude)llms.txt", ":(exclude)llms",
+  173|               cwd=root).strip()
+  174|     count = len(log.splitlines()) if log else 0
+  175|     (out / "llms" / "HISTORY.md").write_text(
+  176|         f"# {name}: commit history\n\n{stamp}\n\n{count} commit(s), verbatim from `git log` "
+  177|         f"(commits that only regenerate this digest are left out):\n\n```\n{log}\n```\n")
+  178| 
+  179|     readme = next((f for f in files if f.lower() == "readme.md"), None)
+  180|     total = sum(p[4] for p in part_index)
+  181|     idx = [f"# {name}", ""]
+  182|     if readme:
+  183|         intro = re.split(r"(?m)^##\s", (root / readme).read_text(errors="replace"))[0]
+  184|         intro = re.sub(r"(?m)^#\s.*\n", "", intro).strip()
+  185|         if intro:
+  186|             idx += ["## Summary (the README's opening section, verbatim)", "", intro[:3000], ""]
+  187|     idx += [stamp, "", "## Start here", ""]
+  188|     if readme:
+  189|         idx.append(f"- [README]({raw_base}{readme}): overview")
+  190|     idx += [f"- [File map]({raw_base}llms/MAP.md): all {len(files)} files with size, line count, description, "
+  191|             "and which digest part holds each one",
+  192|             f"- [Commit history]({raw_base}llms/HISTORY.md): {count} commit(s)", ""]
+  193|     docs = [r[0] for r in rows if r[0].lower().endswith(".md") and r[0] != readme]
+  194|     if docs:
+  195|         idx += ["## Documentation", ""] + [f"- [{d}]({raw_base}{d})" for d in docs[:30]] + [""]
+  196|     idx += [f"## Full source text ({total:,} characters, about {total // 4:,} tokens, in {len(part_index)} part(s))", ""]
+  197|     idx += [f"- [{fn}]({raw_base}{fn}): {n} files, `{a}` to `{b}` ({size:,} characters)"
+  198|             for fn, a, b, n, size in part_index]
+  199|     if data_dirs:
+  200|         idx += ["", "## Data", "", f"- [Data samples]({raw_base}llms/data-samples.md): "
+  201|                 f"{sum(len(v) for v in data_dirs.values())} data files in {len(data_dirs)} folder(s), one sample each"]
+  202|     (out / "llms.txt").write_text("\n".join(idx) + "\n")
+  203|     return {"files": len(files), "included": len(included), "parts": len(part_index), "chars": total}
+  204| 
+  205| 
+  206| def snapshot(d: Path) -> dict[str, str]:
+  207|     out = {}
+  208|     if (d / "llms.txt").exists():
+  209|         out["llms.txt"] = (d / "llms.txt").read_text()
+  210|     for p in sorted((d / "llms").glob("*")) if (d / "llms").is_dir() else []:
+  211|         out[f"llms/{p.name}"] = p.read_text()
+  212|     return out
+  213| 
+  214| 
+  215| def main() -> None:
+  216|     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+  217|     ap.add_argument("--check", action="store_true", help="exit 1 if llms.txt and llms/ don't match the code")
+  218|     args = ap.parse_args()
+  219|     root = Path(git("rev-parse", "--show-toplevel", cwd=Path.cwd()).strip())
+  220|     tmp = Path(tempfile.mkdtemp(prefix="llms-digest-"))
+  221|     try:
+  222|         stats = build(root, tmp)
+  223|         fresh = snapshot(tmp)
+  224|         if args.check:
+  225|             # The stamp names a commit; compare everything else.
+  226|             norm = lambda d: {k: re.sub(r"commit `[0-9a-f]{12}` \(\d{4}-\d\d-\d\d\)", "commit", v) for k, v in d.items()}
+  227|             if norm(fresh) != norm(snapshot(root)):
+  228|                 sys.exit("llms.txt / llms/ don't match the code. Run: python3 scripts/llms_digest.py")
+  229|             print("llms.txt and llms/ match the code.")
+  230|             return
+  231|         shutil.rmtree(root / "llms", ignore_errors=True)
+  232|         (root / "llms").mkdir()
+  233|         for rel, text in fresh.items():
+  234|             (root / rel).write_text(text)
+  235|         print(f"{stats['included']} of {stats['files']} files in {stats['parts']} part(s), {stats['chars']:,} characters.")
+  236|     finally:
+  237|         shutil.rmtree(tmp, ignore_errors=True)
+  238| 
+  239| 
+  240| if __name__ == "__main__":
+  241|     main()
+```
+
+## `scripts/mirror-portraits.py`
+
+```python
+    1| #!/usr/bin/env python3
+    2| """Mirror the candidates' Wikimedia Commons portraits for the assets bucket.
+    3| 
+    4| For every person in src/lib/simulacra/history.ts (PEOPLE), resolve the Commons
+    5| file through the Commons API (prop=imageinfo, iiprop=url|extmetadata), download
+    6| its 330px thumbnail to <out>/portraits/<id>.jpg, and write
+    7| <out>/portraits/credits.json with the file page, author, licence name and
+    8| licence URL exactly as the API gives them (never guessed).
+    9| 
+   10| The output stays out of git; scripts/publish-assets.sh uploads it.
+   11| Re-runnable: existing images are kept unless --force.
+   12| 
+   13|   python3 scripts/mirror-portraits.py --out ../simulacra-assets
+   14| """
+   15| from __future__ import annotations
+   16| 
+   17| import argparse
+   18| import html
+   19| import json
+   20| import re
+   21| import sys
+   22| import time
+   23| import urllib.parse
+   24| import urllib.request
+   25| from pathlib import Path
+   26| 
+   27| ROOT = Path(__file__).resolve().parent.parent
+   28| HISTORY = ROOT / 'src/lib/simulacra/history.ts'
+   29| API = 'https://commons.wikimedia.org/w/api.php'
+   30| # Wikimedia's User-Agent policy: identify the tool and a contact.
+   31| UA = 'SimulacraAmericana-portrait-mirror/1.0 (https://simulacraamericana.com; cam@partyhat.ai)'
+   32| WIDTH = 330
+   33| 
+   34| # `  id: ["Full Name", "Surname", "x/xy/File.jpg/330px-File.jpg"],` inside PEOPLE.
+   35| ROW = re.compile(r'^\s*(\w+):\s*\["([^"]+)",\s*"[^"]*",\s*"([^"]+)"\]', re.M)
+   36| 
+   37| 
+   38| def people() -> list[tuple[str, str, str]]:
+   39|     src = HISTORY.read_text()
+   40|     block = src[src.index('const PEOPLE = {'):]
+   41|     block = block[:block.index('\n}')]
+   42|     rows = []
+   43|     for pid, name, path in ROW.findall(block):
+   44|         # "b/b6/<File>/330px-<File>": the Commons file name is the third segment.
+   45|         rows.append((pid, name, urllib.parse.unquote(path.split('/')[2])))
+   46|     if not rows:
+   47|         sys.exit(f'no PEOPLE rows parsed from {HISTORY}')
+   48|     return rows
+   49| 
+   50| 
+   51| def get(url: str) -> bytes:
+   52|     req = urllib.request.Request(url, headers={'User-Agent': UA})
+   53|     for attempt in range(4):
+   54|         try:
+   55|             with urllib.request.urlopen(req, timeout=30) as r:
+   56|                 return r.read()
+   57|         except urllib.error.HTTPError as e:
+   58|             if e.code in (429, 503) and attempt < 3:
+   59|                 time.sleep(2 ** attempt * 2)
+   60|                 continue
+   61|             raise
+   62|     raise RuntimeError('unreachable')
+   63| 
+   64| 
+   65| def plain(value: str | None) -> str | None:
+   66|     """extmetadata values are HTML fragments; keep their text."""
+   67|     if not value:
+   68|         return None
+   69|     return re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]+>', '', value))).strip() or None
+   70| 
+   71| 
+   72| def imageinfo(titles: list[str]) -> dict[str, dict]:
+   73|     q = urllib.parse.urlencode({
+   74|         'action': 'query', 'format': 'json', 'formatversion': '2', 'prop': 'imageinfo',
+   75|         'iiprop': 'url|extmetadata', 'iiurlwidth': WIDTH, 'titles': '|'.join(f'File:{t}' for t in titles),
+   76|     })
+   77|     data = json.loads(get(f'{API}?{q}'))
+   78|     # The API normalises titles (underscores -> spaces); map back.
+   79|     norm = {n['to']: n['from'] for n in data['query'].get('normalized', [])}
+   80|     out = {}
+   81|     for page in data['query']['pages']:
+   82|         asked = norm.get(page['title'], page['title'])
+   83|         out[asked.removeprefix('File:')] = page
+   84|     return out
+   85| 
+   86| 
+   87| def main() -> None:
+   88|     ap = argparse.ArgumentParser()
+   89|     ap.add_argument('--out', type=Path, required=True, help='assets staging folder (outside the repo)')
+   90|     ap.add_argument('--force', action='store_true', help='re-download images that already exist')
+   91|     args = ap.parse_args()
+   92|     dest = args.out / 'portraits'
+   93|     dest.mkdir(parents=True, exist_ok=True)
+   94| 
+   95|     rows = people()
+   96|     pages: dict[str, dict] = {}
+   97|     files = sorted({f for _, _, f in rows})
+   98|     for i in range(0, len(files), 40):  # the API takes 50 titles per query
+   99|         pages.update(imageinfo(files[i:i + 40]))
+  100| 
+  101|     credits, problems = {}, []
+  102|     for pid, name, file in rows:
+  103|         page = pages.get(file)
+  104|         info = (page or {}).get('imageinfo', [None])[0]
+  105|         if not info:
+  106|             problems.append(f'{pid}: {file} not found on Commons')
+  107|             continue
+  108|         meta = info.get('extmetadata', {})
+  109|         val = lambda k: plain(meta.get(k, {}).get('value'))  # noqa: E731
+  110|         target = dest / f'{pid}.jpg'
+  111|         if args.force or not target.exists():
+  112|             target.write_bytes(get(info['thumburl']))
+  113|             time.sleep(0.2)
+  114|         credits[pid] = {
+  115|             'name': name,
+  116|             'file': f'File:{file}',
+  117|             'filePage': info['descriptionurl'],
+  118|             'author': val('Artist'),
+  119|             'credit': val('Credit'),
+  120|             'license': val('LicenseShortName'),
+  121|             'licenseUrl': val('LicenseUrl'),
+  122|             'attributionRequired': val('AttributionRequired') == 'true',
+  123|             'usageTerms': val('UsageTerms'),
+  124|         }
+  125|         lic = credits[pid]['license'] or ''
+  126|         if credits[pid]['attributionRequired'] and not credits[pid]['author']:
+  127|             problems.append(f'{pid}: {lic} requires attribution but the API gives no author')
+  128| 
+  129|     (dest / 'credits.json').write_text(json.dumps(credits, indent=2, ensure_ascii=False) + '\n')
+  130|     needs = sorted(p for p, c in credits.items() if c['attributionRequired'])
+  131|     print(f'{len(credits)}/{len(rows)} portraits mirrored to {dest}')
+  132|     print(f'{len(needs)} need attribution: {", ".join(needs) or "none"}')
+  133|     for p in problems:
+  134|         print('PROBLEM', p, file=sys.stderr)
+  135|     sys.exit(1 if problems else 0)
+  136| 
+  137| 
+  138| if __name__ == '__main__':
+  139|     main()
+```
+
+## `scripts/model-check.ts`
+
+```ts
+    1| // Prints the sample model's outcome for every what-if of every story
+    2| // election (src/lib/simulacra/stories.ts), to check the model outside the
+    3| // page: history's electoral vote, then each what-if's.
+    4| //   pnpm tsx scripts/model-check.ts
+    5| import { electionOf } from '../src/lib/simulacra/history';
+    6| import { _model } from '../src/lib/simulacra/sample';
+    7| import { STORIES } from '../src/lib/simulacra/stories';
+    8| 
+    9| const ev = (r: { ev: { A: number; B: number; O: number } }) => `${r.ev.A}–${r.ev.B}${r.ev.O ? `–${r.ev.O}` : ''}`;
+   10| 
+   11| for (const year of Object.keys(STORIES).map(Number)) {
+   12|   const e = electionOf(year);
+   13|   const history = _model.rerun(year);
+   14|   if (!e || !history) continue;
+   15|   const [a, b] = e.candidates;
+   16|   console.log(`\n${year}  ${a.short} over ${b?.short ?? 'no one'}: ${ev(history)} as it happened`);
+   17|   for (const w of _model.whatIfsFor(year)) {
+   18|     const r = _model.rerun(year, [w.key]);
+   19|     if (!r) continue;
+   20|     const flips = r.states.filter((s) => s.flipped).length;
+   21|     const winner = r.winner ? (e.candidates.find((c) => c.key === r.winner)?.short ?? 'Others') : 'no majority';
+   22|     console.log(`  ${w.key.padEnd(14)} ${ev(r).padEnd(12)} ${winner.padEnd(12)} ${String(flips).padStart(2)} flipped  (${r.confidence})`);
+   23|   }
+   24| }
+```
+
+## `scripts/publish-assets.sh`
+
+```bash
+    1| #!/usr/bin/env bash
+    2| # Publish the robot assets and mirrored portraits to s3://simulacra-americana-assets
+    3| # (served by CloudFront at assets.simulacraamericana.com) and invalidate.
+    4| # Re-runnable. The assets themselves are never in git.
+    5| #
+    6| #   scripts/publish-assets.sh [assets-dir]     default ../simulacra-assets
+    7| #
+    8| # Robot: COPIED (never moved) from the shared Partyhat bucket, only what the
+    9| # page loads (src/lib/robot: models/atlas-09-americana.glb and its rerun paint
+   10| # set). Portraits: from scripts/mirror-portraits.py's output.
+   11| set -euo pipefail
+   12| 
+   13| SRC="s3://${SOURCE_ASSETS_BUCKET:?set SOURCE_ASSETS_BUCKET to the bucket holding the source harness assets}/harness-assets"
+   14| DST=s3://simulacra-americana-assets
+   15| ASSETS=${1:-$(cd "$(dirname "$0")/.." && pwd)/../simulacra-assets}
+   16| LONG='public, max-age=31536000, immutable'
+   17| test "$(aws sts get-caller-identity --query Account --output text)" = "${AWS_ACCOUNT_ID:?set AWS_ACCOUNT_ID to the target AWS account}"
+   18| 
+   19| # Robot model and paint set (object-to-object copy, same account).
+   20| aws s3 cp "$SRC/models/atlas-09-americana.glb" "$DST/models/atlas-09-americana.glb" \
+   21|   --metadata-directive REPLACE --content-type model/gltf-binary --cache-control "$LONG" --only-show-errors
+   22| aws s3 cp "$SRC/models/atlas-09-americana-rerun/" "$DST/models/atlas-09-americana-rerun/" --recursive \
+   23|   --metadata-directive REPLACE --cache-control "$LONG" --only-show-errors
+   24| # --metadata-directive REPLACE drops the source content types; restore them.
+   25| for k in $(aws s3api list-objects-v2 --bucket simulacra-americana-assets --prefix models/atlas-09-americana-rerun/ \
+   26|              --query 'Contents[].Key' --output text); do
+   27|   case "$k" in
+   28|     *.json) ct=application/json ;; *.png) ct=image/png ;; *.jpg|*.jpeg) ct=image/jpeg ;;
+   29|     *.webp) ct=image/webp ;; *.ktx2) ct=image/ktx2 ;; *) continue ;;
+   30|   esac
+   31|   aws s3 cp "$DST/$k" "$DST/$k" --metadata-directive REPLACE --content-type "$ct" \
+   32|     --cache-control "$LONG" --only-show-errors
+   33| done
+   34| 
+   35| # Portraits and their credits (credits change when a portrait does: short cache).
+   36| if [ -d "$ASSETS/portraits" ]; then
+   37|   aws s3 sync "$ASSETS/portraits/" "$DST/portraits/" --exclude '*' --include '*.jpg' \
+   38|     --content-type image/jpeg --cache-control "$LONG" --only-show-errors
+   39|   aws s3 cp "$ASSETS/portraits/credits.json" "$DST/portraits/credits.json" \
+   40|     --content-type application/json --cache-control 'public, max-age=3600' --only-show-errors
+   41| else
+   42|   echo "no $ASSETS/portraits; run scripts/mirror-portraits.py --out $ASSETS first" >&2
+   43| fi
+   44| 
+   45| aws s3 ls "$DST/" --recursive --summarize | tail -2
+   46| 
+   47| # Invalidate (the distribution exists only after the stand-up apply).
+   48| DIST=$(cd "$(dirname "$0")/../infra" && terraform output -raw assets_distribution_id 2>/dev/null || true)
+   49| if [ -n "$DIST" ]; then
+   50|   aws cloudfront create-invalidation --distribution-id "$DIST" --paths '/*' \
+   51|     --query 'Invalidation.[Id,Status]' --output text
+   52| fi
+```
+
+## `scripts/size-check.ts`
+
+```ts
+    1| // Fails when any tracked source file is over the line limit.
+    2| import { execFileSync } from 'node:child_process';
+    3| import { readFileSync } from 'node:fs';
+    4| 
+    5| const LIMIT = 1000;
+    6| const SOURCE = /\.(ts|svelte|js|mjs|py|css)$/;
+    7| 
+    8| const files = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], { encoding: 'utf8' })
+    9|   .split('\n')
+   10|   .filter((f) => SOURCE.test(f));
+   11| 
+   12| const over = files
+   13|   .map((f) => ({ f, n: readFileSync(f, 'utf8').split('\n').length }))
+   14|   .filter(({ n }) => n > LIMIT);
+   15| 
+   16| for (const { f, n } of over) console.error(`${f}: ${n} lines (limit ${LIMIT})`);
+   17| if (over.length > 0) process.exit(1);
+   18| console.log(`size: ${files.length} files, none over ${LIMIT} lines`);
+```
+
+## `scripts/sync-data.sh`
+
+```bash
+    1| #!/usr/bin/env bash
+    2| # Census-derived data and service state: laptop -> private data bucket -> EFS.
+    3| # Re-runnable. Nothing here ever writes to git, an image, Vercel or the assets bucket.
+    4| #
+    5| #   scripts/sync-data.sh upload-cache   laptop harness_cache (minus */raw/) -> s3://.../cache/
+    6| #   scripts/sync-data.sh upload-seed    repo bundles/whatifs/configs/runs + laptop runs/_cache -> s3://.../seed/
+    7| #   scripts/sync-data.sh seed           one-off ECS task: seed -> EFS (refuses if already seeded)
+    8| #   scripts/sync-data.sh cache          one-off ECS task: cache -> EFS/cache (replaces it)
+    9| #   scripts/sync-data.sh backup         tarball the laptop's harness state + cache to s3://.../backups/<date>/
+   10| #
+   11| # The run id hashes the cache's manifest: the bytes on EFS must match the
+   12| # laptop's for run ids to line up, so the cache is synced byte-for-byte.
+   13| #
+   14| # Note: on aws-cli 2.23.4 (this laptop) `aws s3 cp` of a multipart object
+   15| # DOWN from this versioned bucket fails with NoSuchKey; `aws s3api get-object`
+   16| # works. Uploads and small-file syncs are unaffected.
+   17| set -euo pipefail
+   18| 
+   19| B=s3://simulacra-americana-data
+   20| REPO=$(cd "$(dirname "$0")/.." && pwd)
+   21| CACHE=${SIMHARNESS_CACHE:-$HOME/research_notes/historical_election_sim_data/harness_cache}
+   22| # The live harness the laptop has been running (its runs/_cache is the answer cache).
+   23| LAPTOP_HARNESS=${LAPTOP_HARNESS:-$HOME/Documents/fromDesktop/quickmoveaway/vaultSYncWebWithLocalOPtion/vaultsync-chatwindows/src/lib/simulacra/harness}
+   24| test "$(aws sts get-caller-identity --query Account --output text)" = "${AWS_ACCOUNT_ID:?set AWS_ACCOUNT_ID to the target AWS account}"
+   25| 
+   26| run_task() {
+   27|   local mode=$1 o
+   28|   o=$(cd "$REPO/infra" && terraform output -json seed_task)
+   29|   local cluster td subnets sg
+   30|   cluster=$(jq -r .cluster <<<"$o"); td=$(jq -r .task_definition <<<"$o")
+   31|   subnets=$(jq -r '.subnets | join(",")' <<<"$o"); sg=$(jq -r .security_group <<<"$o")
+   32|   local arn
+   33|   arn=$(aws ecs run-task --cluster "$cluster" --task-definition "$td" --launch-type FARGATE \
+   34|     --network-configuration "awsvpcConfiguration={subnets=[$subnets],securityGroups=[$sg],assignPublicIp=ENABLED}" \
+   35|     --overrides "{\"containerOverrides\":[{\"name\":\"seed\",\"environment\":[{\"name\":\"MODE\",\"value\":\"$mode\"}]}]}" \
+   36|     --query 'tasks[0].taskArn' --output text)
+   37|   echo "started $arn; waiting"
+   38|   aws ecs wait tasks-stopped --cluster "$cluster" --tasks "$arn"
+   39|   aws ecs describe-tasks --cluster "$cluster" --tasks "$arn" \
+   40|     --query 'tasks[0].containers[0].[exitCode,reason]' --output text
+   41|   echo "logs: aws logs tail /ecs/simulacra --log-stream-name-prefix seed --since 15m"
+   42| }
+   43| 
+   44| case "${1:-}" in
+   45|   upload-cache)
+   46|     aws s3 sync "$CACHE/" "$B/cache/" --exclude '*/raw/*' --exclude '.DS_Store' --only-show-errors
+   47|     aws s3 ls "$B/cache/" --recursive --summarize | tail -2 ;;
+   48|   upload-seed)
+   49|     for d in whatifs configs; do
+   50|       aws s3 sync "$REPO/$d/" "$B/seed/$d/" --exclude '.DS_Store' --only-show-errors
+   51|     done
+   52|     aws s3 sync "$REPO/serve/bundles/" "$B/seed/bundles/" --exclude '.DS_Store' --only-show-errors
+   53|     aws s3 sync "$REPO/runs/" "$B/seed/runs/" --exclude '.DS_Store' --only-show-errors
+   54|     # The answer cache and pickles aren't in git; they come from the laptop.
+   55|     aws s3 sync "$LAPTOP_HARNESS/runs/_cache/" "$B/seed/runs/_cache/" --exclude '.DS_Store' --only-show-errors
+   56|     aws s3 ls "$B/seed/" --recursive --summarize | tail -2 ;;
+   57|   seed)  run_task seed ;;
+   58|   cache) run_task cache ;;
+   59|   backup)
+   60|     d=$(date +%F); tmp=$(mktemp -d)
+   61|     (cd "$LAPTOP_HARNESS" && COPYFILE_DISABLE=1 tar czf "$tmp/harness-state-$d.tgz" serve/bundles sessions runs whatifs configs)
+   62|     (cd "$CACHE" && COPYFILE_DISABLE=1 tar czf "$tmp/harness-cache-derived-$d.tgz" --exclude='*/raw' .)
+   63|     (cd "$tmp" && shasum -a 256 ./*.tgz > SHA256SUMS)
+   64|     aws s3 cp "$tmp/" "$B/backups/$d/" --recursive --only-show-errors
+   65|     cat "$tmp/SHA256SUMS"; rm -rf "$tmp" ;;
+   66|   *)
+   67|     sed -n '2,12p' "$0"; exit 2 ;;
+   68| esac
+```
+
+## `serve/app.ts`
+
+```ts
+    1| // The server: /api/simulacra plus the static SvelteKit build, with an SPA
+    2| // fallback to build/index.html for any other GET.
+    3| import { existsSync } from 'node:fs';
+    4| import path from 'node:path';
+    5| import express, { type Express } from 'express';
+    6| import { createSimulacraRouter, optionsFromEnv, type SimulacraOptions } from './simulacra';
+    7| 
+    8| export interface AppOptions {
+    9|   simulacra: SimulacraOptions;
+   10|   /** The static build folder (`pnpm build`); not served when it has no index.html. */
+   11|   build: string;
+   12| }
+   13| 
+   14| export const defaultAppOptions = (): AppOptions => ({
+   15|   simulacra: optionsFromEnv(),
+   16|   build: path.resolve(import.meta.dirname, '..', 'build')
+   17| });
+   18| 
+   19| export function createApp(opts: AppOptions = defaultAppOptions()): Express {
+   20|   const app = express();
+   21|   app.disable('x-powered-by');
+   22|   app.use('/api/simulacra', createSimulacraRouter(opts.simulacra));
+   23|   const index = path.join(opts.build, 'index.html');
+   24|   if (existsSync(index)) {
+   25|     app.use(express.static(opts.build));
+   26|     app.get('/{*path}', (_req, res) => res.sendFile(index));
+   27|   }
+   28|   return app;
+   29| }
+```
+
+## `serve/bundle.ts`
+
+```ts
+    1| // What enters the server, parsed once with zod: the bundle contract and the
+    2| // request bodies (one definition, shared with the page: ./contract.ts), and
+    3| // the session files the intake worker writes. The names here are the
+    4| // server's: each value is also its parsed type.
+    5| import { z } from 'zod';
+    6| import {
+    7|   BucketSchema,
+    8|   BundleResultSchema,
+    9|   BundleSchema,
+   10|   EditsSchema,
+   11|   RunRequestSchema,
+   12|   SliceSchema,
+   13|   StepSchema,
+   14|   TableRowSchema,
+   15|   ToldSchema
+   16| } from './contract';
+   17| 
+   18| export { FIELDS, type Field, RUN_LIMITS } from './contract';
+   19| 
+   20| export const PageKey = BucketSchema;
+   21| export type PageKey = z.infer<typeof PageKey>;
+   22| 
+   23| export const Slice = SliceSchema;
+   24| export type Slice = z.infer<typeof Slice>;
+   25| 
+   26| /** One what-if combination's result, as the bundle holds it. Loose: additive fields pass through to the page. */
+   27| export const Result = BundleResultSchema;
+   28| export type Result = z.infer<typeof Result>;
+   29| 
+   30| export const TableRow = TableRowSchema;
+   31| export type TableRow = z.infer<typeof TableRow>;
+   32| 
+   33| export const Told = ToldSchema;
+   34| export type Told = z.infer<typeof Told>;
+   35| 
+   36| export const Bundle = BundleSchema;
+   37| export type Bundle = z.infer<typeof Bundle>;
+   38| 
+   39| // ── Request bodies ──
+   40| 
+   41| /** Hand edits: per slice, changes in fractions of its adults (summing to 0). */
+   42| export const Edits = EditsSchema;
+   43| export type Edits = z.infer<typeof Edits>;
+   44| 
+   45| /** POST /runs, within RUN_LIMITS. */
+   46| export const RunRequest = RunRequestSchema;
+   47| export type RunRequest = z.infer<typeof RunRequest>;
+   48| 
+   49| // ── Session files the intake worker writes (dev only) ──
+   50| 
+   51| export const QueueDone = z.looseObject({
+   52|   text: z.string(),
+   53|   year: z.number().nullish(),
+   54|   status: z.string(),
+   55|   key: z.string().nullish(),
+   56|   why: z.string().nullish()
+   57| });
+   58| export type QueueDone = z.infer<typeof QueueDone>;
+   59| 
+   60| export const QueueFailed = z.looseObject({
+   61|   text: z.string(),
+   62|   year: z.number().nullish(),
+   63|   at: z.number(),
+   64|   why: z.string().nullish()
+   65| });
+   66| export type QueueFailed = z.infer<typeof QueueFailed>;
+   67| 
+   68| export const Step = StepSchema;
+   69| export type Step = z.infer<typeof Step>;
+   70| 
+   71| export const IntakeStatus = z.looseObject({ text: z.string().nullable(), steps: z.array(Step) });
+```
+
+## `serve/bundles/RUN_ID`
+
+```
+    1| 2004-01ab47632c
+```
+
+## `serve/contract.test.ts`
+
+```ts
+    1| import { existsSync, readdirSync, readFileSync } from 'node:fs';
+    2| import path from 'node:path';
+    3| import { describe, expect, test } from 'vitest';
+    4| import { BundleSchema, RUN_LIMITS, RunRequestSchema } from './contract';
+    5| 
+    6| const ROOT = path.resolve(import.meta.dirname, '..');
+    7| const FIXTURE = path.join(ROOT, 'tests', 'fixtures', 'bundle.example.json');
+    8| const BUNDLES = path.join(ROOT, 'serve', 'bundles');
+    9| 
+   10| describe('BundleSchema', () => {
+   11|   test('parses the shared bundle example (tests/fixtures/bundle.example.json)', () => {
+   12|     const parsed = BundleSchema.safeParse(JSON.parse(readFileSync(FIXTURE, 'utf8')));
+   13|     expect(parsed.error?.issues ?? []).toEqual([]);
+   14|     // Published bundles write State.flipped as 0 / 1: parsed, it is a boolean.
+   15|     const flips = Object.values(parsed.data?.runs ?? {}).flatMap((r) => r.states.map((s) => s.flipped));
+   16|     expect(flips.length).toBeGreaterThan(0);
+   17|     expect(new Set(flips.map((f) => typeof f))).toEqual(new Set(['boolean']));
+   18|   });
+   19| 
+   20|   test('fields it does not name pass through, for the page', () => {
+   21|     const raw = JSON.parse(readFileSync(FIXTURE, 'utf8'));
+   22|     const run = BundleSchema.parse(raw).runs[''];
+   23|     expect(run && Object.keys(run).sort()).toEqual(Object.keys(raw.runs['']).sort());
+   24|   });
+   25| 
+   26|   const files = existsSync(BUNDLES) ? readdirSync(BUNDLES).filter((f) => /^\d{4}\.json$/.test(f)) : [];
+   27|   test.skipIf(files.length === 0)('parses every served bundle (skips when serve/bundles is absent)', () => {
+   28|     const bad = files.filter((f) => !BundleSchema.safeParse(JSON.parse(readFileSync(path.join(BUNDLES, f), 'utf8'))).success);
+   29|     expect(bad).toEqual([]);
+   30|   });
+   31| });
+   32| 
+   33| describe('RunRequestSchema', () => {
+   34|   const ok = (body: unknown) => RunRequestSchema.safeParse(body).success;
+   35| 
+   36|   test('a plain ask parses, with defaults and the words trimmed', () => {
+   37|     expect(RunRequestSchema.parse({ year: '1920', text: '  the league passes  ' })).toEqual({
+   38|       year: 1920,
+   39|       whatIfs: [],
+   40|       text: 'the league passes',
+   41|       edits: {}
+   42|     });
+   43|   });
+   44| 
+   45|   test('the year is an election year in range', () => {
+   46|     expect(ok({ year: RUN_LIMITS.firstYear })).toBe(true);
+   47|     expect(ok({ year: RUN_LIMITS.lastYear })).toBe(true);
+   48|     expect(ok({ year: 1788 })).toBe(false);
+   49|     expect(ok({ year: 2101 })).toBe(false);
+   50|     expect(ok({ year: 1920.5 })).toBe(false);
+   51|     expect(ok({ year: 'soon' })).toBe(false);
+   52|   });
+   53| 
+   54|   test('typed words: at most 300 characters once trimmed', () => {
+   55|     expect(ok({ year: 1920, text: 'x'.repeat(RUN_LIMITS.text) })).toBe(true);
+   56|     expect(ok({ year: 1920, text: ` ${'x'.repeat(RUN_LIMITS.text)} ` })).toBe(true);
+   57|     expect(ok({ year: 1920, text: 'x'.repeat(RUN_LIMITS.text + 1) })).toBe(false);
+   58|   });
+   59| 
+   60|   test('what-ifs: at most 32 keys of at most 80 characters', () => {
+   61|     const keys = (n: number, len = 8) => Array.from({ length: n }, (_, i) => `${i}`.padStart(len, 'k'));
+   62|     expect(ok({ year: 1920, whatIfs: keys(RUN_LIMITS.whatIfs) })).toBe(true);
+   63|     expect(ok({ year: 1920, whatIfs: keys(RUN_LIMITS.whatIfs + 1) })).toBe(false);
+   64|     expect(ok({ year: 1920, whatIfs: keys(1, RUN_LIMITS.key) })).toBe(true);
+   65|     expect(ok({ year: 1920, whatIfs: keys(1, RUN_LIMITS.key + 1) })).toBe(false);
+   66|   });
+   67| 
+   68|   test('edits: at most 64 groups, keys of at most 80 characters, each change within [-1, 1]', () => {
+   69|     const groups = (n: number) => Object.fromEntries(Array.from({ length: n }, (_, i) => [`g${i}`, { A: 0.1, home: -0.1 }]));
+   70|     expect(ok({ year: 1920, edits: groups(RUN_LIMITS.edits) })).toBe(true);
+   71|     expect(ok({ year: 1920, edits: groups(RUN_LIMITS.edits + 1) })).toBe(false);
+   72|     expect(ok({ year: 1920, edits: { ['k'.repeat(RUN_LIMITS.key + 1)]: { A: 0 } } })).toBe(false);
+   73|     expect(ok({ year: 1920, edits: { women: { A: 1, home: -1 } } })).toBe(true);
+   74|     expect(ok({ year: 1920, edits: { women: { A: 1.01 } } })).toBe(false);
+   75|     expect(ok({ year: 1920, edits: { women: { A: Number.POSITIVE_INFINITY } } })).toBe(false);
+   76|     expect(ok({ year: 1920, edits: { women: { nobody: 0.1 } } })).toBe(false);
+   77|   });
+   78| });
+```
 
 ## `serve/contract.ts`
 

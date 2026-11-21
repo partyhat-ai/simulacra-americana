@@ -1,6 +1,6 @@
 # synthetic-electorate-toy: source and docs, part 17 of 17
 
-Generated from commit `e5e4f20fbaeb` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `6a200effe03e` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 Files `tests/test_agents.py` to `vite.config.ts`. Lines are numbered as in the repository.
 
 ## `tests/test_agents.py`
@@ -207,6 +207,41 @@ Files `tests/test_agents.py` to `vite.config.ts`. Lines are numbered as in the r
   107|             assert set(by_slice) == set(sl), (f.name, key)
   108|             for k, adults in sl.items():
   109|                 assert abs(by_slice[k] / 1e6 - adults) <= 6e-4, (f.name, key, k)
+```
+
+## `tests/test_data_1920.py`
+
+```python
+    1| """data/1920: the public inputs to the 1920 backbone match their provenance and load on their own."""
+    2| import hashlib
+    3| import re
+    4| 
+    5| import pytest
+    6| 
+    7| from simharness import data
+    8| from simharness.config import ROOT
+    9| 
+   10| DIR = ROOT / 'data/1920'
+   11| 
+   12| 
+   13| def test_every_file_matches_its_recorded_hash():
+   14|     rows = dict(re.findall(r'\| `([^`]+)` \| \d+ \| `([0-9a-f]{64})` \|', (DIR / 'PROVENANCE.md').read_text()))
+   15|     files = {str(p.relative_to(DIR)) for p in DIR.rglob('*.csv')}
+   16|     assert set(rows) == files, 'run scripts/harness/data_1920_hashes.py --write'
+   17|     for rel, want in rows.items():
+   18|         assert hashlib.sha256((DIR / rel).read_bytes()).hexdigest() == want, rel
+   19| 
+   20| 
+   21| def test_the_1920_inputs_load_from_the_repo_alone(monkeypatch):
+   22|     monkeypatch.setattr(data, 'CACHE', DIR)
+   23|     inp, fr = data.inputs(1920)
+   24|     assert int(inp.ev.sum()) == 531 and len(inp.ev) == 48
+   25|     assert int(inp.returns.R20.sum()) == 16145577 and int(inp.returns.D20.sum()) == 9142289
+   26|     # The census table: 21-and-over men and women in the 48 states (DC's adults are not in a state).
+   27|     by_sex = inp.cells.groupby('sex').adults20.sum()
+   28|     assert by_sex.sum() == pytest.approx(60.6e6, rel=0.02)
+   29|     assert fr['closed_1920'] == {'GA', 'MS'} and len(fr['women_pre19']) == 27
+   30|     assert data.urban_share()  # the urban share loads too
 ```
 
 ## `tests/test_evaluate.py`

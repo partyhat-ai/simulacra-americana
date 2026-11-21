@@ -1,10 +1,11 @@
 # synthetic-electorate-toy: commit history
 
-Generated from commit `e5e4f20fbaeb` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `6a200effe03e` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 
-10 commit(s), verbatim from `git log` (commits that only regenerate this digest are left out):
+11 commit(s), verbatim from `git log` (commits that only regenerate this digest are left out):
 
 ```
+6a200ef  2026-11-20  Cameron Feather  Ship the public 1920 inputs, so the 1920 results rerun from the repo
 e5e4f20  2026-11-20  Cameron Feather  README: drop "(toy example)" from the title
 4a07108  2026-11-20  Cameron Feather  Fence the reader's words and web text as data in every pass
 07818a9  2026-11-20  Cameron Feather  Lock the worker with flock, bound the batch wait, price unknown models high

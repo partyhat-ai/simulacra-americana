@@ -1,7 +1,263 @@
 # synthetic-electorate-toy: source and docs, part 3 of 17
 
-Generated from commit `e5e4f20fbaeb` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
-Files `infra/.terraform.lock.hcl` to `scripts/harness/build_corpus.py`. Lines are numbered as in the repository.
+Generated from commit `6a200effe03e` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Files `docs/harness/README.md` to `requirements.lock`. Lines are numbered as in the repository.
+
+## `docs/harness/README.md`
+
+```markdown
+    1| # Simulacra Americana harness
+    2| 
+    3| This is the simulation behind `/api/simulacra`. Its code and data sit at the repo
+    4| root (`simharness/`, `configs/`, `profiles/`, `whatifs/`, `extracts/`, `runs/`,
+    5| `serve/`); this README lives in `docs/harness/`, and the method documents stay
+    6| at the root.
+    7| 
+    8| - **The statistical backbone** decides the counts.
+    9| - **LLM agents** supply the counterfactual response and the quotes.
+   10| 
+   11| Read [`METHOD.md`](../../METHOD.md) first. Then read [`EVAL.md`](../../EVAL.md) (the 1920 prototype's results, failures included).
+   12| 
+   13| **[`VALIDITY.md`](../../VALIDITY.md)** takes stock of what the harness can and can't claim: contamination by the language model's knowledge, leakage, historical bias, the held-out checks that exist and the ones that don't, and the next steps in order.
+   14| 
+   15| **[`DISCLOSURES.md`](../../DISCLOSURES.md)** is the running log of every known inaccuracy and honesty flag.
+   16| Add to it the moment something is found.
+   17| 
+   18| Nothing here is imported by the page; the page reads bundles through the
+   19| server. The bundle's shape is `simharness.serialize.Bundle`, with a shared
+   20| example at `tests/fixtures/bundle.example.json`; the server's zod schema
+   21| (`serve/bundle.ts`) parses the same file, and the page's side of the contract
+   22| is `src/lib/simulacra/schemas.ts`.
+   23| 
+   24| ## Layout
+   25| 
+   26| | Path | What |
+   27| |---|---|
+   28| | `simharness/config.py` | Run config. A run's id hashes the config and the data manifest. |
+   29| | `simharness/data.py` | Loaders for the cache (labels, census, franchise, corpus, platforms) |
+   30| | `simharness/backbone.py` | Turnout and choice by cell, 400 posterior draws, exact calibration |
+   31| | `simharness/whatifs.py` | The what-ifs: what each changes, its assumption, and the facts a counterfactual brief states |
+   32| | `simharness/cohorts.py`, `agents.py` | Agent cohorts (merge rule) and invented people drawn from them |
+   33| | `simharness/prompts.py` | The versioned prompts: blinded control, non-hypothetical counterfactual, probe, schemas |
+   34| | `simharness/agentlayer.py` | Every model request for a run |
+   35| | `simharness/llm.py` | Backends: `anthropic`, `anthropic-batch`, `transcript` |
+   36| | `simharness/paired.py` | Paired differences, cohort bias, the shrinkage |
+   37| | `simharness/quotes.py` | Quote selection and the stereotype audit |
+   38| | `simharness/aggregate.py`, `serialize.py` | Draws → states, EV and ranges → the page's shape |
+   39| | `simharness/evaluate.py`, `benchmarks.py` | The validation checks. Only these read held-out benchmarks. |
+   40| | `simharness/scenario.py` | Any typed what-if → a spec of one of five kinds (franchise, population, issue, event, candidate) with generic mechanics |
+   41| | `simharness/world.py` | The staging pass for a compiled what-if's world, and the audit of the interviews' reasoning (DISCLOSURES D33) |
+   42| | `simharness/evidence.py` | Historical evidence: web-search research, grounded extraction, source tiers, agreement, blend, confidence tiers |
+   43| | `simharness/intake.py` | Typed what-if intake: compile → research → register → run → `serve/bundles/`; the router's queue |
+   44| | `simharness/agent.py` | The research agent: the same stages as tools a model chooses, behind a permission gate; replay and approval |
+   45| | `simharness/trace.py` | Step-level traces of the agent (`sessions/traces/`), their summaries and retention |
+   46| | `simharness/agent_eval.py` | Golden tasks for the agent from the compiled what-ifs, scored field by field |
+   47| | `simharness/profiles.py` | Loads one profile per election (names, blinded descriptors, label letters, ballot wording, sources): 1920 and 1924 in code, the other 58 from `profiles/<year>.json` |
+   48| | `simharness/run.py` | The command line (`python3 -m simharness.run <stage>`) |
+   49| | `simharness/pipeline.py` | The stages: backbone, plan, ask, analyze, verify, dryrun, evaluate (`Run`) |
+   50| | `simharness/publish.py` | The publish stage: every what-if combination → the bundle |
+   51| | `serve/simulacra.ts`, `serve/index.ts` | The Express router that serves the bundles, and the server that mounts it at `/api/simulacra` next to the static page |
+   52| | `serve/bundles/<year>.json` | The bundles the server serves (`SIMULACRA_BUNDLES` overrides the folder) |
+   53| | `extracts/` | IPUMS extract definitions: we ship definitions, never microdata |
+   54| | `data/1920/` | The public 1920 inputs (census tables, returns, franchise, a held-out benchmark), so `SIMHARNESS_CACHE=data/1920` reruns the 1920 backbone and checks; licences and sources in its `PROVENANCE.md` |
+   55| | `runs/<id>/` | Everything a run wrote: config, fit, requests, answers, analysis, validation, `published/1920.json`. The repo keeps only `config.json`, `analysis.json`, `validation.json` and `published/`; `fit.pkl`, `effects.pkl` and `agents/` are regenerable and stay local |
+   56| | `runs/_cache/` | Identical-request answer cache (regenerable from `runs/*`; gitignored) |
+   57| | `whatifs/<key>.json`, `whatifs/evidence/<key>.json` | Compiled what-ifs (exploratory) and every what-if's researched evidence; both hashed into run ids |
+   58| | `sessions/` | Dev only, gitignored: typed requests, the unknown-text queue, intake outcomes, the spend ledger |
+   59| | `scripts/harness/` | The cache build scripts (returns, franchise, population, corpus, NHGIS extracts) and `bundle_fixture.py` |
+   60| | `scripts/harness/nhgis_common.py` | The NHGIS extract client and the population builders' shared helpers |
+   61| | `scripts/harness/sessions-report.py` | What people typed, the share unmodelled, unknowns by kind, today's spend |
+   62| 
+   63| The raw data lives outside the repo, in `SIMHARNESS_CACHE`. It defaults to
+   64| `~/research_notes/historical_election_sim_data/harness_cache`, and each folder
+   65| there has a `PROVENANCE-*.md`.
+   66| 
+   67| Some sources can't be redistributed (IPUMS, NHGIS), so the cache stays
+   68| outside the repo. Only aggregates reach `runs/`.
+   69| 
+   70| ## Run it
+   71| 
+   72| From the repo root (`pip install -e '.[test]'` once; add `'.[llm]'` for the paid stages):
+   73| 
+   74| ```sh
+   75| python3 -m simharness.run backbone      # fit + unchanged-run reproduction
+   76| python3 -m simharness.run plan          # agents and requests (no model calls)
+   77| python3 -m simharness.run ask           # send requests (backend from the config)
+   78| python3 -m simharness.run analyze       # paired effects, probes, bias, audit
+   79| python3 -m simharness.run evaluate      # validation checks → validation.json
+   80| python3 -m simharness.run publish       # every what-if combination → published/1920.json
+   81| python3 -m pytest -q                    # fast unit checks (tests/)
+   82| ```
+   83| 
+   84| Typed what-ifs and historical evidence (all paid stages priced first and recorded in
+   85| `sessions/spend.jsonl`; see `simharness/intake.py`):
+   86| 
+   87| ```sh
+   88| H=~/.venvs/simharness/bin/python
+   89| $H -m simharness.run whatif --text "charlie chaplin ran as an independent" --config configs/live-1920.json
+   90| $H -m simharness.run whatif --queue --config configs/live-1920.json     # what the page couldn't model
+   91| $H -m simharness.run research --config configs/live-1920.json           # evidence for the config's what-ifs
+   92| $H -m simharness.run research --key league --refresh | --reextract ...  # one what-if; search again, or re-read saved notes
+   93| ```
+   94| 
+   95| How a typed what-if is modelled:
+   96| 1. **Compile** (`research.compile_model`; Opus in the live configs): the words become a settled-fact change of one kind,
+   97|    with who it reaches, a plausibility grade, keywords and research questions.
+   98|    Nominee and party names are sent back and masked. A request that means an
+   99|    existing what-if only adds keywords.
+  100| 2. **Research** (`research.research_model`, Sonnet, + web search): scholarship, official statistics and
+  101|    archives on the change itself, the same groups in the most similar
+  102|    situations, and any named person's record before the context date.
+  103| 3. **Extract** (`research.extract_model`; Opus in the live configs): findings grounded in the sources the
+  104|    search returned. Each is graded by source tier × match, and signed for the
+  105|    scenario (a situation the change undoes counts the other way).
+  106| 4. **Stage** (`world.py`, when `research.world_model` is set): the year's
+  107|    items the change makes false leave the counterfactual brief, in-world news
+  108|    and a belief check are added, and the groups to interview are named.
+  109| 5. **Interview**: the usual paired control/counterfactual briefs. A candidate
+  110|    gets a third labelled ballot line (p4). Identical earlier requests are
+  111|    reused, so only the new arm is paid for.
+  112|    Answers that fail the belief check or the reasoning audit are left out, or
+  113|    re-asked on `agents.escalate_model`.
+  114| 6. **Evaluate**: the interviews against the record on votes and turnout
+  115|    (corroborated, consistent, contradicted, untested). For exploratory
+  116|    what-ifs, the evidence is also a precision-weighted prior on each cohort's
+  117|    effect.
+  118| 7. **Confidence**: high, medium, low or very low ("Extremely low
+  119|    confidence"), with the reasons. The tier reaches the page as
+  120|    `confidenceTier`, `confidenceFlags` and `confidenceReasons`, and as a
+  121|    sentence in the summary.
+  122| 
+  123| ### The research agent
+  124| 
+  125| `simharness/agent.py` runs the same stages as tools, in an order a model chooses:
+  126| it can compile again with a note when a reading is wrong, research again with
+  127| sharper questions when the evidence is thin, take an existing what-if, or stop
+  128| before any interview. It is off unless asked for.
+  129| 
+  130| ```sh
+  131| $H -m simharness.run whatif --agent --text "..." --year 1920                 # held for approval (--publish ask)
+  132| $H -m simharness.run whatif --agent --publish gate --text "..." --year 1920  # live if the bundle's checks pass
+  133| $H -m simharness.run whatif --agent --dry-run --text "..." --year 1920       # no writes, interviews or publishing
+  134| $H -m simharness.run trace                                                    # recent traces, and what is held
+  135| $H -m simharness.run trace --id <trace>                                       # one trace: path, refusals, dollars
+  136| $H -m simharness.run approve --id <trace>                                     # put a held bundle live
+  137| $H -m simharness.run replay --id <trace> --model claude-sonnet-5-5            # recorded tool results, new model
+  138| $H -m simharness.run agent-eval --year 1920 --limit 3                         # golden tasks, dry run (~$1-3 each)
+  139| ```
+  140| 
+  141| Permissions are enforced in code, never by the prompt. Each tool has a tier (read,
+  142| spend, write, publish), and the gate checks preconditions before it runs:
+  143| - `register` needs a spec that passed `validate` unchanged since, plus evidence and,
+  144|   for interviewed changes, a staged world.
+  145| - `use_existing` attaches the reader's words only to the what-if the compiler matched.
+  146| - `run_interviews` prices the uncached requests first, and refuses to run if the
+  147|   typical cost exceeds what the text has left.
+  148| - `publish` puts a bundle live only if it passes `bundle_checks` (the new what-if is
+  149|   in it, no served result is missing, and the unchanged rerun is identical to the
+  150|   served one) and the policy is `gate`. Otherwise the bundle is held in
+  151|   `sessions/pending-publish/` for `approve`.
+  152| 
+  153| The reader's words and anything from the web reach the model only as data. Raw
+  154| pages never do: research returns graded findings that cite returned sources.
+  155| Every model turn and tool call (arguments, decision, full result, dollars, time)
+  156| is written to `sessions/traces/<id>.jsonl`. Traces are kept as long as the session
+  157| logs (`SIMULACRA_RETAIN_DAYS`). A replay re-serves a trace's recorded tool results
+  158| to a new model or prompt and compares the paths.
+  159| 
+  160| The queue worker uses the agent when `SIMULACRA_AGENT=1`. `SIMULACRA_AGENT_PUBLISH`
+  161| is `gate` by default; with `ask`, every new what-if waits for approval, and the
+  162| waiting page is told it will go live once reviewed.
+  163| 
+  164| Untrusted text is fenced in every pass: the reader's words reach compile and research inside
+  165| `<reader_text>`, and the search's notes and source titles reach extraction inside `<research_notes>`
+  166| and `<sources>` (`scenario.fence` swaps angle brackets so the text can't close its fence). Each system
+  167| prompt says fenced text is material, never instructions. A text that tries to instruct the compiler
+  168| is answered as not modelable.
+  169| 
+  170| With `SIMULACRA_LOG=1`, the server (`pnpm serve`) logs requests to `sessions/`, queues unknown text,
+  171| and reloads a changed bundle without a restart. `SIMULACRA_AUTORUN=configs/live-1920.json`
+  172| also starts the queue worker as text arrives (`SIMULACRA_PYTHON` picks the interpreter;
+  173| it runs from the repo root).
+  174| 
+  175| The `ask` stage depends on the backend:
+  176| - **`anthropic` or `anthropic-batch`:** needs `pip install -e '.[llm]'`
+  177|   (`anthropic>=1.0`; older SDKs lack `output_config`). The key comes from
+  178|   `ANTHROPIC_API_KEY`, else `~/.config/simulacra/anthropic.env`
+  179|   (`ANTHROPIC_API_KEY=…`, mode 600; `llm.api_key()`), and is never written to
+  180|   the repo, a run folder or a log. The commands above use a venv outside the
+  181|   repo, `~/.venvs/simharness`, with that extra installed.
+  182| - **`transcript`:** writes `runs/<id>/agents/transcript/requests.jsonl` and
+  183|   reads `responses.jsonl`, one `{"id", "model", "answer"}` per line. Any
+  184|   runner can fill it.
+  185| 
+  186| ### Interview runs
+  187| 
+  188| Every stage takes `--config`; the default is `configs/prototype-1920.json`.
+  189| Two small 1920 configs exist for cheap runs on the API:
+  190| - `configs/quick-1920.json`: two cohorts, one agent each, all four arms, on
+  191|   Haiku 4.5 (a few cents).
+  192| - `configs/rung1-1920.json`: six cohorts × 2 agents, `league` only, control
+  193|   and counterfactual arms (under a dime).
+  194| 
+  195| The `agents` block's knobs (`config.AgentConfig`) select what is sent: `arms`
+  196| (any of `control`, `cf`, `swap`, `probe`), `only_cohorts`, `per_cohort`,
+  197| `check_share` (0 skips the check-model subsample), `bulk_model`,
+  198| `check_model`, `effort` and `max_tokens`. `plan` prints the request counts and
+  199| the dollar estimate before anything is sent. Model constraints the backend
+  200| handles: Haiku 4.5 rejects `output_config.effort` (it is stripped), and
+  201| Sonnet 5.5 rejects non-default sampling parameters, so spread comes from
+  202| persona diversity, not temperature.
+  203| 
+  204| A run's id hashes the config, the data and all of `simharness/*.py`
+  205| (DISCLOSURES G1), so any code change starts a new run folder and a fresh
+  206| `ask`; identical requests are still answered from the cache (G4).
+  207| 
+  208| **Changing what the interviews collect.** A new answer field touches, together:
+  209| `prompts.SYSTEM` (what the field is), `prompts.answer_schema` (add it to
+  210| `required`; keep `additionalProperties: false`), `prompts.QUESTIONS` only if
+  211| the field needs asking (keep the paraphrases parallel), `paired.normalize`
+  212| only if it feeds a count, and `publish._voters` to put it in the voter
+  213| payload (plus the zod schemas in `serve/bundle.ts` and
+  214| `src/lib/simulacra/schemas.ts` if the page is to read it). Bump `PROMPT_VERSION` in `prompts.py`; answers from two prompt
+  215| versions are never mixed in one analysis.
+  216| 
+  217| Serve the bundles:
+  218| 1. `pnpm build` (the static page, into `build/`), then `pnpm serve` (`serve/index.ts`, `PORT`, default 8787).
+  219| 2. The router reads `serve/bundles/<year>.json`; set `SIMULACRA_BUNDLES` to serve another folder, such as `runs/<id>/published`.
+  220| 
+  221| ## Years
+  222| 
+  223| - **1920** is the original fit, identified by the 1916→1920 suffrage
+  224|   experiment.
+  225| - **1924** is carried forward from it (`backbone.carry_forward`; DISCLOSURES
+  226|   C13–C16). It has its own `configs/live-1924.json`.
+  227| - **All 60 elections, 1789–2024, are built.** Each other year has
+  228|   `profiles/<year>.json` and `configs/live-<year>.json`. Years other than 1916–1924 use
+  229|   `backbone.general_fit` (DISCLOSURES B10–B13). The unchanged rerun of every
+  230|   year reproduces each state's certified returns and history's electoral votes.
+  231| - `run dryrun --year Y [--all-cohorts] [--samples N]` runs backbone → verify →
+  232|   plan for any year with no model calls, and prints sample briefs, counts and
+  233|   the cost estimate (`runs/<id>/dryrun.json`).
+  234| - `run verify` checks any year: exact reproduction, plus Corder–Wolbrecht
+  235|   where it exists. `evaluate` stays 1920's check set.
+  236| - **Adding a year:**
+  237|   - a `profiles/<year>.json`;
+  238|   - returns, voting rules and platforms in the cache;
+  239|   - a `live-<year>.json` config.
+  240| 
+  241|   The queue sends typed what-ifs to their year's config.
+```
+
+## `infra/.gitignore`
+
+```
+    1| .terraform/
+    2| *.tfstate
+    3| *.tfstate.*
+    4| *.tfplan
+    5| terraform.tfvars
+```
 
 ## `infra/.terraform.lock.hcl`
 
@@ -1472,894 +1728,4 @@ Files `infra/.terraform.lock.hcl` to `scripts/harness/build_corpus.py`. Lines ar
    20| truststore==0.10.4
    21| typing-inspection==0.4.4
    22| typing_extensions==4.16.0
-```
-
-## `scripts/harness/build_corpus.py`
-
-```python
-    1| #!/usr/bin/env python3
-    2| """build_corpus.py — dated Chronicling America corpus for one election year.
-    3| 
-    4| Builds C/sources/corpus_<year>.jsonl in the 1920 corpus format (see
-    5| C/sources/PROVENANCE-sources.md): page-level items from the loc.gov
-    6| Chronicling America collection, each with a ~120-word excerpt cut
-    7| programmatically from the fetched OCR, dated from 1 September of the election
-    8| year through the day before election day (no item after the cutoff).
-    9| 
-   10| Usage:
-   11|   python scripts/harness/build_corpus.py 1896 [1932 ...] --cache-dir DIR [--out-dir DIR]
-   12|   python scripts/harness/build_corpus.py --provenance 1896 1932 --cache-dir DIR  # markdown
-   13| 
-   14| Politeness: single-threaded; >=3.2 s between www.loc.gov searches, >=1.1 s
-   15| between tile.loc.gov OCR fetches; exponential backoff (honouring Retry-After)
-   16| on 429/5xx/Cloudflare errors; every HTTP response is cached on disk so reruns
-   17| make no new requests. Descriptive User-Agent.
-   18| 
-   19| Selection is fully automatic (no LLM): per topic, one national search plus the
-   20| best-covered state in each census region (from the national query's
-   21| location_state facet), plus a second national query. The top hits are fetched,
-   22| the densest topic-keyword window of the OCR is excerpted, scored for OCR
-   23| readability, ad/patent-medicine noise, prediction talk and candidate mentions,
-   24| and items are then picked round-robin across regions with per-paper caps and
-   25| near-duplicate (shingle Jaccard) rejection.
-   26| """
-   27| from __future__ import annotations
-   28| 
-   29| import argparse
-   30| import datetime as dt
-   31| import hashlib
-   32| import http.client
-   33| import json
-   34| import math
-   35| import os
-   36| import re
-   37| import sys
-   38| import tempfile
-   39| import time
-   40| import urllib.error
-   41| import urllib.parse
-   42| import urllib.request
-   43| 
-   44| UA = ("SimulacraHarness-corpus-builder/1.0 (historical election research; "
-   45|       "single-threaded, cached, backs off on 429)")
-   46| SEARCH = "https://www.loc.gov/collections/chronicling-america/"
-   47| DEFAULT_CACHE = os.environ.get("CORPUS_BUILD_CACHE") or os.path.join(
-   48|     tempfile.gettempdir(), "simharness_corpus_build_cache")
-   49| DEFAULT_OUT = os.path.expanduser(
-   50|     "~/research_notes/historical_election_sim_data/harness_cache/sources")
-   51| 
-   52| # ---------------------------------------------------------------- geography
-   53| REGION = {}
-   54| for _r, _ss in {
-   55|     "Northeast": ["maine", "new hampshire", "vermont", "massachusetts", "rhode island",
-   56|                   "connecticut", "new york", "new jersey", "pennsylvania"],
-   57|     "Midwest": ["ohio", "indiana", "illinois", "michigan", "wisconsin", "minnesota", "iowa",
-   58|                 "missouri", "north dakota", "south dakota", "nebraska", "kansas", "dakota"],
-   59|     "South": ["delaware", "maryland", "district of columbia", "virginia", "west virginia",
-   60|               "north carolina", "south carolina", "georgia", "florida", "kentucky",
-   61|               "tennessee", "alabama", "mississippi", "arkansas", "louisiana", "oklahoma",
-   62|               "texas", "indian territory"],
-   63|     "West": ["montana", "idaho", "wyoming", "colorado", "new mexico", "arizona", "utah",
-   64|              "nevada", "washington", "oregon", "california", "alaska", "hawaii"],
-   65| }.items():
-   66|     for _s in _ss:
-   67|         REGION[_s] = _r
-   68| REGIONS = ["Northeast", "Midwest", "South", "West"]
-   69| 
-   70| # ------------------------------------------------------------- year configs
-   71| # topics: (label, human description, [search queries], [extra window keywords])
-   72| # names: candidate / running-mate / incumbent / party words (case-sensitive).
-   73| Y: dict[int, dict] = {}
-   74| 
-   75| 
-   76| def year(y, election, names, topics, cutoff=None):
-   77|     e = dt.date.fromisoformat(election)
-   78|     Y[y] = dict(election=e, cutoff=dt.date.fromisoformat(cutoff) if cutoff else e - dt.timedelta(days=1),
-   79|                 names=names, topics=topics)
-   80| 
-   81| 
-   82| GENERIC_PARTY = ["Republican", "Republicans", "Democrat", "Democrats", "Democratic", "Democracy"]
-   83| 
-   84| year(1840, "1840-10-30", ["Harrison", "Tyler", "Van Buren", "Johnson", "Birney", "Whig", "Whigs",
-   85|                           "Loco Foco", "Locofoco", "Locofocos", "Tippecanoe", "Liberty party"] + GENERIC_PARTY, [
-   86|     ("hard_times", "Hard times after the Panic of 1837", ["hard times", "times money scarce"], ["distress", "wages", "credit", "failures"]),
-   87|     ("sub_treasury", "Independent Treasury (sub-treasury)", ["sub treasury", "independent treasury"], ["specie", "treasury"]),
-   88|     ("banks_currency", "Banks, specie payments and paper money", ["specie payments banks", "bank notes currency"], ["suspension", "specie", "currency"]),
-   89|     ("national_bank", "A national bank", ["national bank"], ["bank", "charter"]),
-   90|     ("standing_army", "Militia plan / standing army", ["standing army", "militia"], ["poinsett", "army"]),
-   91|     ("abolition", "Abolition and slavery", ["abolition", "abolitionists slavery"], ["slaves", "slavery"]),
-   92|     ("tariff", "Tariff and home industry", ["tariff", "protection home industry"], ["duties", "manufactures"]),
-   93|     ("public_lands", "Public lands and pre-emption", ["public lands", "pre-emption"], ["lands", "settlers"]),
-   94| ], cutoff="1840-10-29")
-   95| year(1844, "1844-11-01", ["Polk", "Dallas", "Clay", "Frelinghuysen", "Birney", "Tyler", "Whig", "Whigs",
-   96|                           "Loco Foco", "Locofoco", "Locofocos", "Liberty party"] + GENERIC_PARTY, [
-   97|     ("texas_annexation", "Annexation of Texas", ["annexation texas"], ["annex", "texas", "mexico"]),
-   98|     ("tariff_1842", "The tariff of 1842", ["tariff of 1842", "tariff protection"], ["duties", "manufactures"]),
-   99|     ("oregon", "The Oregon question", ["oregon territory", "oregon"], ["british", "boundary"]),
-  100|     ("national_bank", "A national bank", ["national bank"], ["bank", "currency"]),
-  101|     ("slavery_abolition", "Slavery and abolition", ["abolition slavery", "abolitionists"], ["slaves", "slavery"]),
-  102|     ("nativism", "Native Americanism and naturalization", ["native american", "naturalization foreigners"], ["catholic", "riots", "foreigners"]),
-  103|     ("distribution_lands", "Distribution of public land revenue", ["distribution public lands"], ["lands", "states"]),
-  104|     ("hard_money", "Currency and banks", ["currency banks specie"], ["specie", "paper"]),
-  105| ], cutoff="1844-10-31")
-  106| year(1848, "1848-11-07", ["Taylor", "Fillmore", "Cass", "Butler", "Van Buren", "Adams", "Polk", "Whig", "Whigs",
-  107|                           "Free Soil", "Free Soilers", "Barnburner", "Barnburners", "Loco Foco", "Locofoco",
-  108|                           "Locofocos"] + GENERIC_PARTY, [
-  109|     ("wilmot_proviso", "Slavery in the new territories (Wilmot Proviso)", ["wilmot proviso", "slavery territories"], ["slavery", "territory", "proviso"]),
-  110|     ("mexican_war", "The Mexican War and its costs", ["mexican war", "war debt mexico"], ["war", "mexico", "soldiers"]),
-  111|     ("tariff", "The tariff of 1846", ["tariff of 1846", "tariff"], ["duties", "manufactures"]),
-  112|     ("california_gold", "California and the gold discovery", ["california gold"], ["gold", "mines"]),
-  113|     ("internal_improvements", "Rivers, harbors and internal improvements", ["rivers and harbors", "internal improvements"], ["harbor", "river"]),
-  114|     ("immigration_ireland", "Irish famine and immigration", ["ireland famine", "emigrants"], ["irish", "emigrants"]),
-  115|     ("public_lands", "Public lands and homesteads", ["public lands settlers"], ["lands", "settlers"]),
-  116|     ("europe_revolutions", "Revolutions in Europe", ["revolution france", "revolution europe"], ["republic", "france"]),
-  117| ])
-  118| year(1852, "1852-11-02", ["Pierce", "King", "Scott", "Graham", "Hale", "Julian", "Fillmore", "Whig", "Whigs",
-  119|                           "Free Soil", "Free Soilers", "Free Democracy"] + GENERIC_PARTY, [
-  120|     ("fugitive_slave_law", "The Fugitive Slave Law", ["fugitive slave law", "fugitive slave"], ["slave", "fugitive"]),
-  121|     ("compromise_1850", "Finality of the Compromise of 1850", ["compromise measures", "compromise finality"], ["compromise", "agitation"]),
-  122|     ("tariff", "The tariff", ["tariff", "protection iron"], ["duties", "iron"]),
-  123|     ("foreigners", "Immigration and naturalization", ["foreigners naturalization", "adopted citizens"], ["foreign", "germans", "irish"]),
-  124|     ("temperance", "Temperance and the Maine Law", ["maine law", "liquor law temperance"], ["liquor", "temperance"]),
-  125|     ("internal_improvements", "Rivers, harbors and railroads", ["rivers and harbors", "railroad"], ["harbor", "railroad"]),
-  126|     ("homestead", "Homestead / free land", ["homestead bill", "public lands"], ["lands", "homestead"]),
-  127|     ("cuba", "Cuba and filibusters", ["cuba"], ["spain", "filibuster"]),
-  128| ])
-  129| year(1856, "1856-11-04", ["Buchanan", "Breckinridge", "Fremont", "Frémont", "Dayton", "Fillmore", "Donelson",
-  130|                           "Pierce", "Know Nothing", "Know Nothings", "American party", "Black Republican",
-  131|                           "Whig", "Whigs"] + GENERIC_PARTY, [
-  132|     ("kansas", "Violence and slavery in Kansas", ["kansas border ruffians", "kansas"], ["lawrence", "free state", "ruffians"]),
-  133|     ("slavery_extension", "Extension of slavery into the territories", ["slavery extension territories", "nebraska bill"], ["slavery", "territories"]),
-  134|     ("sumner_assault", "The assault on Sumner", ["sumner brooks assault"], ["senate", "assault"]),
-  135|     ("disunion", "Threats of disunion", ["disunion", "dissolution of the union"], ["union", "south"]),
-  136|     ("foreigners_catholics", "Foreigners and Catholics (nativism)", ["foreigners naturalization", "catholics"], ["foreign", "catholic"]),
-  137|     ("temperance", "Temperance / Maine Law", ["maine law", "liquor law"], ["liquor", "temperance"]),
-  138|     ("pacific_railroad", "A Pacific railroad", ["pacific railroad"], ["railroad", "pacific"]),
-  139|     ("cuba_ostend", "Cuba and the Ostend Manifesto", ["cuba ostend", "cuba"], ["spain", "cuba"]),
-  140| ])
-  141| year(1860, "1860-11-06", ["Lincoln", "Hamlin", "Douglas", "Johnson", "Breckinridge", "Lane", "Bell", "Everett",
-  142|                           "Buchanan", "Constitutional Union", "Black Republican", "Wide Awake", "Wide Awakes",
-  143|                           "Fusion"] + GENERIC_PARTY, [
-  144|     ("slavery_territories", "Slavery in the territories", ["slavery territories", "slave code territories"], ["slavery", "territories"]),
-  145|     ("secession", "Secession and disunion", ["secession", "disunion"], ["union", "dissolution"]),
-  146|     ("homestead", "The homestead bill", ["homestead bill", "free homes"], ["lands", "settlers"]),
-  147|     ("tariff", "Protective tariff", ["protective tariff", "tariff"], ["duties", "iron"]),
-  148|     ("john_brown", "John Brown and slave insurrection fears", ["john brown", "insurrection"], ["harper", "insurrection"]),
-  149|     ("pacific_railroad", "A Pacific railroad", ["pacific railroad"], ["railroad", "pacific"]),
-  150|     ("slave_trade", "Reopening the slave trade", ["african slave trade"], ["slave", "trade"]),
-  151|     ("hard_times", "Crops, money and business", ["crops prices money market"], ["crop", "prices"]),
-  152| ])
-  153| year(1864, "1864-11-08", ["Lincoln", "Johnson", "McClellan", "Pendleton", "Fremont", "Frémont", "Union party",
-  154|                           "Copperhead", "Copperheads"] + GENERIC_PARTY, [
-  155|     ("war_peace", "Peace negotiations vs. continuing the war", ["peace negotiations", "armistice"], ["peace", "war"]),
-  156|     ("draft", "The draft and substitutes", ["draft conscription", "drafted substitutes"], ["draft", "quota"]),
-  157|     ("emancipation", "Emancipation and abolition", ["emancipation", "abolition slavery"], ["slaves", "freedom"]),
-  158|     ("soldiers_vote", "Soldiers voting in the field", ["soldiers vote"], ["soldiers", "field"]),
-  159|     ("prices_currency", "Prices, gold and greenbacks", ["gold premium", "high prices"], ["greenbacks", "currency"]),
-  160|     ("arbitrary_arrests", "Arbitrary arrests and civil liberties", ["arbitrary arrests", "habeas corpus"], ["arrest", "military"]),
-  161|     ("war_news", "The military campaigns (Atlanta, Shenandoah)", ["atlanta sherman", "sheridan valley"], ["army", "rebels"]),
-  162|     ("taxes_debt", "War taxes and the debt", ["taxes war debt", "internal revenue"], ["tax", "debt"]),
-  163| ])
-  164| year(1868, "1868-11-03", ["Grant", "Colfax", "Seymour", "Blair", "Johnson"] + GENERIC_PARTY, [
-  165|     ("reconstruction", "Reconstruction of the South", ["reconstruction acts", "reconstruction"], ["military", "southern"]),
-  166|     ("negro_suffrage", "Black suffrage", ["negro suffrage", "colored voters"], ["negro", "suffrage", "colored"]),
-  167|     ("bonds_greenbacks", "Paying the bonds in greenbacks", ["bonds greenbacks", "five-twenty bonds"], ["bonds", "greenbacks", "currency"]),
-  168|     ("taxes", "Taxes and the public debt", ["taxation public debt", "internal revenue tax"], ["tax", "debt"]),
-  169|     ("ku_klux", "Ku Klux violence", ["ku klux", "outrages"], ["klan", "murdered"]),
-  170|     ("impeachment", "The impeachment of the president", ["impeachment"], ["senate", "acquittal"]),
-  171|     ("indian_war", "Indian wars on the plains", ["indian war", "indians"], ["indians", "frontier"]),
-  172|     ("tariff", "Tariff and protection", ["tariff", "protection"], ["duties", "wool"]),
-  173| ])
-  174| year(1872, "1872-11-05", ["Grant", "Wilson", "Greeley", "Brown", "O'Conor", "Liberal Republican",
-  175|                           "Liberal Republicans", "Liberals"] + GENERIC_PARTY, [
-  176|     ("amnesty", "Amnesty for former Confederates", ["amnesty"], ["disabilities", "southern"]),
-  177|     ("ku_klux", "Ku Klux prosecutions and violence", ["ku klux"], ["klan", "outrages"]),
-  178|     ("civil_service_reform", "Civil service reform", ["civil service reform"], ["office", "reform"]),
-  179|     ("credit_mobilier", "Corruption: Credit Mobilier", ["credit mobilier"], ["congress", "stock"]),
-  180|     ("tammany", "The Tammany Ring", ["tammany ring", "tweed"], ["ring", "frauds"]),
-  181|     ("tariff_free_trade", "Tariff vs. free trade", ["free trade", "tariff"], ["duties", "protection"]),
-  182|     ("currency", "Specie payments and currency", ["specie payments", "greenbacks"], ["currency", "gold"]),
-  183|     ("eight_hour", "Labor and the eight-hour day", ["eight hour", "workingmen"], ["labor", "hours"]),
-  184| ])
-  185| year(1876, "1876-11-07", ["Hayes", "Wheeler", "Tilden", "Hendricks", "Cooper", "Grant", "Greenback party",
-  186|                           "Greenbackers"] + GENERIC_PARTY, [
-  187|     ("southern_violence", "Southern elections, rifle clubs and violence", ["rifle clubs", "hamburg massacre"], ["negroes", "colored"]),
-  188|     ("reconstruction", "Carpet-bag rule and Reconstruction", ["carpet bag", "carpet-baggers"], ["southern", "state government"]),
-  189|     ("hard_times", "Hard times and unemployment", ["hard times", "out of employment"], ["work", "wages"]),
-  190|     ("currency", "Resumption and greenbacks", ["resumption act", "greenbacks"], ["specie", "currency"]),
-  191|     ("corruption", "Corruption and reform (Whisky Ring, Belknap)", ["whisky ring", "belknap"], ["fraud", "reform"]),
-  192|     ("indian_war", "The Sioux war", ["sioux war", "custer"], ["indians", "sioux"]),
-  193|     ("schools_sectarian", "Public schools and sectarian funds", ["public schools sectarian"], ["schools", "catholic"]),
-  194|     ("tariff", "Tariff", ["tariff"], ["duties", "protection"]),
-  195| ])
-  196| year(1880, "1880-11-02", ["Garfield", "Arthur", "Hancock", "English", "Weaver", "Hayes", "Greenback party",
-  197|                           "Greenbackers", "Morey"] + GENERIC_PARTY, [
-  198|     ("tariff", "Tariff for revenue vs. protection", ["tariff for revenue", "protective tariff"], ["duties", "protection"]),
-  199|     ("solid_south", "The Solid South and southern elections", ["solid south"], ["southern", "bourbon"]),
-  200|     ("chinese", "Chinese immigration", ["chinese immigration", "chinese"], ["chinese", "coolie"]),
-  201|     ("currency", "Greenbacks and resumption", ["greenbacks resumption", "national banks"], ["currency", "specie"]),
-  202|     ("civil_service", "Civil service reform", ["civil service reform"], ["office", "reform"]),
-  203|     ("exodus", "The Black exodus from the South", ["negro exodus", "exodusters"], ["colored", "kansas"]),
-  204|     ("state_rights", "State rights and federal elections", ["state rights", "federal elections"], ["states", "constitution"]),
-  205|     ("labor", "Workingmen and wages", ["workingmen wages"], ["labor", "wages"]),
-  206| ])
-  207| year(1884, "1884-11-04", ["Cleveland", "Hendricks", "Blaine", "Logan", "Butler", "St. John", "Arthur",
-  208|                           "Mugwump", "Mugwumps", "Greenback party", "Prohibition party"] + GENERIC_PARTY, [
-  209|     ("tariff", "Tariff and protection", ["tariff", "protection american industry"], ["duties", "wool"]),
-  210|     ("civil_service", "Civil service reform", ["civil service reform"], ["office", "spoils"]),
-  211|     ("labor", "Labor and contract labor", ["contract labor", "workingmen wages"], ["labor", "wages"]),
-  212|     ("chinese", "Chinese immigration", ["chinese immigration"], ["chinese", "coolies"]),
-  213|     ("prohibition", "Prohibition", ["prohibition"], ["liquor", "temperance"]),
-  214|     ("monopolies", "Railroads and monopolies", ["monopolies", "railroad monopoly"], ["corporations", "rates"]),
-  215|     ("solid_south", "The Solid South and the colored vote", ["solid south", "colored voters"], ["southern", "negro"]),
-  216|     ("silver", "Silver coinage", ["silver coinage", "silver dollar"], ["silver", "currency"]),
-  217| ])
-  218| year(1888, "1888-11-06", ["Harrison", "Morton", "Cleveland", "Thurman", "Fisk", "Prohibition party",
-  219|                           "Union Labor"] + GENERIC_PARTY, [
-  220|     ("tariff_reform", "Tariff reform / the Mills bill", ["tariff reform", "mills bill"], ["duties", "protection"]),
-  221|     ("surplus", "The Treasury surplus", ["treasury surplus"], ["surplus", "taxation"]),
-  222|     ("wool_protection", "Wool, wages and protection", ["wool tariff", "free wool"], ["wool", "wages"]),
-  223|     ("pensions", "Soldiers' pensions", ["pension veto", "soldiers pensions"], ["pension", "veterans"]),
-  224|     ("trusts", "Trusts", ["trusts"], ["trust", "monopoly"]),
-  225|     ("chinese", "Chinese exclusion", ["chinese exclusion"], ["chinese", "coolies"]),
-  226|     ("prohibition", "Prohibition", ["prohibition"], ["liquor", "saloon"]),
-  227|     ("civil_service", "Civil service reform", ["civil service reform"], ["office", "reform"]),
-  228| ])
-  229| year(1892, "1892-11-08", ["Cleveland", "Stevenson", "Harrison", "Reid", "Weaver", "Field", "Bidwell",
-  230|                           "Populist", "Populists", "People's party", "Peoples party", "Prohibition party"]
-  231|      + GENERIC_PARTY, [
-  232|     ("tariff", "The McKinley tariff", ["mckinley tariff", "tariff reform"], ["duties", "protection"]),
-  233|     ("force_bill", "The Force Bill / federal elections", ["force bill"], ["federal", "elections"]),
-  234|     ("silver", "Free silver", ["free silver", "silver coinage"], ["silver", "currency"]),
-  235|     ("homestead_strike", "The Homestead strike and labor", ["homestead strike", "pinkertons"], ["strikers", "labor"]),
-  236|     ("farmers_alliance", "Farmers' Alliance and the sub-treasury", ["farmers alliance", "sub-treasury"], ["farmers", "alliance"]),
-  237|     ("pensions", "Pensions", ["pensions"], ["pension", "soldiers"]),
-  238|     ("prohibition", "Prohibition", ["prohibition"], ["liquor", "saloon"]),
-  239|     ("railroads_monopolies", "Railroads and monopolies", ["railroad monopolies", "trusts"], ["rates", "corporations"]),
-  240| ])
-  241| year(1896, "1896-11-03", ["McKinley", "Hobart", "Bryan", "Sewall", "Watson", "Palmer", "Buckner", "Cleveland",
-  242|                           "Populist", "Populists", "People's party", "Peoples party", "Popocrat", "Popocrats"]
-  243|      + GENERIC_PARTY, [
-  244|     ("free_silver", "Free silver at 16 to 1", ["free coinage silver", "free silver"], ["silver", "coinage", "16 to 1"]),
-  245|     ("gold_standard", "The gold standard / sound money", ["gold standard", "sound money"], ["gold", "money"]),
-  246|     ("tariff", "Protective tariff", ["protective tariff", "protection"], ["duties", "tariff"]),
-  247|     ("farm_prices", "Farm prices and mortgages", ["price of wheat", "farmers mortgages"], ["wheat", "cotton", "prices"]),
-  248|     ("trusts_railroads", "Trusts and railroads", ["trusts monopolies", "railroad rates"], ["corporations", "trust"]),
-  249|     ("labor_injunctions", "Labor and government by injunction", ["government by injunction", "workingmen wages"], ["labor", "injunction"]),
-  250|     ("income_tax", "The income tax and the Supreme Court", ["income tax"], ["income", "court"]),
-  251|     ("bonds_reserve", "Bond issues and the gold reserve", ["bond issue gold reserve", "bonds"], ["bonds", "reserve"]),
-  252| ])
-  253| year(1900, "1900-11-06", ["McKinley", "Roosevelt", "Bryan", "Stevenson", "Debs", "Woolley", "Populist",
-  254|                           "Populists"] + GENERIC_PARTY, [
-  255|     ("imperialism", "Imperialism and the Philippines", ["imperialism", "philippines"], ["filipinos", "colonies"]),
-  256|     ("trusts", "Trusts", ["trusts"], ["trust", "monopoly"]),
-  257|     ("free_silver", "Free silver", ["free silver"], ["silver", "coinage"]),
-  258|     ("prosperity", "Prosperity and wages (full dinner pail)", ["full dinner pail", "prosperity wages"], ["wages", "work"]),
-  259|     ("coal_strike", "The anthracite coal strike", ["anthracite strike", "coal miners strike"], ["miners", "strike"]),
-  260|     ("china", "China and the Boxer crisis", ["china boxers", "pekin"], ["china", "troops"]),
-  261|     ("boers", "The Boer War", ["boers"], ["boer", "england"]),
-  262|     ("disfranchisement", "Black disfranchisement in the South", ["disfranchise negro", "suffrage amendment"], ["negro", "suffrage"]),
-  263| ])
-  264| year(1904, "1904-11-08", ["Roosevelt", "Fairbanks", "Parker", "Davis", "Debs", "Swallow", "Watson",
-  265|                           "Populist", "Populists"] + GENERIC_PARTY, [
-  266|     ("trusts", "Trusts and corporations", ["trusts", "beef trust"], ["trust", "corporations"]),
-  267|     ("tariff", "Tariff revision", ["tariff revision", "tariff"], ["duties", "protection"]),
-  268|     ("philippines", "The Philippines", ["philippines"], ["filipinos", "islands"]),
-  269|     ("panama_canal", "The Panama Canal", ["panama canal"], ["canal", "isthmus"]),
-  270|     ("labor_strikes", "Strikes and labor (Colorado, packinghouse)", ["strike miners", "packing house strike"], ["strike", "union"]),
-  271|     ("race_suffrage", "Race and the suffrage in the South", ["negro question", "disfranchisement"], ["negro", "suffrage"]),
-  272|     ("pensions", "Pensions (Order No. 78)", ["pension order"], ["pension", "veterans"]),
-  273|     ("cost_of_living", "Prices and wages", ["cost of living", "prices wages"], ["prices", "wages"]),
-  274| ])
-  275| year(1908, "1908-11-03", ["Taft", "Sherman", "Bryan", "Kern", "Debs", "Chafin", "Roosevelt", "Hisgen",
-  276|                           "Independence party"] + GENERIC_PARTY, [
-  277|     ("trusts", "Trusts and corporations", ["trusts", "standard oil"], ["trust", "corporations"]),
-  278|     ("tariff_revision", "Tariff revision", ["tariff revision"], ["duties", "schedules"]),
-  279|     ("bank_guaranty", "Bank deposit guaranty after the 1907 panic", ["guaranty of bank deposits", "guarantee deposits"], ["deposits", "banks"]),
-  280|     ("labor_injunctions", "Labor and injunctions", ["injunction labor", "injunctions"], ["labor", "courts"]),
-  281|     ("railroad_rates", "Railroad rates and regulation", ["railroad rates"], ["rates", "commission"]),
-  282|     ("prohibition", "Local and county option", ["local option", "county option"], ["saloon", "liquor"]),
-  283|     ("campaign_contributions", "Publicity of campaign contributions", ["campaign contributions publicity"], ["contributions", "funds"]),
-  284|     ("conservation", "Conservation of forests and water", ["conservation natural resources", "forests irrigation"], ["forests", "water"]),
-  285| ])
-  286| year(1912, "1912-11-05", ["Wilson", "Marshall", "Taft", "Sherman", "Butler", "Roosevelt", "Johnson", "Debs",
-  287|                           "Seidel", "Chafin", "Progressive party", "Progressives", "Bull Moose",
-  288|                           "Bull Moosers"] + GENERIC_PARTY, [
-  289|     ("trusts", "Trusts and monopoly", ["trusts", "anti-trust"], ["trust", "monopoly"]),
-  290|     ("tariff_cost_of_living", "Tariff and the high cost of living", ["high cost of living", "tariff revision"], ["prices", "duties"]),
-  291|     ("direct_democracy", "Initiative, referendum and recall", ["initiative referendum recall"], ["recall", "referendum"]),
-  292|     ("woman_suffrage", "Votes for women", ["woman suffrage", "votes for women"], ["suffrage", "women"]),
-  293|     ("labor", "Child labor, wages and hours", ["child labor", "minimum wage"], ["labor", "wages"]),
-  294|     ("income_tax", "The income tax amendment", ["income tax amendment"], ["income", "amendment"]),
-  295|     ("currency_banking", "Currency reform and the money trust", ["currency reform", "money trust"], ["banks", "currency"]),
-  296|     ("prohibition", "Saloons and local option", ["local option saloon", "prohibition"], ["saloon", "liquor"]),
-  297| ])
-  298| year(1916, "1916-11-07", ["Wilson", "Marshall", "Hughes", "Fairbanks", "Benson", "Hanly", "Roosevelt",
-  299|                           "Progressive party", "Progressives", "Bull Moose"] + GENERIC_PARTY, [
-  300|     ("preparedness", "Military preparedness", ["preparedness army navy"], ["preparedness", "navy"]),
-  301|     ("european_war", "The European war and neutrality", ["neutrality", "submarine"], ["war", "neutral"]),
-  302|     ("mexico", "Mexico and the border", ["mexican border", "villa"], ["mexico", "border", "guardsmen"]),
-  303|     ("eight_hour_law", "The eight-hour railroad law", ["eight hour law", "adamson"], ["railroad", "brotherhoods"]),
-  304|     ("hyphenates", "German-Americans and the hyphen", ["hyphenated", "german american"], ["hyphen", "german"]),
-  305|     ("woman_suffrage", "Woman suffrage", ["woman suffrage"], ["suffrage", "women"]),
-  306|     ("tariff", "Tariff", ["tariff"], ["duties", "protection"]),
-  307|     ("prohibition", "Prohibition amendments", ["prohibition amendment", "dry"], ["saloon", "liquor"]),
-  308| ])
-  309| year(1928, "1928-11-06", ["Hoover", "Curtis", "Smith", "Robinson", "Thomas", "Coolidge", "Raskob",
-  310|                           "Tammany"] + GENERIC_PARTY, [
-  311|     ("prohibition", "Prohibition and enforcement", ["prohibition enforcement", "wet dry"], ["liquor", "eighteenth"]),
-  312|     ("religion", "Religion in the campaign", ["catholic religious issue", "religious intolerance"], ["catholic", "protestant"]),
-  313|     ("farm_relief", "Farm relief (McNary-Haugen)", ["farm relief", "mcnary-haugen"], ["farmers", "surplus"]),
-  314|     ("prosperity", "Prosperity and business", ["prosperity", "business conditions"], ["prosperity", "employment"]),
-  315|     ("tariff", "Tariff", ["tariff"], ["duties", "protection"]),
-  316|     ("water_power", "Water power and Muscle Shoals", ["muscle shoals", "water power"], ["power", "utilities"]),
-  317|     ("immigration", "Immigration restriction", ["immigration restriction", "national origins"], ["immigration", "quota"]),
-  318|     ("women_voters", "Women voters", ["women voters"], ["women", "register"]),
-  319| ])
-  320| year(1932, "1932-11-08", ["Roosevelt", "Garner", "Hoover", "Curtis", "Thomas", "Foster", "Coolidge",
-  321|                           "Raskob"] + GENERIC_PARTY, [
-  322|     ("unemployment_relief", "Unemployment and relief", ["unemployment relief", "jobless"], ["unemployed", "relief"]),
-  323|     ("farm_crisis", "Farm prices and foreclosures", ["farm holiday", "farm mortgage foreclosure"], ["farmers", "prices"]),
-  324|     ("prohibition_repeal", "Repeal of prohibition", ["prohibition repeal", "repeal eighteenth amendment"], ["repeal", "liquor"]),
-  325|     ("banks", "Bank failures and hoarding", ["bank failure depositors", "hoarding"], ["bank", "deposits"]),
-  326|     ("veterans_bonus", "The veterans' bonus and the Bonus Army", ["bonus army", "veterans bonus"], ["bonus", "veterans"]),
-  327|     ("tariff", "Tariff", ["tariff"], ["duties", "smoot"]),
-  328|     ("rfc_public_works", "Federal loans and public works (RFC)", ["reconstruction finance corporation", "public works"], ["loans", "works"]),
-  329|     ("taxes_economy", "Taxes and government economy", ["sales tax", "taxes economy"], ["tax", "budget"]),
-  330| ])
-  331| year(1936, "1936-11-03", ["Roosevelt", "Garner", "Landon", "Knox", "Lemke", "Thomas", "Browder", "Hoover",
-  332|                           "Union party", "New Deal", "New Dealers"] + GENERIC_PARTY, [
-  333|     ("social_security", "Social security and old-age pensions", ["social security", "old age pension"], ["pension", "security"]),
-  334|     ("townsend_plan", "The Townsend plan", ["townsend plan"], ["townsend", "pension"]),
-  335|     ("relief_wpa", "Relief and the WPA", ["works progress administration", "relief"], ["relief", "wpa"]),
-  336|     ("drought_farm", "Drought and farm programs", ["drought", "agricultural adjustment"], ["farmers", "drought"]),
-  337|     ("labor_organizing", "Labor organizing (CIO)", ["labor union organize", "cio"], ["union", "labor"]),
-  338|     ("spending_debt", "Spending and the national debt", ["national debt", "government spending"], ["debt", "spending"]),
-  339|     ("trade_agreements", "Reciprocal trade agreements", ["reciprocal trade agreements"], ["trade", "tariff"]),
-  340|     ("supreme_court", "The Supreme Court and the NRA/AAA", ["supreme court decision", "nra"], ["court", "constitution"]),
-  341| ])
-  342| year(1940, "1940-11-05", ["Roosevelt", "Wallace", "Willkie", "McNary", "Thomas", "Browder", "Garner",
-  343|                           "New Deal", "New Dealers"] + GENERIC_PARTY, [
-  344|     ("aid_to_britain", "Aid to Britain / destroyers deal", ["aid to britain", "destroyers"], ["britain", "aid"]),
-  345|     ("draft", "The peacetime draft", ["selective service registration", "conscription"], ["draft", "registration"]),
-  346|     ("third_term", "The third-term tradition", ["third term"], ["tradition", "term"]),
-  347|     ("defense_jobs", "Defense spending and jobs", ["national defense contracts", "unemployment"], ["defense", "jobs"]),
-  348|     ("keep_out_of_war", "Keeping out of the war", ["keep out of war", "isolation"], ["war", "peace"]),
-  349|     ("farm_prices", "Farm prices", ["farm prices"], ["farmers", "prices"]),
-  350|     ("labor", "Labor, wages and hours", ["wages hours", "labor union"], ["labor", "wages"]),
-  351|     ("relief_wpa", "Relief and the WPA", ["wpa relief"], ["relief", "wpa"]),
-  352| ])
-  353| year(1944, "1944-11-07", ["Roosevelt", "Truman", "Dewey", "Bricker", "Thomas", "Wallace",
-  354|                           "New Deal", "New Dealers"] + GENERIC_PARTY, [
-  355|     ("soldier_vote", "Servicemen voting", ["soldier vote", "absentee ballots servicemen"], ["ballots", "servicemen"]),
-  356|     ("postwar_jobs", "Postwar jobs and reconversion", ["postwar jobs", "reconversion"], ["jobs", "postwar"]),
-  357|     ("world_organization", "A postwar world organization", ["dumbarton oaks", "world organization peace"], ["peace", "nations"]),
-  358|     ("rationing_prices", "Rationing and price control", ["rationing", "price control opa"], ["ration", "prices"]),
-  359|     ("labor_pac", "Labor and the CIO-PAC", ["political action committee", "labor union"], ["labor", "union"]),
-  360|     ("taxes", "Taxes", ["taxes"], ["tax", "income"]),
-  361|     ("veterans", "Veterans' benefits (GI Bill)", ["veterans benefits", "gi bill"], ["veterans", "benefits"]),
-  362|     ("farm_prices", "Farm prices", ["farm prices"], ["farmers", "prices"]),
-  363| ])
-  364| year(1948, "1948-11-02", ["Truman", "Barkley", "Dewey", "Warren", "Thurmond", "Wright", "Wallace", "Taylor",
-  365|                           "Dixiecrat", "Dixiecrats", "States' Rights", "States Rights", "Progressive party",
-  366|                           "Progressives"] + GENERIC_PARTY, [
-  367|     ("inflation", "High prices and inflation", ["high prices inflation", "cost of living"], ["prices", "inflation"]),
-  368|     ("housing", "The housing shortage", ["housing shortage"], ["housing", "homes"]),
-  369|     ("taft_hartley", "Taft-Hartley and labor", ["taft-hartley"], ["labor", "union"]),
-  370|     ("civil_rights", "Civil rights and the poll tax", ["civil rights", "poll tax"], ["negro", "rights"]),
-  371|     ("berlin_cold_war", "Berlin and the Soviet Union", ["berlin airlift", "russia"], ["soviet", "berlin"]),
-  372|     ("communism_home", "Communists at home", ["un-american activities", "communists"], ["communist", "spy"]),
-  373|     ("farm_price_supports", "Farm price supports", ["price supports", "farm prices"], ["farmers", "supports"]),
-  374|     ("draft", "The peacetime draft", ["draft registration", "selective service"], ["draft", "registration"]),
-  375| ])
-  376| year(1952, "1952-11-04", ["Eisenhower", "Ike", "Nixon", "Stevenson", "Sparkman", "Truman", "Hallinan",
-  377|                           "Taft", "Kefauver"] + GENERIC_PARTY, [
-  378|     ("korea", "The Korean War", ["korea war", "korea truce"], ["korea", "troops"]),
-  379|     ("communism", "Communists in government", ["communists in government", "communism"], ["communist", "loyalty"]),
-  380|     ("corruption", "Corruption in government", ["corruption", "mink coat"], ["corruption", "scandal"]),
-  381|     ("inflation_controls", "Prices, inflation and controls", ["price controls", "inflation"], ["prices", "controls"]),
-  382|     ("taxes", "Taxes", ["taxes"], ["tax", "income"]),
-  383|     ("tidelands_oil", "Tidelands oil", ["tidelands oil"], ["tidelands", "oil"]),
-  384|     ("civil_rights", "Civil rights and FEPC", ["fepc", "civil rights"], ["rights", "negro"]),
-  385|     ("farm_prices", "Farm price supports", ["farm price supports", "farm prices"], ["farmers", "prices"]),
-  386| ])
-  387| year(1956, "1956-11-06", ["Eisenhower", "Ike", "Nixon", "Stevenson", "Kefauver", "Truman"] + GENERIC_PARTY, [
-  388|     ("suez_hungary", "Suez and Hungary", ["suez", "hungary"], ["egypt", "soviet"]),
-  389|     ("h_bomb_tests", "H-bomb tests and the draft", ["h-bomb tests", "hydrogen bomb tests"], ["bomb", "tests"]),
-  390|     ("school_desegregation", "School desegregation", ["desegregation", "integration schools"], ["segregation", "schools"]),
-  391|     ("farm_soil_bank", "Farm prices and the soil bank", ["soil bank", "farm prices"], ["farmers", "prices"]),
-  392|     ("highways", "The highway program", ["highway program", "interstate highway"], ["highway", "roads"]),
-  393|     ("labor", "Labor and wages", ["labor union wages"], ["union", "wages"]),
-  394|     ("taxes", "Taxes and the budget", ["taxes balanced budget"], ["tax", "budget"]),
-  395|     ("cost_of_living", "Cost of living", ["cost of living"], ["prices", "living"]),
-  396| ])
-  397| year(1960, "1960-11-08", ["Kennedy", "Johnson", "Nixon", "Lodge", "Eisenhower", "Ike", "Jack",
-  398|                           "Kennedy-Johnson", "Nixon-Lodge"] + GENERIC_PARTY, [
-  399|     ("cuba_castro", "Castro and Cuba", ["castro cuba"], ["castro", "cuba"]),
-  400|     ("khrushchev_cold_war", "Khrushchev and the cold war", ["khrushchev", "soviet"], ["soviet", "khrushchev"]),
-  401|     ("defense_missiles", "Missiles and national defense", ["missile gap", "missiles defense"], ["missile", "defense"]),
-  402|     ("civil_rights", "Civil rights and sit-ins", ["sit-in", "civil rights"], ["negro", "rights"]),
-  403|     ("religion", "Religion and the presidency", ["catholic president", "religious issue"], ["catholic", "religion"]),
-  404|     ("economy_jobs", "Recession and unemployment", ["unemployment recession"], ["jobs", "unemployment"]),
-  405|     ("farm_surplus", "Farm surplus and prices", ["farm surplus", "farm prices"], ["farmers", "surplus"]),
-  406|     ("medical_care_aged", "Medical care for the aged", ["medical care aged", "social security medical"], ["aged", "medical"]),
-  407| ])
-  408| 
-  409| # --------------------------------------------------------------------- http
-  410| _last = {}
-  411| INTERVAL = {"www.loc.gov": 3.2, "tile.loc.gov": 1.5}
-  412| LOG: list = []
-  413| 
-  414| 
-  415| def _sleep_for(host):
-  416|     gap = INTERVAL.get(host, 1.5)
-  417|     t = _last.get(host, 0)
-  418|     now = time.time()
-  419|     if now - t < gap:
-  420|         time.sleep(gap - (now - t))
-  421|     _last[host] = time.time()
-  422| 
-  423| 
-  424| def fetch_json(url, cache_dir):
-  425|     key = hashlib.sha1(url.encode()).hexdigest()
-  426|     p = os.path.join(cache_dir, "http", key[:2], key + ".json")
-  427|     if os.path.exists(p):
-  428|         with open(p) as f:
-  429|             rec = json.load(f)
-  430|         return rec["body"], rec["ts"]
-  431|     host = urllib.parse.urlparse(url).netloc
-  432|     delay = 15
-  433|     for attempt in range(8):
-  434|         _sleep_for(host)
-  435|         try:
-  436|             req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/json"})
-  437|             with urllib.request.urlopen(req, timeout=60) as r:
-  438|                 raw = r.read().decode("utf-8", "replace")
-  439|             body = json.loads(raw)
-  440|             ts = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
-  441|             os.makedirs(os.path.dirname(p), exist_ok=True)
-  442|             with open(p, "w") as f:
-  443|                 json.dump({"url": url, "ts": ts, "body": body}, f)
-  444|             return body, ts
-  445|         except urllib.error.HTTPError as e:
-  446|             if e.code in (429, 500, 502, 503, 504, 520, 521, 522, 524, 525):
-  447|                 ra = e.headers.get("Retry-After") if e.headers else None
-  448|                 wait = max(delay, int(ra) if ra and ra.isdigit() else 0)
-  449|                 print(f"  [http {e.code}] backoff {wait}s {url[:100]}", file=sys.stderr)
-  450|                 time.sleep(wait)
-  451|                 delay = min(delay * 2, 300)
-  452|                 continue
-  453|             if e.code == 404:
-  454|                 return None, None
-  455|             print(f"  [http {e.code}] giving up {url[:100]}", file=sys.stderr)
-  456|             return None, None
-  457|         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError, http.client.HTTPException) as e:
-  458|             print(f"  [err {type(e).__name__}] backoff {delay}s {url[:100]}", file=sys.stderr)
-  459|             time.sleep(delay)
-  460|             delay = min(delay * 2, 300)
-  461|     return None, None
-  462| 
-  463| 
-  464| def search(q, y, state, cache_dir, c=20, facets=False):
-  465|     cfg = Y[y]
-  466|     params = [("q", q), ("dates", f"{y}-09-01/{cfg['cutoff'].isoformat()}"), ("fo", "json"), ("c", str(c)),
-  467|               ("at", "results,pagination" + (",facets" if facets else ""))]
-  468|     if state:
-  469|         params.append(("fa", f"location_state:{state}"))
-  470|     url = SEARCH + "?" + urllib.parse.urlencode(params)
-  471|     body, ts = fetch_json(url, cache_dir)
-  472|     total = None
-  473|     res, fac = [], {}
-  474|     if body:
-  475|         total = (body.get("pagination") or {}).get("of")
-  476|         res = body.get("results") or []
-  477|         for f in body.get("facets") or []:
-  478|             if f.get("field") == "location_state" or "location_state" in str(f.get("type", "")):
-  479|                 for it in f.get("filters", []):
-  480|                     fac[it.get("title", "").lower()] = it.get("count", 0)
-  481|     LOG.append(dict(ts=ts, q=q, state=state or "—", total=total, returned=len(res)))
-  482|     return res, fac
-  483| 
-  484| 
-  485| def ocr_url_for(r):
-  486|     w = r.get("word_coordinates_url") or ""
-  487|     qs = urllib.parse.parse_qs(urllib.parse.urlparse(w).query)
-  488|     seg = (qs.get("segment") or [None])[0]
-  489|     if not seg:
-  490|         return None
-  491|     return ("https://tile.loc.gov/text-services/word-coordinates-service?segment="
-  492|             + urllib.parse.quote(seg, safe="") + "&format=alto_xml&full_text=1")
-  493| 
-  494| 
-  495| def fetch_ocr(url, cache_dir):
-  496|     body, ts = fetch_json(url, cache_dir)
-  497|     if not body or not isinstance(body, dict):
-  498|         return None, ts
-  499|     for v in body.values():
-  500|         if isinstance(v, dict) and "full_text" in v:
-  501|             return v["full_text"], ts
-  502|     return None, ts
-  503| 
-  504| 
-  505| # ------------------------------------------------------------------- text
-  506| _DICT = None
-  507| 
-  508| 
-  509| def words_dict():
-  510|     global _DICT
-  511|     if _DICT is None:
-  512|         s = set()
-  513|         for p in ("/usr/share/dict/words", "/usr/share/dict/web2"):
-  514|             if os.path.exists(p):
-  515|                 with open(p, errors="ignore") as f:
-  516|                     s.update(w.strip().lower() for w in f)
-  517|         s.update("a i the of and to in is was for on that by with as at from are be this which it "
-  518|                  "he his they their has have had not but or an its were been will would who all".split())
-  519|         _DICT = s
-  520|     return _DICT
-  521| 
-  522| 
-  523| def in_dict(w):
-  524|     d = words_dict()
-  525|     if w in d:
-  526|         return True
-  527|     for suf in ("'s", "s", "es", "ed", "d", "ing", "ly", "ies", "ers", "er", "ment", "ments"):
-  528|         if w.endswith(suf) and len(w) - len(suf) >= 2:
-  529|             b = w[: -len(suf)]
-  530|             if b in d or (suf == "ies" and b + "y" in d) or (suf in ("ed", "ing") and b + "e" in d):
-  531|                 return True
-  532|     return False
-  533| 
-  534| 
-  535| def normalize_ocr(t):
-  536|     t = t.replace("^^", "").replace("^", " ").replace("\n", " ")
-  537|     t = re.sub(r"(\w)- (\w)", r"\1\2", t)  # remaining line-break hyphens
-  538|     return re.sub(r"\s+", " ", t).strip()
-  539| 
-  540| 
-  541| STRAY = re.compile(r"^[\|■•»«\*\^_~`ijI!l1;:,\.'\"]{1,2}$")
-  542| 
-  543| 
-  544| def clean_tokens(toks):
-  545|     """Light cleaning: drop stray margin chars silently; collapse runs of garbage
-  546|     tokens to [OCR illegible]. Returns (tokens, changed_with_brackets)."""
-  547|     out, changed = [], False
-  548|     for w in toks:
-  549|         if STRAY.match(w) and w.lower() not in ("i", "a"):
-  550|             continue
-  551|         letters = sum(ch.isalpha() for ch in w)
-  552|         bad = len(w) >= 3 and letters / len(w) < 0.5 and not re.match(r"^[\$\d,\.%-]+$", w)
-  553|         if bad:
-  554|             if not out or out[-1] != "[OCR illegible]":
-  555|                 out.append("[OCR illegible]")
-  556|                 changed = True
-  557|             continue
-  558|         out.append(w)
-  559|     return out, changed
-  560| 
-  561| 
-  562| def quality(toks):
-  563|     al = [re.sub(r"[^a-z']", "", w.lower()).strip("'") for w in toks]
-  564|     al = [w for w in al if len(w) >= 2]
-  565|     if not al:
-  566|         return 0.0
-  567|     return sum(in_dict(w) for w in al) / len(al)
-  568| 
-  569| 
-  570| AD_RX = re.compile(r"\b(pills?|sarsaparilla|druggists?|cures?d?|liniment|bitters|remedy|per bottle|"
-  571|                    r"for sale|bargains?|ladies'? (?:hats|suits)|catarrh|rheumatism|kidney|dyspepsia|"
-  572|                    r"sale price|special sale)\b", re.I)
-  573| PRED_RX = re.compile(r"\b(electoral votes?|will carry|carry the state|majority of \d|plurality|"
-  574|                      r"straw vote|poll shows|betting odds|even money)\b", re.I)
-  575| 
-  576| 
-  577| def kw_list(topic):
-  578|     """Search and extra keywords, cut to 7 letters so they match as word prefixes."""
-  579|     _, _, queries, extra = topic
-  580|     stop = {"the", "of", "and", "to", "in", "for", "by", "a", "on", "with", "out", "is"}
-  581|     kws = {w[:7] for q in queries for w in re.split(r"[\s\-]+", q.lower()) if w and w not in stop and len(w) > 2}
-  582|     kws.update(w.lower()[:7] for w in extra)
-  583|     return sorted(kws)
-  584| 
-  585| 
-  586| def best_window(toks, kws, W=125):
-  587|     lows = [re.sub(r"[^a-z0-9]", "", w.lower()) for w in toks]
-  588|     hit = [1 if any(l.startswith(k.replace(" ", "")) for k in kws) and l else 0 for l in lows]
-  589|     if len(toks) <= W:
-  590|         return 0, len(toks), sum(hit)
-  591|     pref = [0]
-  592|     for h in hit:
-  593|         pref.append(pref[-1] + h)
-  594|     best, bs = -1, 0
-  595|     for s in range(0, len(toks) - W + 1):
-  596|         v = pref[s + W] - pref[s]
-  597|         if v > best:
-  598|             best, bs = v, s
-  599|     # centre the window on the hits a little: shift start back to a sentence start
-  600|     s = bs
-  601|     for j in range(bs, max(bs - 25, -1), -1):
-  602|         if j > 0 and re.search(r"[\.\?!]['\"]?$", toks[j - 1]) and toks[j][:1].isupper():
-  603|             s = j
-  604|             break
-  605|     e = min(len(toks), s + 120)
-  606|     for j in range(e, min(len(toks), s + 160)):
-  607|         if re.search(r"[\.\?!]['\"]?$", toks[j - 1]):
-  608|             e = j
-  609|             break
-  610|     else:
-  611|         for j in range(e, max(s + 90, e - 30), -1):
-  612|             if re.search(r"[\.\?!]['\"]?$", toks[j - 1]):
-  613|                 e = j
-  614|                 break
-  615|     return s, e, pref[e] - pref[s]
-  616| 
-  617| 
-  618| def cand_regex(y):
-  619|     names = Y[y]["names"]
-  620|     pat = r"\b(" + "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True)) + r")\b"
-  621|     rx_names = re.compile(pat)
-  622|     rx_gen = re.compile(r"\b(ticket|nominee|nominees|presidential candidate)\b", re.I)
-  623|     return lambda t: bool(rx_names.search(t) or rx_gen.search(t))
-  624| 
-  625| 
-  626| def lean_of(paper, y):
-  627|     p = paper.lower()
-  628|     if "springfield republican" in p:
-  629|         return "ind"
-  630|     if re.search(r"\b(labor|socialist|appeal to reason|worker|toiler|union record)\b", p):
-  631|         return "ind"
-  632|     if y >= 1856 and re.search(r"\brepublican\b", p) and "democrat" not in p:
-  633|         return "R"
-  634|     if re.search(r"\bdemocrat", p) and "republican" not in p:
-  635|         return "D"
-  636|     return "unknown"
-  637| 
-  638| 
-  639| def shingles(text, n=5):
-  640|     w = re.findall(r"[a-z]+", text.lower())
-  641|     return {" ".join(w[i:i + n]) for i in range(max(0, len(w) - n + 1))}
-  642| 
-  643| 
-  644| # ------------------------------------------------------------------- build
-  645| def first(v):
-  646|     if isinstance(v, list):
-  647|         return v[0] if v else None
-  648|     return v
-  649| 
-  650| 
-  651| def select(cands, topics, target):
-  652|     """Up to `target` items: per topic, round-robin across the least-covered regions (candidate
-  653|     mentions only once half the topic's quota is filled), then the leftovers by score; at most
-  654|     4 items per paper and no near-duplicates (shingle overlap > 0.3)."""
-  655|     per_topic = math.ceil(target / len(topics))
-  656|     chosen, paper_n = [], {}
-  657|     reg_n = {r: 0 for r in REGIONS + ["unknown"]}
-  658| 
-  659|     def ok(c):
-  660|         if paper_n.get(c["lccn"], 0) >= 4:
-  661|             return False
-  662|         for o in chosen:
-  663|             if o["lccn"] == c["lccn"] and o["date"] == c["date"] and o["page"] == c["page"]:
-  664|                 return False
-  665|             a, b = c["_sh"], o["_sh"]
-  666|             if a and b and len(a & b) / max(1, min(len(a), len(b))) > 0.3:
-  667|                 return False
-  668|         return True
-  669| 
-  670|     leftovers = []
-  671|     for topic in topics:
-  672|         pool = sorted([c for c in cands if c["topic"] == topic[0]], key=lambda c: -c["_score"])
-  673|         got = 0
-  674|         while got < per_topic and pool:
-  675|             regs = sorted(REGIONS, key=lambda r: reg_n[r])
-  676|             pick = None
-  677|             for reg in regs:
-  678|                 for c in pool:
-  679|                     if c["region"] == reg and ok(c) and not (c["mentions_candidates"] and got < per_topic // 2):
-  680|                         pick = c
-  681|                         break
-  682|                 if pick:
-  683|                     break
-  684|             if not pick:
-  685|                 for c in pool:
-  686|                     if ok(c):
-  687|                         pick = c
-  688|                         break
-  689|             if not pick:
-  690|                 break
-  691|             pool.remove(pick)
-  692|             chosen.append(pick)
-  693|             paper_n[pick["lccn"]] = paper_n.get(pick["lccn"], 0) + 1
-  694|             reg_n[pick["region"]] = reg_n.get(pick["region"], 0) + 1
-  695|             got += 1
-  696|         leftovers += pool
-  697|     for c in sorted(leftovers, key=lambda c: -c["_score"]):
-  698|         if len(chosen) >= target:
-  699|             break
-  700|         if ok(c):
-  701|             chosen.append(c)
-  702|             paper_n[c["lccn"]] = paper_n.get(c["lccn"], 0) + 1
-  703|     return chosen
-  704| 
-  705| 
-  706| def build_year(y, cache_dir, out_dir, target=88, verbose=True):
-  707|     cfg = Y[y]
-  708|     LOG.clear()
-  709|     start, cutoff = dt.date(y, 9, 1), cfg["cutoff"]
-  710|     is_cand = cand_regex(y)
-  711|     topics = cfg["topics"]
-  712|     seen_pages = set()
-  713|     cands = []
-  714|     rejected = {"date": 0, "no_ocr": 0, "low_quality": 0, "few_hits": 0, "territory": 0}
-  715|     used_states = {r: {} for r in REGIONS}
-  716| 
-  717|     def consider(r, ti, q):
-  718|         rid = r.get("id") or ""
-  719|         if rid in seen_pages:
-  720|             return
-  721|         seen_pages.add(rid)
-  722|         d = r.get("date")
-  723|         try:
-  724|             dd = dt.date.fromisoformat(d)
-  725|         except (TypeError, ValueError):  # missing or malformed date
-  726|             rejected["date"] += 1
-  727|             return
-  728|         if not (start <= dd <= cutoff):
-  729|             rejected["date"] += 1
-  730|             return
-  731|         state = (first(r.get("location_state")) or "").lower()
-  732|         if state in ("hawaii", "alaska") and y < 1960:
-  733|             rejected["territory"] += 1
-  734|             return
-  735|         ou = ocr_url_for(r)
-  736|         if not ou:
-  737|             rejected["no_ocr"] += 1
-  738|             return
-  739|         txt, ts = fetch_ocr(ou, cache_dir)
-  740|         if not txt:
-  741|             rejected["no_ocr"] += 1
-  742|             return
-  743|         toks = normalize_ocr(txt).split(" ")
-  744|         kws = kw_list(topics[ti])
-  745|         s, e, hits = best_window(toks, kws)
-  746|         raw = toks[s:e]
-  747|         qual = quality(raw)
-  748|         if qual < 0.70:
-  749|             rejected["low_quality"] += 1
-  750|             return
-  751|         if hits < 3:
-  752|             rejected["few_hits"] += 1
-  753|             return
-  754|         ctoks, changed = clean_tokens(raw)
-  755|         excerpt = " ".join(ctoks).strip()
-  756|         nwords = len(excerpt.split())
-  757|         if nwords < 60:
-  758|             rejected["few_hits"] += 1
-  759|             return
-  760|         mc = is_cand(excerpt)
-  761|         ads = len(AD_RX.findall(excerpt))
-  762|         preds = len(PRED_RX.findall(excerpt))
-  763|         score = hits / max(1, nwords) * 40 + (qual - 0.7) * 20 - 4 * mc - 2.5 * ads - 2 * preds
-  764|         m = re.search(r"[?&]sp=(\d+)", rid)
-  765|         sp = m.group(1) if m else "1"
-  766|         lccn = first(r.get("number_lccn")) or ""
-  767|         paper = first(r.get("partof_title")) or (r.get("title") or "")
-  768|         url = re.sub(r"&q=.*$", "", r.get("url") or rid).replace("http://", "https://")
-  769|         cands.append(dict(
-  770|             id=f"ca-{lccn}-{d}-{sp}", year=y, date=d, paper=paper,
-  771|             city=(first(r.get("location_city")) or "").title(), state=state.title(),
-  772|             region=REGION.get(state, "unknown"), lccn=lccn, page=int(sp),
-  773|             url=url, ocr_url=ou, topic=topics[ti][0], topic_code=f"T{ti + 1}",
-  774|             topic_label=topics[ti][1], query=q, excerpt=excerpt, excerpt_words=nwords,
-  775|             excerpt_is_verbatim=not changed, mentions_candidates=mc, leans=lean_of(paper, y),
-  776|             ocr_quality=round(qual, 3), retrieved_at=ts, _score=score, _sh=shingles(excerpt)))
-  777| 
-  778|     for ti, topic in enumerate(topics):
-  779|         label, desc, queries, extra = topic
-  780|         if verbose:
-  781|             print(f"[{y}] T{ti + 1} {label}", file=sys.stderr)
-  782|         # loc.gov searches take ~30 s each server-side, so: national searches with
-  783|         # larger pages first, then a state-facet search only for regions that
-  784|         # are still short of candidates for this topic.
-  785|         res, fac = search(queries[0], y, None, cache_dir, c=40, facets=True)
-  786|         for r in res[:10]:
-  787|             consider(r, ti, queries[0])
-  788|         for q in queries[1:]:
-  789|             rs, _ = search(q, y, None, cache_dir, c=30)
-  790|             for r in rs[:8]:
-  791|                 consider(r, ti, q)
-  792|         for reg in REGIONS:
-  793|             have = sum(1 for c in cands if c["topic"] == label and c["region"] == reg)
-  794|             if have >= 2:
-  795|                 continue
-  796|             opts = [(c, s) for s, c in fac.items() if REGION.get(s) == reg and c > 0
-  797|                     and not (s in ("hawaii", "alaska") and y < 1960)]
-  798|             if not opts:
-  799|                 continue
-  800|             opts.sort(key=lambda cs: (used_states[reg].get(cs[1], 0), -cs[0]))
-  801|             st = opts[0][1]
-  802|             used_states[reg][st] = used_states[reg].get(st, 0) + 1
-  803|             rs, _ = search(queries[0], y, st, cache_dir, c=15)
-  804|             for r in rs[:6]:
-  805|                 consider(r, ti, queries[0])
-  806| 
-  807|     chosen = select(cands, topics, target)
-  808|     chosen.sort(key=lambda c: (c["topic_code"], c["date"], c["id"]))
-  809|     assert all(c["date"] <= cutoff.isoformat() for c in chosen)
-  810|     os.makedirs(out_dir, exist_ok=True)
-  811|     outp = os.path.join(out_dir, f"corpus_{y}.jsonl")
-  812|     with open(outp, "w") as f:
-  813|         for c in chosen:
-  814|             f.write(json.dumps({k: v for k, v in c.items() if not k.startswith("_")}, ensure_ascii=False) + "\n")
-  815|     meta = dict(year=y, election=cfg["election"].isoformat(), cutoff=cutoff.isoformat(),
-  816|                 n_items=len(chosen), n_candidates=len(cands), n_queries=len(LOG),
-  817|                 pages_seen=len(seen_pages), rejected=rejected,
-  818|                 topics=[dict(code=f"T{i + 1}", label=t[0], desc=t[1], queries=t[2],
-  819|                              n=sum(c["topic"] == t[0] for c in chosen),
-  820|                              regions={r: sum(c["topic"] == t[0] and c["region"] == r for c in chosen)
-  821|                                       for r in REGIONS}) for i, t in enumerate(topics)],
-  822|                 mentions_candidates=sum(c["mentions_candidates"] for c in chosen),
-  823|                 verbatim=sum(c["excerpt_is_verbatim"] for c in chosen),
-  824|                 leans={k: sum(c["leans"] == k for c in chosen) for k in ("R", "D", "ind", "unknown")},
-  825|                 states=sorted({c["state"] for c in chosen}),
-  826|                 date_range=[min((c["date"] for c in chosen), default=None),
-  827|                             max((c["date"] for c in chosen), default=None)],
-  828|                 queries=list(LOG))
-  829|     with open(os.path.join(cache_dir, f"meta_{y}.json"), "w") as f:
-  830|         json.dump(meta, f, indent=1, default=str)
-  831|     print(f"[{y}] wrote {len(chosen)} items ({len(cands)} candidates, {len(LOG)} queries) -> {outp}",
-  832|           file=sys.stderr)
-  833|     return meta
-  834| 
-  835| 
-  836| def provenance_md(years, cache_dir):
-  837|     out = []
-  838|     for y in years:
-  839|         p = os.path.join(cache_dir, f"meta_{y}.json")
-  840|         if not os.path.exists(p):
-  841|             continue
-  842|         with open(p) as f:
-  843|             m = json.load(f)
-  844|         ts = [q["ts"] for q in m["queries"] if q.get("ts")]
-  845|         out.append(f"\n### corpus_{y}.jsonl\n")
-  846|         out.append(f"- Election {m['election']}; cutoff {m['cutoff']}; search filter "
-  847|                    f"`dates={y}-09-01/{m['cutoff']}`. Item dates {m['date_range'][0]} to {m['date_range'][1]}.")
-  848|         out.append(f"- **{m['n_items']} items** from {m['n_candidates']} scored candidates "
-  849|                    f"({m['pages_seen']} distinct pages returned); {m['n_queries']} searches"
-  850|                    + (f", retrieved {min(ts)} to {max(ts)} UTC" if ts else "") + ".")
-  851|         out.append(f"- Rejected before scoring: {m['rejected']}.")
-  852|         out.append(f"- `mentions_candidates=true`: {m['mentions_candidates']}; verbatim: {m['verbatim']}; "
-  853|                    f"leans: {m['leans']}; states ({len(m['states'])}): {', '.join(m['states'])}.")
-  854|         out.append("\n| Code | topic | Items | NE | MW | S | W | Queries |\n|---|---|---|---|---|---|---|---|")
-  855|         for t in m["topics"]:
-  856|             r = t["regions"]
-  857|             out.append(f"| {t['code']} | `{t['label']}` — {t['desc']} | {t['n']} | {r['Northeast']} | "
-  858|                        f"{r['Midwest']} | {r['South']} | {r['West']} | {'; '.join('`'+q+'`' for q in t['queries'])} |")
-  859|     return "\n".join(out)
-  860| 
-  861| 
-  862| def main():
-  863|     ap = argparse.ArgumentParser()
-  864|     ap.add_argument("years", nargs="+", type=int)
-  865|     ap.add_argument("--cache-dir", default=DEFAULT_CACHE)
-  866|     ap.add_argument("--out-dir", default=DEFAULT_OUT)
-  867|     ap.add_argument("--target", type=int, default=88)
-  868|     ap.add_argument("--provenance", action="store_true")
-  869|     a = ap.parse_args()
-  870|     os.makedirs(a.cache_dir, exist_ok=True)
-  871|     if a.provenance:
-  872|         print(provenance_md(a.years, a.cache_dir))
-  873|         return
-  874|     for y in a.years:
-  875|         if y not in Y:
-  876|             print(f"no config for {y}", file=sys.stderr)
-  877|             continue
-  878|         try:
-  879|             build_year(y, a.cache_dir, a.out_dir, target=a.target)
-  880|         except Exception as e:  # keep going across years
-  881|             print(f"[{y}] FAILED: {type(e).__name__}: {e}", file=sys.stderr)
-  882| 
-  883| 
-  884| if __name__ == "__main__":
-  885|     main()
 ```

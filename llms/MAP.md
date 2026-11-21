@@ -1,8 +1,8 @@
 # synthetic-electorate-toy: file map
 
-Generated from commit `e5e4f20fbaeb` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `6a200effe03e` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 
-1103 tracked files. 193 are reproduced in full in the `code-N.md` parts; the rest are listed with the reason they are not.
+1113 tracked files. 196 are reproduced in full in the `code-N.md` parts; the rest are listed with the reason they are not.
 
 Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/synthetic-electorate-toy/main/ (append the path to fetch the raw file).
 
@@ -18,16 +18,17 @@ Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/sy
 | `CONTEXT.md` | 1,382 | 19 | Vocabulary | code-1.md |
 | `DISCLOSURES.md` | 72,502 | 1,312 | Disclosures: inaccuracies and intellectual-honesty flags | code-1.md |
 | `Dockerfile` | 4,134 | 95 | syntax=docker/dockerfile:1 | code-1.md |
-| `EVAL.md` | 18,600 | 336 | EVAL: the 1920 prototype | code-2.md |
+| `EVAL.md` | 19,042 | 342 | EVAL: the 1920 prototype | code-2.md |
 | `LICENSE` | 1,065 | 21 |  | code-2.md |
 | `METHOD.md` | 24,001 | 489 | Simulacra Americana: how the harness works | code-2.md |
 | `README.md` | 2,073 | 49 | Synthetic voters | code-2.md |
 | `VALIDITY.md` | 25,202 | 341 | Validity: goals, contamination, leakage and historical bias | code-2.md |
 | `biome.json` | 775 | 40 |  | code-2.md |
+| `data/1920/PROVENANCE.md` | 7,119 | 123 | 1920 inputs: provenance and licences | code-2.md |
 | `docker/entrypoint.sh` | 652 | 17 | The API container's entrypoint: check the state mount, surface the worker's | code-2.md |
-| `docs/DEPLOY.md` | 17,658 | 333 | Deploying Simulacra Americana | code-2.md |
-| `docs/harness/README.md` | 15,759 | 240 | Simulacra Americana harness | code-2.md |
-| `infra/.gitignore` | 60 | 5 |  | code-2.md |
+| `docs/DEPLOY.md` | 17,920 | 337 | Deploying Simulacra Americana | code-2.md |
+| `docs/harness/README.md` | 15,973 | 241 | Simulacra Americana harness | code-3.md |
+| `infra/.gitignore` | 60 | 5 |  | code-3.md |
 | `infra/.terraform.lock.hcl` | 1,481 | 26 | This file is maintained automatically by "terraform init". | code-3.md |
 | `infra/acm.tf` | 1,386 | 31 | Certificates for api. (ALB) and assets. (CloudFront; must be us-east-1, | code-3.md |
 | `infra/alb.tf` | 1,465 | 53 | Default 60s idle timeout: every route answers fast (runs are polled). | code-3.md |
@@ -51,31 +52,32 @@ Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/sy
 | `pnpm-lock.yaml` | 75,611 | 2,356 |  | skip: lockfile |
 | `pyproject.toml` | 693 | 26 |  | code-3.md |
 | `requirements.lock` | 525 | 22 | The harness's runtime dependencies for the API image (pyproject.toml plus the llm extra), | code-3.md |
-| `scripts/harness/build_corpus.py` | 53,631 | 885 | build_corpus.py — dated Chronicling America corpus for one election year. | code-3.md |
+| `scripts/harness/build_corpus.py` | 53,631 | 885 | build_corpus.py — dated Chronicling America corpus for one election year. | code-4.md |
 | `scripts/harness/build_franchise.py` | 6,229 | 126 | Build franchise/state_franchise_all.csv: the legal franchise by state, presidential years 1868–1968. | code-4.md |
 | `scripts/harness/build_population.py` | 5,235 | 94 | NHGIS extract → population/adults_<year>_by_state_nhgis.csv in the harness's | code-4.md |
 | `scripts/harness/build_population_early.py` | 23,254 | 400 | NHGIS 1870-1910 -> population/adults_<year>_by_state_nhgis.csv (long format, | code-4.md |
 | `scripts/harness/build_population_mid.py` | 18,198 | 327 | NHGIS 1940–1970 → population tables (21+ and 18+), long format like | code-4.md |
-| `scripts/harness/build_population_modern.py` | 20,528 | 385 | NHGIS extract (nhgis_extract_modern.py) -> population/adults18_<year>_by_state_nhgis.csv | code-4.md |
-| `scripts/harness/build_population_republic.py` | 12,694 | 276 | 1790–1860 censuses → population/adults_<year>_by_state_nhgis.csv (same long | code-4.md |
+| `scripts/harness/build_population_modern.py` | 20,528 | 385 | NHGIS extract (nhgis_extract_modern.py) -> population/adults18_<year>_by_state_nhgis.csv | code-5.md |
+| `scripts/harness/build_population_republic.py` | 12,694 | 276 | 1790–1860 censuses → population/adults_<year>_by_state_nhgis.csv (same long | code-5.md |
 | `scripts/harness/build_republic.py` | 28,675 | 474 | Early-republic labels and franchise, 1789–1864. | code-5.md |
 | `scripts/harness/build_returns.py` | 16,952 | 321 | Build labels/state_pres_all.csv: certified presidential returns by state, 1868–2024. | code-5.md |
 | `scripts/harness/bundle_fixture.py` | 2,422 | 57 | Trim a published bundle into the shared contract example. | code-5.md |
+| `scripts/harness/data_1920_hashes.py` | 1,081 | 35 | The sha256 of every file in data/1920/, as the table in data/1920/PROVENANCE.md. | code-5.md |
 | `scripts/harness/nhgis_common.py` | 8,612 | 186 | NHGIS, shared by the harness scripts. | code-5.md |
 | `scripts/harness/nhgis_extract.py` | 2,572 | 40 | Submit, wait for and download the NHGIS state-level population extract | code-5.md |
 | `scripts/harness/nhgis_extract_modern.py` | 2,728 | 52 | Submit, wait for and download the NHGIS state-level extract behind the | code-5.md |
 | `scripts/harness/nhgis_extract_republic.py` | 1,702 | 29 | Submit, wait for and download the NHGIS state-level extract behind the | code-5.md |
 | `scripts/harness/sessions-report.py` | 3,727 | 86 | What people typed into the page, and what the robot couldn't model. | code-5.md |
-| `scripts/llms_digest.py` | 12,285 | 241 | Build llms.txt and llms/: a plain-text copy of this repository for tools that | code-5.md |
-| `scripts/mirror-portraits.py` | 5,354 | 139 | Mirror the candidates' Wikimedia Commons portraits for the assets bucket. | code-5.md |
-| `scripts/model-check.ts` | 1,242 | 24 | Prints the sample model's outcome for every what-if of every story | code-5.md |
-| `scripts/publish-assets.sh` | 2,895 | 52 | Publish the robot assets and mirrored portraits to s3://simulacra-americana-assets | code-5.md |
-| `scripts/size-check.ts` | 700 | 18 | Fails when any tracked source file is over the line limit. | code-5.md |
-| `scripts/sync-data.sh` | 3,921 | 68 | Census-derived data and service state: laptop -> private data bucket -> EFS. | code-5.md |
-| `serve/app.ts` | 1,055 | 29 | The server: /api/simulacra plus the static SvelteKit build, with an SPA | code-5.md |
-| `serve/bundle.ts` | 2,144 | 71 | What enters the server, parsed once with zod: the bundle contract and the | code-5.md |
-| `serve/bundles/RUN_ID` | 16 | 1 |  | code-5.md |
-| `serve/contract.test.ts` | 4,015 | 78 | Published bundles write State.flipped as 0 / 1: parsed, it is a boolean. | code-5.md |
+| `scripts/llms_digest.py` | 12,285 | 241 | Build llms.txt and llms/: a plain-text copy of this repository for tools that | code-6.md |
+| `scripts/mirror-portraits.py` | 5,354 | 139 | Mirror the candidates' Wikimedia Commons portraits for the assets bucket. | code-6.md |
+| `scripts/model-check.ts` | 1,242 | 24 | Prints the sample model's outcome for every what-if of every story | code-6.md |
+| `scripts/publish-assets.sh` | 2,895 | 52 | Publish the robot assets and mirrored portraits to s3://simulacra-americana-assets | code-6.md |
+| `scripts/size-check.ts` | 700 | 18 | Fails when any tracked source file is over the line limit. | code-6.md |
+| `scripts/sync-data.sh` | 3,921 | 68 | Census-derived data and service state: laptop -> private data bucket -> EFS. | code-6.md |
+| `serve/app.ts` | 1,055 | 29 | The server: /api/simulacra plus the static SvelteKit build, with an SPA | code-6.md |
+| `serve/bundle.ts` | 2,144 | 71 | What enters the server, parsed once with zod: the bundle contract and the | code-6.md |
+| `serve/bundles/RUN_ID` | 16 | 1 |  | code-6.md |
+| `serve/contract.test.ts` | 4,015 | 78 | Published bundles write State.flipped as 0 / 1: parsed, it is a boolean. | code-6.md |
 | `serve/contract.ts` | 13,642 | 343 | The page's contract with the simulation server, one definition for both | code-6.md |
 | `serve/guard.test.ts` | 5,757 | 134 |  | code-6.md |
 | `serve/guard.ts` | 7,742 | 211 | What stands between a visitor and the API: the intake's dollar caps, per-IP | code-6.md |
@@ -206,6 +208,7 @@ Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/sy
 | `tests/test_agents.py` | 2,308 | 49 | Agent cohorts, invented people and their quotes (cohorts.py, quotes.py, scenario.py). | code-17.md |
 | `tests/test_backbone.py` | 1,423 | 33 | The statistical backbone's building blocks (stats.py). | code-17.md |
 | `tests/test_contract.py` | 5,425 | 109 | The page's contract: what serialize emits and the bundle the server reads. | code-17.md |
+| `tests/test_data_1920.py` | 1,300 | 30 | data/1920: the public inputs to the 1920 backbone match their provenance and load on their own. | code-17.md |
 | `tests/test_evaluate.py` | 3,400 | 60 | The evaluate-stage checks (EVAL.md). | code-17.md |
 | `tests/test_intake_spend.py` | 5,214 | 118 | The intake's spend: daily and monthly caps across every visitor, and how a | code-17.md |
 | `tests/test_isolation.py` | 7,700 | 150 | Held-out benchmark isolation. | code-17.md |
@@ -220,6 +223,7 @@ Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/sy
 | Folder | Files | Bytes |
 |---|---|---|
 | `configs/` | 63 | 92,494 |
+| `data/` | 7 | 1,007,856 |
 | `extracts/` | 2 | 47,047 |
 | `profiles/` | 58 | 235,910 |
 | `runs/` | 604 | 42,649,170 |

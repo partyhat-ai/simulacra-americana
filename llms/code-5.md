@@ -1,7 +1,678 @@
 # synthetic-electorate-toy: source and docs, part 5 of 17
 
-Generated from commit `e5e4f20fbaeb` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
-Files `scripts/harness/build_republic.py` to `serve/contract.test.ts`. Lines are numbered as in the repository.
+Generated from commit `6a200effe03e` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Files `scripts/harness/build_population_modern.py` to `scripts/harness/sessions-report.py`. Lines are numbered as in the repository.
+
+## `scripts/harness/build_population_modern.py`
+
+```python
+    1| """NHGIS extract (nhgis_extract_modern.py) -> population/adults18_<year>_by_state_nhgis.csv
+    2| for 1980-2024: adults 18+ by state x sex x {white_nh_native, black_nh_native,
+    3| other_native, naturalized, noncitizen}, in the long format of build_population.
+    4| 
+    5|     python3 scripts/harness/build_population_modern.py 2000 [--extract N]   # one year
+    6|     python3 scripts/harness/build_population_modern.py all                  # every year in BUILDERS
+    7| 
+    8| (Only this CLI writes these tables: build_population.py is 21+ and stops at 1970.)
+    9| 
+   10| Sources by year (all NHGIS, state level):
+   11|   1980  STF2b NTB8B sex x age, iterated all / white not Spanish / Black not Spanish (100%);
+   12|         STF4Pb NTPB9 nativity x citizenship iterated all / white / Black / Spanish (sample,
+   13|         all ages); STF2a NTA13 Spanish origin by race. Not crossed with age: foreign-born
+   14|         adults = FB all ages x 1990 state adult share by citizenship [I]; race FB net of
+   15|         Spanish FB by the state's Spanish race mix [I]; FB sex split from 2000 [I].
+   16|   1990  MARS NP1 age x Hispanic x sex x race (white/Black NH 18+ by sex); STF3 NP37
+   17|         age x citizenship (sample); STF4b NPB20 nativity iterated by WNH/BNH (all ages,
+   18|         adult share [I]); FB sex split from 2000 [I].
+   19|   2000  SF4 PCT044B/C sex x 18+ x nativity / citizenship iterated all / WNH / BNH (sample),
+   20|         raked to SF1 P5 (NP005A) 18+ totals.
+   21|   2008  ACS 2006-2010 5-year; 2010, 2012, 2016, 2024 ACS 1-year; 2020 ACS 2016-2020
+   22|         5-year: B05003 (+H white alone NH, +B Black alone). Black NH native = Black alone
+   23|         native x NH share of Black alone in B03002 (all ages) [I]. 2010 and 2020 raked to
+   24|         PL 94-171 18+ state totals.
+   25| Every row's `note` says "tabulated" or what was [I]-estimated.
+   26| """
+   27| import argparse
+   28| import re
+   29| from pathlib import Path
+   30| 
+   31| import pandas as pd
+   32| 
+   33| from nhgis_common import CACHE, NHGIS_DIR, STATE_CODE, frame, row
+   34| 
+   35| EXTRACT = None  # set by CLI or found automatically
+   36| 
+   37| 
+   38| def src() -> Path:
+   39|     global EXTRACT
+   40|     if EXTRACT is None:
+   41|         reqs = sorted(NHGIS_DIR.glob('extract_request_*_modern.json'), key=lambda p: int(p.name.split('_')[2]))
+   42|         EXTRACT = int(reqs[-1].name.split('_')[2])
+   43|     d = NHGIS_DIR / f'extract_{EXTRACT}'
+   44|     return next(p for p in d.iterdir() if p.is_dir() and p.name.endswith('_csv'))
+   45| 
+   46| 
+   47| _CACHE = {}
+   48| FILE_OF = {}       # dataset name -> csv path
+   49| TABLE_PREFIX = {}  # (dataset, source table code) -> NHGIS column prefix
+   50| 
+   51| 
+   52| def load_prefixes():
+   53|     """Every codebook names its dataset ('Dataset: ... NHGIS code: 2024_ACS1') and, per table,
+   54|     'Source code: B05003 / NHGIS code: ATMV' (the column prefix)."""
+   55|     if FILE_OF:
+   56|         return
+   57|     for cb in src().glob('*_codebook.txt'):
+   58|         t = cb.read_text(encoding='latin-1')
+   59|         ds = re.search(r'Dataset:.*\n\s*NHGIS code:\s*(\S+)', t).group(1)
+   60|         FILE_OF[ds] = cb.with_name(cb.name.replace('_codebook.txt', '.csv'))
+   61|         for m in re.finditer(r'Source code:\s*(\S+)\s*\n\s*NHGIS code:\s*(\S+)', t):
+   62|             TABLE_PREFIX[(ds, m.group(1))] = m.group(2)
+   63| 
+   64| 
+   65| def read(ds: str) -> tuple:
+   66|     """Return (df indexed by state with code columns, {code: description})."""
+   67|     if ds in _CACHE:
+   68|         return _CACHE[ds]
+   69|     load_prefixes()
+   70|     raw = pd.read_csv(FILE_OF[ds], encoding='latin-1', header=None, low_memory=False, dtype=str)
+   71|     codes, descs = list(raw.iloc[0]), list(raw.iloc[1])
+   72|     d = raw.iloc[2:].copy()
+   73|     d.columns = codes
+   74|     d = d[d.STATE.str.casefold().isin(STATE_CODE)].copy()
+   75|     d['state'] = d.STATE.str.casefold().map(STATE_CODE)
+   76|     d = d.set_index('state')
+   77|     desc = {c: str(x) for c, x in zip(codes, descs)}
+   78|     ctx = {'GISJOIN', 'YEAR', 'STATE', 'STATEA', 'AREANAME', 'NAME_E', 'NAME_M', 'GEOID', 'STUSAB', 'REGIONA', 'DIVISIONA',
+   79|            'state'}
+   80|     for c in codes:
+   81|         if c not in ctx:
+   82|             d[c] = pd.to_numeric(d[c], errors='coerce')
+   83|     _CACHE[ds] = (d, desc)
+   84|     return _CACHE[ds]
+   85| 
+   86| 
+   87| def cols(desc: dict, *pats, table=None) -> list:
+   88|     """Codes whose description matches every regex in pats (and the table code prefix if given)."""
+   89|     out = []
+   90|     for c, s in desc.items():
+   91|         if table and not str(c).startswith(table):
+   92|             continue
+   93|         if all(re.search(p, s) for p in pats):
+   94|             out.append(c)
+   95|     return out
+   96| 
+   97| 
+   98| def is_adult(label: str) -> bool:
+   99|     for part in re.split(r'>>|:', label):
+  100|         p = part.strip()
+  101|         if p.startswith('Under'):
+  102|             return False
+  103|         m = re.match(r'(\d+)', p)
+  104|         if m and ('year' in p or re.fullmatch(r'\d+( to \d+| and \d+)?( years)?( and over)?', p)):
+  105|             return int(m.group(1)) >= 18
+  106|     raise ValueError(f'no age in {label!r}')
+  107| 
+  108| 
+  109| LABEL = {'white_nh_native': 'White alone/White, not Hispanic, native-born',
+  110|          'black_nh_native': 'Black alone/Black, not Hispanic, native-born',
+  111|          'other_native': 'Native-born, all other (Hispanic any race, Asian, AIAN, other, multiracial)',
+  112|          'naturalized': 'Foreign-born, naturalized citizen', 'noncitizen': 'Foreign-born, not a citizen'}
+  113| 
+  114| 
+  115| def emit(year, parts: dict, tables: dict, notes: dict):
+  116|     """parts: {(sex, group): Series by state}"""
+  117|     df = frame([row(year, st, sex, g, LABEL[g].split(',')[0], LABEL[g], round(float(v), 1), notes.get(g, 'tabulated'),
+  118|                     tables[g]) for (sex, g), s in parts.items() for st, v in s.items()])
+  119|     assert df.state.nunique() == 51, df.state.nunique()
+  120|     assert (df['count'] >= 0).all(), df[df['count'] < 0]
+  121|     return df
+  122| 
+  123| 
+  124| def check(year, df, indep: pd.Series, what: str):
+  125|     tot = df.groupby('state')['count'].sum()
+  126|     gap = (tot - indep.reindex(tot.index)) / indep.reindex(tot.index)
+  127|     print(f'{year}: groups {tot.sum():,.0f} vs {what} {indep.sum():,.0f} (national {100 * (tot.sum() / indep.sum() - 1):+.2f}%; '
+  128|           f'worst state {gap.abs().idxmax()} {100 * gap.abs().max():.2f}%)')
+  129| 
+  130| 
+  131| def split_native(native, wnn, bnn):
+  132|     """other_native = remainder; if WNH+BNH native exceed the sample-based native total, shrink them."""
+  133|     over = (wnn + bnn) / native
+  134|     k = over.clip(lower=1.0)
+  135|     return wnn / k, bnn / k, native - (wnn + bnn) / k
+  136| 
+  137| 
+  138| # ------------------------------------------------------------------- helpers per table
+  139| def pick(d, desc, prefix, *pats):
+  140|     """Sum of the columns of one table whose description matches every regex."""
+  141|     cs = cols(desc, *pats, table=prefix)
+  142|     assert cs, (prefix, pats)
+  143|     return d[cs].sum(axis=1)
+  144| 
+  145| 
+  146| def adult_sum(d, desc, prefix, *pats):
+  147|     cs = [c for c in cols(desc, *pats, table=prefix) if is_adult(desc[c])]
+  148|     assert cs, (prefix, pats)
+  149|     return d[cs].sum(axis=1)
+  150| 
+  151| 
+  152| def fb_sex_shares_2000():
+  153|     """Male share of foreign-born adults by citizenship, by state (SF4 PCT044C, all races)."""
+  154|     d, desc = read('2000_SF4')
+  155|     p = TABLE_PREFIX[('2000_SF4', 'NPCT044C')]
+  156|     out = {}
+  157|     for k, pat in (('nat', r'Naturalized citizen$'), ('nc', r'Not a citizen$')):
+  158|         m = pick(d, desc, p, r'^Total area: All races: Male >> 18 years and over', pat)
+  159|         f = pick(d, desc, p, r'^Total area: All races: Female >> 18 years and over', pat)
+  160|         out[k] = m / (m + f)
+  161|     return out
+  162| 
+  163| 
+  164| def adult_share_1990():
+  165|     """Share of the foreign born who are 18+, by citizenship (1990 STF3 NP37)."""
+  166|     d, desc = read('1990_STF3')
+  167|     p = TABLE_PREFIX[('1990_STF3', 'NP37')]
+  168|     g = lambda *pats: pick(d, desc, p, *pats)  # noqa: E731
+  169|     nat18, nc18 = g(r'^18 years and over', 'Naturalized'), g(r'^18 years and over', 'Not a citizen')
+  170|     nat, nc = nat18 + g(r'^Under 18', 'Naturalized'), nc18 + g(r'^Under 18', 'Not a citizen')
+  171|     return nat18 / nat, nc18 / nc, nat18, nc18, g(r'^18 years and over', r'Native$')
+  172| 
+  173| 
+  174| def assemble(year, by_sex, tables, notes):
+  175|     parts = {}
+  176|     for sex, (nat18, nz, nc, wnn, bnn) in by_sex.items():
+  177|         wnn, bnn, onn = split_native(nat18, wnn.clip(lower=0), bnn.clip(lower=0))
+  178|         parts.update({(sex, 'white_nh_native'): wnn, (sex, 'black_nh_native'): bnn, (sex, 'other_native'): onn,
+  179|                       (sex, 'naturalized'): nz, (sex, 'noncitizen'): nc})
+  180|     return emit(year, parts, tables, notes)
+  181| 
+  182| 
+  183| def rake(df, tot, what):
+  184|     cur = df.groupby('state')['count'].sum()
+  185|     k = tot.reindex(cur.index) / cur
+  186|     print(f'  rake to {what}: state factors {k.min():.4f}-{k.max():.4f}')
+  187|     df = df.copy()
+  188|     df['count'] = (df['count'] * df.state.map(k)).round(1)
+  189|     df['note'] = df['note'] + df.state.map(lambda s: f'; raked x{k[s]:.4f} to {what}')
+  190|     return df
+  191| 
+  192| 
+  193| # ------------------------------------------------------------------- ACS years
+  194| ACS = {2008: ('2006_2010_ACS5b', '2006_2010_ACS5a', 'ACS 2006-2010 5-year'),
+  195|        2010: ('2010_ACS1', '2010_ACS1', 'ACS 2010 1-year'),
+  196|        2012: ('2012_ACS1', '2012_ACS1', 'ACS 2012 1-year'),
+  197|        2016: ('2016_ACS1', '2016_ACS1', 'ACS 2016 1-year'),
+  198|        2020: ('2016_2020_ACS5b', '2016_2020_ACS5a', 'ACS 2016-2020 5-year'),
+  199|        2024: ('2024_ACS1', '2024_ACS1', 'ACS 2024 1-year')}
+  200| 
+  201| 
+  202| def black_ratio_2020(word):
+  203|     """2016-2020 ACS5: Black NH native 18+ of one sex / Black NH all ages, by state."""
+  204|     d, desc = read('2016_2020_ACS5b')
+  205|     da, desca = read('2016_2020_ACS5a')
+  206|     p3 = TABLE_PREFIX[('2016_2020_ACS5a', 'B03002')]
+  207|     bnh = pick(da, desca, p3, r'^Estimates: Not Hispanic or Latino: Black or African American alone$')
+  208|     bh = pick(da, desca, p3, r'^Estimates: Hispanic or Latino: Black or African American alone$')
+  209|     nat = pick(d, desc, TABLE_PREFIX[('2016_2020_ACS5b', 'B05003B')], rf'^Estimates: {word}: 18 years and over: Native$')
+  210|     return nat * bnh / (bnh + bh) / bnh
+  211| 
+  212| 
+  213| def year_acs(year):
+  214|     dsb, dsa, label = ACS[year]
+  215|     d, desc = read(dsb)
+  216|     da, desca = read(dsa)
+  217|     P = lambda ds, t: TABLE_PREFIX[(ds, t)]  # noqa: E731
+  218|     p3 = P(dsa, 'B03002')
+  219|     bnh = pick(da, desca, p3, r'^Estimates: Not Hispanic or Latino: Black or African American alone$')
+  220|     bh = pick(da, desca, p3, r'^Estimates: Hispanic or Latino: Black or African American alone$')
+  221|     r_bnh = bnh / (bnh + bh)
+  222|     # 1-year B05003B is suppressed in a few small-Black-population states (MT, WY, ...): there,
+  223|     # Black NH native 18+ = this year's Black NH (all ages, B03002) x the 2016-2020 5-year ratio [I]
+  224|     pb = P(dsb, 'B05003B')
+  225|     supp = d[[c for c in desc if str(c).startswith(pb + 'E')]].isna().any(axis=1)
+  226|     supp = list(supp[supp].index)
+  227|     by_sex = {}
+  228|     for sex, word in (('M', 'Male'), ('F', 'Female')):
+  229|         g = lambda t, pat: pick(d, desc, P(dsb, t), rf'^Estimates: {word}: 18 years and over: {pat}')  # noqa: E731
+  230|         bnn = g('B05003B', r'Native$') * r_bnh
+  231|         if supp:
+  232|             bnn[supp] = (bnh * black_ratio_2020(word))[supp]
+  233|         by_sex[sex] = (g('B05003', r'Native$'), g('B05003', r'Foreign.born: Naturalized'), g('B05003', r'Foreign.born: Not a U\.S\. citizen'),
+  234|                        g('B05003H', r'Native$'), bnn)
+  235|     b01 = adult_sum(da, desca, P(dsa, 'B01001'), r'^Estimates: (Male|Female): ')
+  236|     tables = {'white_nh_native': f'NHGIS {dsb} B05003H', 'black_nh_native': f'NHGIS {dsb} B05003B x {dsa} B03002',
+  237|               'other_native': f'NHGIS {dsb} B05003 - B05003H - B05003B', 'naturalized': f'NHGIS {dsb} B05003',
+  238|               'noncitizen': f'NHGIS {dsb} B05003'}
+  239|     notes = {'black_nh_native': f'[I] Black alone native 18+ x NH share of Black alone (B03002, all ages); {label}',
+  240|              'other_native': f'remainder: B05003 native 18+ minus white NH and Black NH native; {label}',
+  241|              'white_nh_native': f'tabulated; {label}', 'naturalized': f'tabulated; {label}', 'noncitizen': f'tabulated; {label}'}
+  242|     df = assemble(year, by_sex, tables, notes)
+  243|     m = df.state.isin(supp) & (df.group == 'black_nh_native')
+  244|     df.loc[m, 'note'] = f'[I] B05003B suppressed: Black NH all ages (B03002) x 2016-2020 ACS5 ratio of Black NH native 18+ to Black NH; {label}'
+  245|     check(year, df, b01, f'{dsa} B01001 18+')
+  246|     if year in (2010, 2020):
+  247|         ds = f'{year}_PL94171'
+  248|         dp, descp = read(ds)
+  249|         tot = pick(dp, descp, TABLE_PREFIX[(ds, 'P3' if year == 2020 else 'NP003')], r'^Total$')
+  250|         check(year, df, tot, 'PL 94-171 18+ (before rake)')
+  251|         df = rake(df, tot, f'PL 94-171 {year} 18+ state total')
+  252|     return df
+  253| 
+  254| 
+  255| # ------------------------------------------------------------------- 2000
+  256| def year_2000(year=2000):
+  257|     d, desc = read('2000_SF4')
+  258|     pn, pc = TABLE_PREFIX[('2000_SF4', 'NPCT044B')], TABLE_PREFIX[('2000_SF4', 'NPCT044C')]
+  259|     it = {'all': 'All races', 'w': 'White alone, not Hispanic or Latino', 'b': 'Black or African American alone, not Hispanic or Latino'}
+  260|     by_sex = {}
+  261|     for sex, word in (('M', 'Male'), ('F', 'Female')):
+  262|         g = lambda p, i, pat: pick(d, desc, p, rf'^Total area: {re.escape(it[i])}: {word} >> 18 years and over >> {pat}$')  # noqa: E731
+  263|         by_sex[sex] = (g(pn, 'all', 'Native'), g(pc, 'all', 'Naturalized citizen'), g(pc, 'all', 'Not a citizen'),
+  264|                        g(pn, 'w', 'Native'), g(pn, 'b', 'Native'))
+  265|     tables = {'white_nh_native': 'NHGIS 2000_SF4 PCT44B (White alone, not Hispanic)',
+  266|               'black_nh_native': 'NHGIS 2000_SF4 PCT44B (Black alone, not Hispanic)',
+  267|               'other_native': 'NHGIS 2000_SF4 PCT44B (all - WNH - BNH)', 'naturalized': 'NHGIS 2000_SF4 PCT44C',
+  268|               'noncitizen': 'NHGIS 2000_SF4 PCT44C'}
+  269|     notes = {'other_native': 'remainder: native 18+ minus white NH and Black NH native (SF4 sample)'}
+  270|     df = assemble(2000, by_sex, tables, {g: notes.get(g, 'tabulated (SF4 sample)') for g in LABEL})
+  271|     ds, dsc = read('2000_SF1a')
+  272|     tot = pick(ds, dsc, TABLE_PREFIX[('2000_SF1a', 'NP005A')], r'^Total$')
+  273|     check(2000, df, tot, 'SF1 P5 18+ (before rake)')
+  274|     return rake(df, tot, 'SF1 P5 2000 18+ state total (100% count)')
+  275| 
+  276| 
+  277| # ------------------------------------------------------------------- 1990
+  278| def year_1990(year=1990):
+  279|     r_nat, r_nc, nat18, nc18, nat_s = adult_share_1990()
+  280|     fb_a = (nat18 + nc18) / (nat18 / r_nat + nc18 / r_nc)
+  281|     msh = fb_sex_shares_2000()
+  282|     dm, descm = read('1990_MARS')
+  283|     pm = TABLE_PREFIX[('1990_MARS', 'NP1')]
+  284|     d4, desc4 = read('1990_STF4b')
+  285|     p4 = TABLE_PREFIX[('1990_STF4b', 'NPB20')]
+  286|     fb = lambda it: pick(d4, desc4, p4, rf'^Total area: {re.escape(it)}: Foreign born')  # noqa: E731
+  287|     fbw, fbb = fb('White, not of Hispanic origin') * fb_a, fb('Black, not of Hispanic origin') * fb_a
+  288|     # 1990 STF1 NP13 is Hispanic-only; the 100%-based 18+ by sex comes from MARS (all races, both origins)
+  289|     tot100 = {s: adult_sum(dm, descm, pm, rf'>> {w} >>') for s, w in (('M', 'Male'), ('F', 'Female'))}
+  290|     sample = nat_s + nat18 + nc18
+  291|     k = (tot100['M'] + tot100['F']) / sample  # sample -> 100% count
+  292|     by_sex = {}
+  293|     for sex, word in (('M', 'Male'), ('F', 'Female')):
+  294|         ms = (lambda x: x) if sex == 'M' else (lambda x: 1 - x)
+  295|         nz, nc = nat18 * k * ms(msh['nat']), nc18 * k * ms(msh['nc'])
+  296|         fbsh = (nz + nc) / (nat18 * k + nc18 * k)
+  297|         wnh = adult_sum(dm, descm, pm, rf'>> Not Hispanic >> {word} >> White$')
+  298|         bnh = adult_sum(dm, descm, pm, rf'>> Not Hispanic >> {word} >> Black$')
+  299|         by_sex[sex] = (tot100[sex] - nz - nc, nz, nc, wnh - fbw * k * fbsh, bnh - fbb * k * fbsh)
+  300|     tables = {'white_nh_native': 'NHGIS 1990_MARS NP1 - 1990_STF4b NPB20 (White, not Hispanic) FB',
+  301|               'black_nh_native': 'NHGIS 1990_MARS NP1 - 1990_STF4b NPB20 (Black, not Hispanic) FB',
+  302|               'other_native': 'NHGIS 1990_MARS NP1 18+ - FB - WNH - BNH native', 'naturalized': 'NHGIS 1990_STF3 NP37',
+  303|               'noncitizen': 'NHGIS 1990_STF3 NP37'}
+  304|     notes = {'white_nh_native': '[I] MARS white NH 18+ minus WNH foreign born (all ages x FB adult share, NP37) x FB sex share (2000)',
+  305|              'black_nh_native': '[I] MARS Black NH 18+ minus BNH foreign born (all ages x FB adult share, NP37) x FB sex share (2000)',
+  306|              'other_native': '[I] remainder of 100%-based 18+ (MARS NP1)',
+  307|              'naturalized': '[I] STF3 NP37 18+ (sample, scaled to 100% count); sex split from 2000 SF4 PCT44C',
+  308|              'noncitizen': '[I] STF3 NP37 18+ (sample, scaled to 100% count); sex split from 2000 SF4 PCT44C'}
+  309|     df = assemble(1990, by_sex, tables, notes)
+  310|     check(1990, df, sample, 'STF3 NP37 18+ (sample, independent)')
+  311|     print(f'  national 18+ {df["count"].sum():,.0f} vs published 1990 census 18+ 185,105,441 '
+  312|           f'({100 * (df["count"].sum() / 185105441 - 1):+.3f}%)')
+  313|     return df
+  314| 
+  315| 
+  316| # ------------------------------------------------------------------- 1980
+  317| def year_1980(year=1980):
+  318|     r_nat, r_nc, *_ = adult_share_1990()
+  319|     msh = fb_sex_shares_2000()
+  320|     d2, desc2 = read('1980_STF2b')
+  321|     p2 = TABLE_PREFIX[('1980_STF2b', 'NTB8B')]
+  322|     d4, desc4 = read('1980_STF4Pb')
+  323|     p4 = TABLE_PREFIX[('1980_STF4Pb', 'NTPB9')]
+  324|     da, desca = read('1980_STF2a')
+  325|     pa = TABLE_PREFIX[('1980_STF2a', 'NTA13')]
+  326|     d1, desc1 = read('1980_STF1')
+  327|     p1 = TABLE_PREFIX[('1980_STF1', 'NT10B')]
+  328|     g4 = lambda it, pat: pick(d4, desc4, p4, rf'^Total area: {re.escape(it)}: {pat}')  # noqa: E731
+  329|     nat_all, nc_all = g4('All races', 'Foreign born: Naturalized'), g4('All races', 'Foreign born: Not a citizen')
+  330|     sample_all = nat_all + nc_all + g4('All races', 'Native')
+  331|     nat18, nc18 = nat_all * r_nat, nc_all * r_nc
+  332|     fb_a = (nat18 + nc18) / (nat_all + nc_all)
+  333|     sp_fb = g4('Spanish origin subtotal (subtotal of summaries 20-23)', 'Foreign born')
+  334|     sp = da[[c for c in desca if str(c).startswith(pa) and desca[c].startswith('Spanish origin')]].sum(axis=1)
+  335|     sp_w = pick(da, desca, pa, r'^Spanish origin >> White$') / sp
+  336|     sp_b = pick(da, desca, pa, r'^Spanish origin >> Black$') / sp
+  337|     fbw = (g4('White', 'Foreign born') - sp_fb * sp_w).clip(lower=0) * fb_a
+  338|     fbb = (g4('Black', 'Foreign born') - sp_fb * sp_b).clip(lower=0) * fb_a
+  339|     it = lambda s: re.escape(s)  # noqa: E731
+  340|     by_sex, tot100 = {}, {}
+  341|     for sex, word in (('M', 'Male'), ('F', 'Female')):
+  342|         a = lambda iname: adult_sum(d2, desc2, p2, rf'^Total area: {it(iname)}: {word} >>')  # noqa: E731
+  343|         tot100[sex] = a('All races')
+  344|         ms = (lambda x: x) if sex == 'M' else (lambda x: 1 - x)
+  345|         # the sample nativity table is all ages; scale its FB counts to the 100% count
+  346|         k = d2[cols(desc2, r'^Total area: All races: ', table=p2)].sum(axis=1) / sample_all
+  347|         nz, nc = nat18 * k * ms(msh['nat']), nc18 * k * ms(msh['nc'])
+  348|         fbsh = (nz + nc) / ((nat18 + nc18) * k)
+  349|         wnh = a('White not of Spanish origin (on STF4B; not available for MCD\'s or CCD\'s under 2500')
+  350|         bnh = a('Black not of Spanish origin (on STF4B; not available for MCD\'s or CCD\'s under 2500')
+  351|         by_sex[sex] = (tot100[sex] - nz - nc, nz, nc, wnh - fbw * k * fbsh, bnh - fbb * k * fbsh)
+  352|     tables = {'white_nh_native': 'NHGIS 1980_STF2b NTB8B (White not of Spanish origin) - 1980_STF4Pb NTPB9 FB',
+  353|               'black_nh_native': 'NHGIS 1980_STF2b NTB8B (Black not of Spanish origin) - 1980_STF4Pb NTPB9 FB',
+  354|               'other_native': 'NHGIS 1980_STF2b NTB8B - FB - WNH - BNH native', 'naturalized': 'NHGIS 1980_STF4Pb NTPB9',
+  355|               'noncitizen': 'NHGIS 1980_STF4Pb NTPB9'}
+  356|     fbnote = 'FB all ages (STF4Pb, net of Spanish-origin FB by the state Spanish race mix, STF2a NTA13) x FB adult share (1990 NP37) x FB sex share (2000)'
+  357|     notes = {'white_nh_native': f'[I] 100% white not Spanish 18+ minus {fbnote}',
+  358|              'black_nh_native': f'[I] 100% Black not Spanish 18+ minus {fbnote}',
+  359|              'other_native': '[I] remainder of 100%-count 18+ (STF2b NTB8B)',
+  360|              'naturalized': '[I] STF4Pb all-ages naturalized x 1990 adult share (NP37), scaled to 100% count; sex split from 2000',
+  361|              'noncitizen': '[I] STF4Pb all-ages noncitizens x 1990 adult share (NP37), scaled to 100% count; sex split from 2000'}
+  362|     df = assemble(1980, by_sex, tables, notes)
+  363|     indep = adult_sum(d1, desc1, p1, r'^(Male|Female) >>')
+  364|     check(1980, df, indep, 'STF1 NT10B 18+ (100%)')
+  365|     return df
+  366| 
+  367| 
+  368| BUILDERS = {y: year_acs for y in ACS}
+  369| BUILDERS.update({1980: year_1980, 1990: year_1990, 2000: year_2000})
+  370| 
+  371| if __name__ == '__main__':
+  372|     ap = argparse.ArgumentParser()
+  373|     ap.add_argument('year')
+  374|     ap.add_argument('--extract', type=int)
+  375|     a = ap.parse_args()
+  376|     if a.extract:
+  377|         EXTRACT = a.extract
+  378|     years = sorted(BUILDERS) if a.year == 'all' else [int(a.year)]
+  379|     for y in years:
+  380|         df = BUILDERS[y](y)
+  381|         out = CACHE / f'population/adults18_{y}_by_state_nhgis.csv'
+  382|         df.to_csv(out, index=False)
+  383|         g = df.groupby('group')['count'].sum()
+  384|         print(f'wrote {out.name}: {len(df)} rows, {df["count"].sum():,.0f} adults 18+ | '
+  385|               + ', '.join(f'{k} {v / 1e6:.1f}M' for k, v in g.items()))
+```
+
+## `scripts/harness/build_population_republic.py`
+
+```python
+    1| """1790–1860 censuses → population/adults_<year>_by_state_nhgis.csv (same long
+    2| format as build_population.py). build_population.py uses BUILDERS too:
+    3| 
+    4|     python3 scripts/harness/build_population_republic.py [YEAR ...]   # default: every census 1790–1860
+    5|     python3 scripts/harness/build_population.py 1830
+    6| 
+    7| Source: NHGIS extract made by scripts/harness/nhgis_extract_republic.py (state tables;
+    8| see TABLES there). Groups: white, free_colored, enslaved (1790–1840);
+    9| native_white, foreign_white_unknown, free_colored, enslaved, other_races
+   10| (1850–1860; foreign-born citizenship is not tabulated, hence "_unknown").
+   11| 
+   12| None of these censuses tabulates age 21 exactly, so every adult count is an
+   13| [I] estimate from the age bands (note column says which). Band splits use a
+   14| stationary-growth age profile: each single-year cohort is W=0.97 the size of
+   15| the one a year younger (≈3% annual growth, early-republic rate), so the share
+   16| of a band [a, b] aged ≥21 is sum_{21..b} W^x / sum_{a..b} W^x.
+   17| """
+   18| import sys
+   19| from pathlib import Path
+   20| 
+   21| import pandas as pd
+   22| 
+   23| from nhgis_common import CACHE, NHGIS_DIR, STATE_CODE, frame, load, row
+   24| 
+   25| W = 0.97
+   26| # Territories / predecessor areas → the state they became (state code). Dakota is ambiguous → dropped.
+   27| AREA = {'southwest territory': 'TN', 'northwest territory': 'OH', 'orleans territory': 'LA',
+   28|         'louisiana territory': 'MO', 'district of columbia': 'DC'}
+   29| DS = {1790: 'ds1', 1800: 'ds2', 1810: 'ds3', 1820: 'ds4', 1830: 'ds5', 1840: 'ds7', 1850: 'ds10', 1860: 'ds14'}
+   30| FOREIGN_ADULT = {'M': 0.72, 'F': 0.70}  # [I] share of foreign-born whites aged 21+ (immigrants are adult-heavy)
+   31| 
+   32| 
+   33| def adult_share(a: int, b: int) -> float:
+   34|     """Share of the band [a, b] aged 21+, under the W age profile."""
+   35|     ages = range(a, b + 1)
+   36|     return sum(W ** x for x in ages if x >= 21) / sum(W ** x for x in ages)
+   37| 
+   38| 
+   39| def src_dir() -> Path:
+   40|     hits = sorted(NHGIS_DIR.glob('extract_*/nhgis*_csv/nhgis*_ds1_1790_state.csv'))
+   41|     if not hits:
+   42|         raise SystemExit('no 1790–1860 NHGIS extract: run scripts/harness/nhgis_extract_republic.py submit / wait N')
+   43|     return hits[-1].parent
+   44| 
+   45| 
+   46| def code_of(name: str):
+   47|     n = name.casefold().strip()
+   48|     if n in AREA:
+   49|         return AREA[n]
+   50|     n = n.replace(' territory', '')
+   51|     return STATE_CODE.get(n)
+   52| 
+   53| 
+   54| def read(ds: str) -> pd.DataFrame:
+   55|     d = load(ds, src_dir(), 'nhgis*_{ds}_*_state.csv')
+   56|     d.index = d.STATE.map(code_of).rename('state')  # not a new column: the 1850/1860 tables are too wide to insert into
+   57|     return d[d.index.notna()]
+   58| 
+   59| 
+   60| RACE = {'white': 'White', 'native_white': 'White', 'foreign_white_unknown': 'White', 'free_colored': 'Free colored',
+   61|         'enslaved': 'Slave', 'other_races': 'Other'}
+   62| 
+   63| 
+   64| def emit(year, cells, table):
+   65|     """cells: {(state, sex, group): (count, note, label)}"""
+   66|     return frame([row(year, st, sex, g, RACE[g], label, round(float(c), 1), note, table)
+   67|                   for (st, sex, g), (c, note, label) in cells.items()])
+   68| 
+   69| 
+   70| # ---------------------------------------------------------------- per-census adult counts
+   71| def white_1800_1820(year):
+   72|     """Free white males/females 16–25, 26–44, 45+ (1820 men also 16–18)."""
+   73|     d = read(DS[year])
+   74|     p = {1800: 'AAX', 1810: 'AA6', 1820: 'ABG'}[year]
+   75|     res = {}
+   76|     for st, r in d.iterrows():
+   77|         for sex, off in (('M', 0), ('F', 5)):
+   78|             b1625, b2644, b45 = (r[f'{p}{off + i:03d}'] for i in (3, 4, 5))
+   79|             if year == 1820 and sex == 'M':
+   80|                 b1925 = b1625 - r['ABH001']
+   81|                 n = adult_share(19, 25) * b1925 + b2644 + b45
+   82|                 note = f'[I] 21+ = {adult_share(19, 25):.3f}×(16–25 less 16–18) + 26–44 + 45+'
+   83|             else:
+   84|                 n = adult_share(16, 25) * b1625 + b2644 + b45
+   85|                 note = f'[I] 21+ = {adult_share(16, 25):.3f}×(16–25) + 26–44 + 45+'
+   86|             res[(st, sex, 'white')] = (n, note, f'Free white {"males" if sex == "M" else "females"} 16–25/26–44/45+')
+   87|     return d, res
+   88| 
+   89| 
+   90| def colored_1820():
+   91|     """Slave / free colored by sex: <14, 14–25, 26–44, 45+ (ABK001–016)."""
+   92|     d = read('ds4')
+   93|     res = {}
+   94|     f = adult_share(14, 25)
+   95|     for st, r in d.iterrows():
+   96|         for g, base in (('enslaved', 0), ('free_colored', 8)):
+   97|             for sex, off in (('M', 0), ('F', 4)):
+   98|                 c = lambda i: r[f'ABK{base + off + i:03d}']  # noqa: E731
+   99|                 res[(st, sex, g)] = (f * c(2) + c(3) + c(4), f'[I] 21+ = {f:.3f}×(14–25) + 26–44 + 45+',
+  100|                                      f'{"Slave" if g == "enslaved" else "Free colored"} {sex} 14–25/26–44/45+')
+  101|     return d, res
+  102| 
+  103| 
+  104| def colored_ratios():
+  105|     """Per state: adults-by-sex / group total in 1820, the template for 1790–1810."""
+  106|     d, res = colored_1820()
+  107|     tot = {'enslaved': d[[f'ABK{i:03d}' for i in range(1, 9)]].sum(axis=1),
+  108|            'free_colored': d[[f'ABK{i:03d}' for i in range(9, 17)]].sum(axis=1)}
+  109|     nat = {(sex, g): sum(res[(s, sex, g)][0] for s in d.index) / tot[g].sum() for sex in 'MF' for g in tot}
+  110|     rat = {}
+  111|     for st in d.index:
+  112|         for g in tot:
+  113|             for sex in 'MF':
+  114|                 rat[(st, sex, g)] = res[(st, sex, g)][0] / tot[g][st] if tot[g][st] > 200 else nat[(sex, g)]
+  115|     return rat, nat
+  116| 
+  117| 
+  118| def colored_from_totals(year, d, free_col, slave_col, rat, nat):
+  119|     res = {}
+  120|     for st, r in d.iterrows():
+  121|         for g, col in (('free_colored', free_col), ('enslaved', slave_col)):
+  122|             for sex in 'MF':
+  123|                 k = rat.get((st, sex, g))
+  124|                 src = '1820 same-state' if k is not None else '1820 national'
+  125|                 k = k if k is not None else nat[(sex, g)]
+  126|                 res[(st, sex, g)] = (r[col] * k, f'[I] {g} total ({col}) × {src} share {sex} 21+ ({k:.3f}); no sex/age in {year}',
+  127|                                      f'{"Free nonwhite" if g == "free_colored" else "Slave"} (total, sex/age not tabulated)')
+  128|     return res
+  129| 
+  130| 
+  131| def y1790(year=1790):
+  132|     d = read('ds1')
+  133|     d00, w00 = white_1800_1820(1800)
+  134|     rat, nat = colored_ratios()
+  135|     res = {}
+  136|     for st, r in d.iterrows():
+  137|         for sex, col in (('M', 'AAO002'), ('F', 'AAO004')):
+  138|             off = 0 if sex == 'M' else 5
+  139|             if st in d00.index:
+  140|                 b = d00.loc[st]
+  141|                 k = w00[(st, sex, 'white')][0] / sum(b[f'AAX{off + i:03d}'] for i in (3, 4, 5))
+  142|                 src = '1800 same-state'
+  143|             else:
+  144|                 k = adult_share(16, 25) * 0.30 + 0.70
+  145|                 src = 'default'
+  146|             res[(st, sex, 'white')] = (r[col] * k, f'[I] white {sex} 16+ ({col}{", NHGIS-estimated" if sex == "F" else ""}) × {src} 21+/16+ ratio ({k:.3f})',
+  147|                                        f'White {"males" if sex == "M" else "females (estimated)"} 16 and over')
+  148|     res.update(colored_from_totals(1790, d, 'AAQ001', 'AAQ002', rat, nat))
+  149|     return emit(1790, res, 'NHGIS 1790_cPop NT4, NT6')
+  150| 
+  151| 
+  152| def y1800_1810(year):
+  153|     d, res = white_1800_1820(year)
+  154|     rat, nat = colored_ratios()
+  155|     free_col, slave_col = {1800: ('AAY001', 'AAY002'), 1810: ('AA7001', 'AA7002')}[year]
+  156|     res.update(colored_from_totals(year, d, free_col, slave_col, rat, nat))
+  157|     return emit(year, res, f'NHGIS {year}_cPop NT5, NT6')
+  158| 
+  159| 
+  160| def y1820(year=1820):
+  161|     _, res = white_1800_1820(1820)
+  162|     _, col = colored_1820()
+  163|     res.update(col)
+  164|     return emit(1820, res, 'NHGIS 1820_cPop NT4A, NT4B, NT7')
+  165| 
+  166| 
+  167| def y1830_1840(year):
+  168|     d = read(DS[year])
+  169|     wp, cp = {1830: ('ABW', 'ABX'), 1840: ('ACY', 'ACZ')}[year]
+  170|     fw, fc = adult_share(20, 29), adult_share(10, 23)
+  171|     # colored block order: 1830 slave then free; 1840 free then slave
+  172|     blocks = {1830: (('enslaved', 0), ('free_colored', 12)), 1840: (('free_colored', 0), ('enslaved', 12))}[year]
+  173|     res = {}
+  174|     for st, r in d.iterrows():
+  175|         for sex, off in (('M', 0), ('F', 13)):
+  176|             w = lambda i: r[f'{wp}{off + i:03d}']  # noqa: E731
+  177|             res[(st, sex, 'white')] = (fw * w(5) + sum(w(i) for i in range(6, 14)),
+  178|                                        f'[I] 21+ = {fw:.3f}×(20–29) + 30+', f'Free white {sex} 20–29 and 30+ bands')
+  179|         for g, base in blocks:
+  180|             for sex, off in (('M', 0), ('F', 6)):
+  181|                 c = lambda i: r[f'{cp}{base + off + i:03d}']  # noqa: E731
+  182|                 res[(st, sex, g)] = (fc * c(2) + sum(c(i) for i in range(3, 7)),
+  183|                                      f'[I] 21+ = {fc:.3f}×(10–23) + 24+', f'{g} {sex} 10–23 and 24+ bands')
+  184|     t = {1830: 'NHGIS 1830_cPop NT4, NT5', 1840: 'NHGIS 1840_cPopX NT4, NT5'}[year]
+  185|     return emit(year, res, t)
+  186| 
+  187| 
+  188| def adults_1850_1860(year):
+  189|     """→ {(st, sex, group): (count, note, label)} for white / free_colored / enslaved / other_races."""
+  190|     d = read(DS[year])
+  191|     f = adult_share(20, 29)
+  192|     res = {}
+  193|     if year == 1850:
+  194|         # AEL: 3 race blocks × 2 sexes × 15 cells (<1,1–4,5–9,10–14,15–19,20–29,…,100+,unknown)
+  195|         layout = [('white', 0), ('free_colored', 30), ('enslaved', 60)]
+  196|         for st, r in d.iterrows():
+  197|             for g, base in layout:
+  198|                 for sex, off in (('M', 0), ('F', 15)):
+  199|                     c = [r[f'AEL{base + off + i:03d}'] for i in range(1, 16)]
+  200|                     known = sum(c[:14])
+  201|                     ad = f * c[5] + sum(c[6:14])
+  202|                     ad += c[14] * (ad / known if known else 0)
+  203|                     res[(st, sex, g)] = (ad, f'[I] 21+ = {f:.3f}×(20–29) + 30+, age-unknown allocated pro rata',
+  204|                                          f'{g} {sex} by age (NT4)')
+  205|     else:
+  206|         # AH0: 6 races × 15 age cells × 2 sexes, sex innermost
+  207|         races = [('white', 0), ('free_colored', 30), ('enslaved', 60), ('other_races', 90), ('other_races', 120), ('other_races', 150)]
+  208|         for st, r in d.iterrows():
+  209|             for g, base in races:
+  210|                 for sex, s in (('M', 1), ('F', 2)):
+  211|                     c = [r[f'AH0{base + 2 * i + s:03d}'] for i in range(15)]
+  212|                     known = sum(c[:14])
+  213|                     ad = f * c[5] + sum(c[6:14])
+  214|                     ad += c[14] * (ad / known if known else 0)
+  215|                     k = (st, sex, g)
+  216|                     prev = res.get(k, (0, '', ''))[0]
+  217|                     res[k] = (prev + ad, f'[I] 21+ = {f:.3f}×(20–29) + 30+, age-unknown allocated pro rata'
+  218|                               + ('; Indian + half breed + Asiatic' if g == 'other_races' else ''), f'{g} {sex} by age (NT4)')
+  219|     return res
+  220| 
+  221| 
+  222| def y1850_1860(year):
+  223|     res = adults_1850_1860(year)
+  224|     if year == 1850:
+  225|         n = read('ds12')
+  226|         fb = {'M': n['AGF001'], 'F': n['AGF002']}
+  227|         t = 'NHGIS 1850_cPAX NT4; 1850_sPAX NT1, NT5, NT7'
+  228|     else:
+  229|         n = read('ds14')
+  230|         fb = {'M': n['AH4007'], 'F': n['AH4008']}
+  231|         t = 'NHGIS 1860_cPAX NT4, NT7'
+  232|     out = {}
+  233|     for (st, sex, g), v in res.items():
+  234|         if g != 'white':
+  235|             out[(st, sex, g)] = v
+  236|             continue
+  237|         wa = v[0]
+  238|         fa = min(fb[sex].get(st, 0) * FOREIGN_ADULT[sex], 0.95 * wa)
+  239|         out[(st, sex, 'foreign_white_unknown')] = (fa, f'[I] foreign-born white {sex} (all ages) × {FOREIGN_ADULT[sex]} adult share; '
+  240|                                                    'citizenship not tabulated', f'Foreign-born white {sex}')
+  241|         out[(st, sex, 'native_white')] = (wa - fa, f'[I] white 21+ ({v[1][4:]}) less foreign-born adults; birthplace-unknown counted native',
+  242|                                           f'Native white {sex} (residual)')
+  243|     return emit(year, out, t)
+  244| 
+  245| 
+  246| def build(year: int) -> pd.DataFrame:
+  247|     if year == 1790:
+  248|         return y1790()
+  249|     if year in (1800, 1810):
+  250|         return y1800_1810(year)
+  251|     if year == 1820:
+  252|         return y1820()
+  253|     if year in (1830, 1840):
+  254|         return y1830_1840(year)
+  255|     return y1850_1860(year)
+  256| 
+  257| 
+  258| BUILDERS = {y: build for y in range(1790, 1861, 10)}
+  259| 
+  260| 
+  261| def free_share(year: int) -> dict:
+  262|     """Per state: free colored / (free colored + enslaved) among adult men, from the nearest census at or before `year`."""
+  263|     c = max(y for y in BUILDERS if y <= max(year, 1790))
+  264|     f = CACHE / f'population/adults_{c}_by_state_nhgis.csv'
+  265|     df = pd.read_csv(f) if f.exists() else build(c)
+  266|     m = df[(df.sex == 'M') & df.group.isin(['free_colored', 'enslaved'])].pivot_table(index='state', columns='group', values='count', aggfunc='sum')
+  267|     return (m.free_colored / (m.free_colored + m.enslaved)).fillna(1.0).to_dict()
+  268| 
+  269| 
+  270| if __name__ == '__main__':
+  271|     for y in (map(int, sys.argv[1:]) if len(sys.argv) > 1 else BUILDERS):
+  272|         df = build(y)
+  273|         out = CACHE / f'population/adults_{y}_by_state_nhgis.csv'
+  274|         df.to_csv(out, index=False)
+  275|         print(f'wrote {out.name}: {len(df)} rows, {df.state.nunique()} states, {df["count"].sum():,.0f} adults '
+  276|               f'({df[df.sex == "F"]["count"].sum():,.0f} women)')
+```
 
 ## `scripts/harness/build_republic.py`
 
@@ -870,6 +1541,46 @@ Files `scripts/harness/build_republic.py` to `serve/contract.test.ts`. Lines are
    57|     main()
 ```
 
+## `scripts/harness/data_1920_hashes.py`
+
+```python
+    1| #!/usr/bin/env python3
+    2| """The sha256 of every file in data/1920/, as the table in data/1920/PROVENANCE.md.
+    3| 
+    4|   scripts/harness/data_1920_hashes.py           print the table
+    5|   scripts/harness/data_1920_hashes.py --write   rewrite it between the PROVENANCE markers
+    6| """
+    7| import hashlib
+    8| import sys
+    9| from pathlib import Path
+   10| 
+   11| DIR = Path(__file__).resolve().parents[2] / 'data/1920'
+   12| START, END = '<!-- hashes:start -->', '<!-- hashes:end -->'
+   13| 
+   14| 
+   15| def table() -> str:
+   16|     rows = ['| File | Bytes | sha256 |', '|---|---|---|']
+   17|     for p in sorted(DIR.rglob('*.csv')):
+   18|         rows.append(f'| `{p.relative_to(DIR)}` | {p.stat().st_size} | `{hashlib.sha256(p.read_bytes()).hexdigest()}` |')
+   19|     return '\n'.join(rows)
+   20| 
+   21| 
+   22| def main(argv: list[str]) -> None:
+   23|     if '--write' not in argv:
+   24|         print(table())
+   25|         return
+   26|     prov = DIR / 'PROVENANCE.md'
+   27|     text = prov.read_text()
+   28|     head, rest = text.split(START, 1)
+   29|     _, tail = rest.split(END, 1)
+   30|     prov.write_text(f'{head}{START}\n{table()}\n{END}{tail}')
+   31|     print(f'wrote {prov}')
+   32| 
+   33| 
+   34| if __name__ == '__main__':
+   35|     main(sys.argv[1:])
+```
+
 ## `scripts/harness/nhgis_common.py`
 
 ```python
@@ -1286,775 +1997,4 @@ Files `scripts/harness/build_republic.py` to `serve/contract.test.ts`. Lines are
    84| 
    85| if __name__ == '__main__':
    86|     main()
-```
-
-## `scripts/llms_digest.py`
-
-```python
-    1| #!/usr/bin/env python3
-    2| """Build llms.txt and llms/: a plain-text copy of this repository for tools that
-    3| read text at a URL rather than cloning (llmstxt.org convention).
-    4| 
-    5|     python3 scripts/llms_digest.py           # write llms.txt and llms/
-    6|     python3 scripts/llms_digest.py --check   # exit 1 if they don't match the code
-    7| 
-    8| .github/workflows/llms-digest.yml runs this on every push to main and commits
-    9| the result, so the text always matches the code at the commit it names.
-   10| Standard library only.
-   11| 
-   12|   llms.txt              index: the README's opening section, then links to everything below
-   13|   llms/MAP.md           every tracked file: size, lines, first descriptive line, digest part
-   14|   llms/HISTORY.md       commit history, verbatim from git (commits that only regenerate
-   15|                         the digest are left out)
-   16|   llms/code-N.md        full text of every source and doc file, line-numbered, in parts
-   17|                         small enough to fetch whole
-   18|   llms/data-samples.md  the first lines of one data file per top-level folder
-   19| """
-   20| from __future__ import annotations
-   21| 
-   22| import argparse
-   23| import os
-   24| import re
-   25| import shutil
-   26| import subprocess
-   27| import sys
-   28| import tempfile
-   29| from pathlib import Path
-   30| 
-   31| PART_CHARS = 120_000
-   32| OWN = ("llms.txt", "llms/")  # this script's output: never part of its own input
-   33| SKIP_DIRS = {"node_modules", "dist", "build", ".svelte-kit", "__pycache__", ".venv", "venv", ".git", ".next"}
-   34| LOCKFILES = {"package-lock.json", "pnpm-lock.yaml", "yarn.lock", "uv.lock", "poetry.lock", "Cargo.lock"}
-   35| DATA_EXT = {".json", ".jsonl", ".csv", ".tsv", ".parquet", ".npy", ".npz", ".arrow", ".pkl"}
-   36| BINARY_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".woff", ".woff2", ".ttf", ".otf", ".pdf",
-   37|               ".zip", ".gz", ".safetensors", ".bin", ".pt", ".onnx", ".mp4", ".mp3", ".wav"}
-   38| LANG = {".py": "python", ".ts": "ts", ".js": "js", ".svelte": "svelte", ".tf": "hcl", ".sh": "bash",
-   39|         ".md": "markdown", ".yml": "yaml", ".yaml": "yaml", ".toml": "toml", ".json": "json", ".html": "html",
-   40|         ".css": "css", ".txt": "text", ".sql": "sql", ".go": "go", ".rs": "rust"}
-   41| 
-   42| 
-   43| def git(*args: str, cwd: Path) -> str:
-   44|     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout
-   45| 
-   46| 
-   47| def first_descriptive_line(text: str, ext: str) -> str:
-   48|     """A file's own first line of description: a docstring, a leading comment, or a heading."""
-   49|     if ext == ".py":
-   50|         m = re.search(r'^\s*(?:#![^\n]*\n)?\s*(?:"""|\'\'\')\s*(.+)', text)
-   51|         if m:
-   52|             return m.group(1).strip().rstrip("\"'")
-   53|     for line in text.splitlines()[:15]:
-   54|         s = line.strip()
-   55|         m = re.match(r"^(?:#{1,6}\s+|//+\s*|#\s*|/\*+\s*|\*\s+|<!--\s*)(.{8,})", s)
-   56|         if m and not s.startswith("#!") and not s.startswith("// @ts"):
-   57|             return m.group(1).strip().rstrip("*/ -").strip()
-   58|     return ""
-   59| 
-   60| 
-   61| def classify(path: str, size: int, raw: bytes) -> str:
-   62|     name, ext = os.path.basename(path), os.path.splitext(path)[1].lower()
-   63|     parts = path.split("/")
-   64|     if any(p in SKIP_DIRS for p in parts[:-1]):
-   65|         return "skip: generated or vendored directory"
-   66|     if name in LOCKFILES:
-   67|         return "skip: lockfile"
-   68|     if ext in BINARY_EXT or b"\0" in raw[:4096]:
-   69|         return "skip: binary"
-   70|     if raw.startswith(b"version https://git-lfs"):
-   71|         return "skip: Git LFS pointer (content not in the repo)"
-   72|     if ext in DATA_EXT and not (len(parts) == 1 and size <= 20_000):  # root configs stay
-   73|         return "data: sampled in data-samples.md"
-   74|     if size > 200_000:
-   75|         return "skip: larger than 200 KB"
-   76|     return "include"
-   77| 
-   78| 
-   79| def repo_identity(root: Path) -> tuple[str, str, str]:
-   80|     """(owner, name, branch) from GitHub Actions, else from the origin remote."""
-   81|     full = os.environ.get("GITHUB_REPOSITORY")
-   82|     if not full:
-   83|         url = git("remote", "get-url", "origin", cwd=root).strip()
-   84|         m = re.search(r"github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?$", url)
-   85|         if not m:
-   86|             sys.exit(f"can't tell the GitHub repository from {url!r}; set GITHUB_REPOSITORY=owner/name")
-   87|         full = f"{m.group(1)}/{m.group(2)}"
-   88|     owner, name = full.split("/", 1)
-   89|     branch = os.environ.get("LLMS_BRANCH", "main")
-   90|     return owner, name, branch
-   91| 
-   92| 
-   93| def build(root: Path, out: Path) -> dict:
-   94|     owner, name, branch = repo_identity(root)
-   95|     # The last commit that changed anything besides the digest: rebuilding after a
-   96|     # digest-only commit then gives identical text, so the workflow never loops.
-   97|     code_only = ("--", ".", ":(exclude)llms.txt", ":(exclude)llms")
-   98|     sha = git("log", "-1", "--format=%H", *code_only, cwd=root).strip()
-   99|     date = git("log", "-1", "--format=%cs", *code_only, cwd=root).strip()
-  100|     raw_base = f"https://raw.githubusercontent.com/{owner}/{name}/{branch}/"
-  101|     files = [f for f in git("ls-files", cwd=root).splitlines() if f and not f.startswith(OWN)]
-  102|     stamp = (f"Generated from commit `{sha[:12]}` ({date}) of github.com/{owner}/{name} by "
-  103|              f"`scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to "
-  104|              f"`{branch}`, so this text matches the code at that commit.")
-  105| 
-  106|     rows, included, data_dirs = [], [], {}
-  107|     for f in files:
-  108|         raw = (root / f).read_bytes()
-  109|         verdict = classify(f, len(raw), raw)
-  110|         ext = os.path.splitext(f)[1].lower()
-  111|         text = "" if verdict == "skip: binary" else raw.decode("utf-8", "replace")
-  112|         lines = text.count("\n") + (1 if text and not text.endswith("\n") else 0)
-  113|         desc = first_descriptive_line(text, ext) if verdict == "include" else ""
-  114|         rows.append((f, len(raw), lines, desc, verdict))
-  115|         if verdict == "include":
-  116|             included.append((f, text, ext))
-  117|         elif verdict.startswith("data"):
-  118|             data_dirs.setdefault(f.split("/")[0] if "/" in f else "(root)", []).append((f, text))
-  119| 
-  120|     # Parts: whole files in path order, never split across parts.
-  121|     parts, cur, cur_len = [], [], 0
-  122|     for f, text, ext in included:
-  123|         numbered = "\n".join(f"{i:>5}| {l}" for i, l in enumerate(text.splitlines(), 1))
-  124|         block = f"\n## `{f}`\n\n```{LANG.get(ext, '')}\n{numbered}\n```\n"
-  125|         if cur and cur_len + len(block) > PART_CHARS:
-  126|             parts.append(cur)
-  127|             cur, cur_len = [], 0
-  128|         cur.append((f, block))
-  129|         cur_len += len(block)
-  130|     if cur:
-  131|         parts.append(cur)
-  132| 
-  133|     (out / "llms").mkdir(parents=True, exist_ok=True)
-  134|     part_index, file_part = [], {}
-  135|     for i, part in enumerate(parts, 1):
-  136|         fname = f"llms/code-{i}.md"
-  137|         body = "".join(b for _, b in part)
-  138|         (out / fname).write_text(
-  139|             f"# {name}: source and docs, part {i} of {len(parts)}\n\n{stamp}\nFiles `{part[0][0]}` to "
-  140|             f"`{part[-1][0]}`. Lines are numbered as in the repository.\n" + body)
-  141|         part_index.append((fname, part[0][0], part[-1][0], len(part), len(body)))
-  142|         for f, _ in part:
-  143|             file_part[f] = f"code-{i}.md"
-  144| 
-  145|     m = [f"# {name}: file map", "", stamp, "",
-  146|          f"{len(files)} tracked files. {len(included)} are reproduced in full in the `code-N.md` parts; "
-  147|          "the rest are listed with the reason they are not.", "",
-  148|          f"Every path below is relative to {raw_base} (append the path to fetch the raw file).", "",
-  149|          "| File | Bytes | Lines | Description | In digest |", "|---|---|---|---|---|"]
-  150|     for f, size, lines, desc, verdict in rows:
-  151|         if not verdict.startswith("data"):
-  152|             m.append(f"| `{f}` | {size:,} | {lines:,} | {desc.replace('|', '/')[:100]} | {file_part.get(f, verdict)} |")
-  153|     if data_dirs:
-  154|         m += ["", "### Data files (not reproduced; one sample per folder in `data-samples.md`)", "",
-  155|               "| Folder | Files | Bytes |", "|---|---|---|"]
-  156|         sizes = {r[0]: r[1] for r in rows}
-  157|         for d, items in sorted(data_dirs.items()):
-  158|             m.append(f"| `{d}/` | {len(items)} | {sum(sizes[f] for f, _ in items):,} |")
-  159|     (out / "llms" / "MAP.md").write_text("\n".join(m) + "\n")
-  160| 
-  161|     if data_dirs:
-  162|         ds = [f"# {name}: data samples", "", stamp, "",
-  163|               "Data files are not reproduced in full. One sample per top-level folder, first 40 lines:", ""]
-  164|         for d, items in sorted(data_dirs.items()):
-  165|             f, text = items[0]
-  166|             sample = "\n".join(text.splitlines()[:40])
-  167|             ds += [f"## `{d}/` ({len(items)} files)", "", f"Sample: `{f}`", "",
-  168|                    f"```{LANG.get(os.path.splitext(f)[1].lower(), '')}\n{sample}\n```", ""]
-  169|         (out / "llms" / "data-samples.md").write_text("\n".join(ds))
-  170| 
-  171|     # Commits that touched anything besides the digest itself, verbatim.
-  172|     log = git("log", "--format=%h  %ad  %an  %s", "--date=short", "--", ".", ":(exclude)llms.txt", ":(exclude)llms",
-  173|               cwd=root).strip()
-  174|     count = len(log.splitlines()) if log else 0
-  175|     (out / "llms" / "HISTORY.md").write_text(
-  176|         f"# {name}: commit history\n\n{stamp}\n\n{count} commit(s), verbatim from `git log` "
-  177|         f"(commits that only regenerate this digest are left out):\n\n```\n{log}\n```\n")
-  178| 
-  179|     readme = next((f for f in files if f.lower() == "readme.md"), None)
-  180|     total = sum(p[4] for p in part_index)
-  181|     idx = [f"# {name}", ""]
-  182|     if readme:
-  183|         intro = re.split(r"(?m)^##\s", (root / readme).read_text(errors="replace"))[0]
-  184|         intro = re.sub(r"(?m)^#\s.*\n", "", intro).strip()
-  185|         if intro:
-  186|             idx += ["## Summary (the README's opening section, verbatim)", "", intro[:3000], ""]
-  187|     idx += [stamp, "", "## Start here", ""]
-  188|     if readme:
-  189|         idx.append(f"- [README]({raw_base}{readme}): overview")
-  190|     idx += [f"- [File map]({raw_base}llms/MAP.md): all {len(files)} files with size, line count, description, "
-  191|             "and which digest part holds each one",
-  192|             f"- [Commit history]({raw_base}llms/HISTORY.md): {count} commit(s)", ""]
-  193|     docs = [r[0] for r in rows if r[0].lower().endswith(".md") and r[0] != readme]
-  194|     if docs:
-  195|         idx += ["## Documentation", ""] + [f"- [{d}]({raw_base}{d})" for d in docs[:30]] + [""]
-  196|     idx += [f"## Full source text ({total:,} characters, about {total // 4:,} tokens, in {len(part_index)} part(s))", ""]
-  197|     idx += [f"- [{fn}]({raw_base}{fn}): {n} files, `{a}` to `{b}` ({size:,} characters)"
-  198|             for fn, a, b, n, size in part_index]
-  199|     if data_dirs:
-  200|         idx += ["", "## Data", "", f"- [Data samples]({raw_base}llms/data-samples.md): "
-  201|                 f"{sum(len(v) for v in data_dirs.values())} data files in {len(data_dirs)} folder(s), one sample each"]
-  202|     (out / "llms.txt").write_text("\n".join(idx) + "\n")
-  203|     return {"files": len(files), "included": len(included), "parts": len(part_index), "chars": total}
-  204| 
-  205| 
-  206| def snapshot(d: Path) -> dict[str, str]:
-  207|     out = {}
-  208|     if (d / "llms.txt").exists():
-  209|         out["llms.txt"] = (d / "llms.txt").read_text()
-  210|     for p in sorted((d / "llms").glob("*")) if (d / "llms").is_dir() else []:
-  211|         out[f"llms/{p.name}"] = p.read_text()
-  212|     return out
-  213| 
-  214| 
-  215| def main() -> None:
-  216|     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-  217|     ap.add_argument("--check", action="store_true", help="exit 1 if llms.txt and llms/ don't match the code")
-  218|     args = ap.parse_args()
-  219|     root = Path(git("rev-parse", "--show-toplevel", cwd=Path.cwd()).strip())
-  220|     tmp = Path(tempfile.mkdtemp(prefix="llms-digest-"))
-  221|     try:
-  222|         stats = build(root, tmp)
-  223|         fresh = snapshot(tmp)
-  224|         if args.check:
-  225|             # The stamp names a commit; compare everything else.
-  226|             norm = lambda d: {k: re.sub(r"commit `[0-9a-f]{12}` \(\d{4}-\d\d-\d\d\)", "commit", v) for k, v in d.items()}
-  227|             if norm(fresh) != norm(snapshot(root)):
-  228|                 sys.exit("llms.txt / llms/ don't match the code. Run: python3 scripts/llms_digest.py")
-  229|             print("llms.txt and llms/ match the code.")
-  230|             return
-  231|         shutil.rmtree(root / "llms", ignore_errors=True)
-  232|         (root / "llms").mkdir()
-  233|         for rel, text in fresh.items():
-  234|             (root / rel).write_text(text)
-  235|         print(f"{stats['included']} of {stats['files']} files in {stats['parts']} part(s), {stats['chars']:,} characters.")
-  236|     finally:
-  237|         shutil.rmtree(tmp, ignore_errors=True)
-  238| 
-  239| 
-  240| if __name__ == "__main__":
-  241|     main()
-```
-
-## `scripts/mirror-portraits.py`
-
-```python
-    1| #!/usr/bin/env python3
-    2| """Mirror the candidates' Wikimedia Commons portraits for the assets bucket.
-    3| 
-    4| For every person in src/lib/simulacra/history.ts (PEOPLE), resolve the Commons
-    5| file through the Commons API (prop=imageinfo, iiprop=url|extmetadata), download
-    6| its 330px thumbnail to <out>/portraits/<id>.jpg, and write
-    7| <out>/portraits/credits.json with the file page, author, licence name and
-    8| licence URL exactly as the API gives them (never guessed).
-    9| 
-   10| The output stays out of git; scripts/publish-assets.sh uploads it.
-   11| Re-runnable: existing images are kept unless --force.
-   12| 
-   13|   python3 scripts/mirror-portraits.py --out ../simulacra-assets
-   14| """
-   15| from __future__ import annotations
-   16| 
-   17| import argparse
-   18| import html
-   19| import json
-   20| import re
-   21| import sys
-   22| import time
-   23| import urllib.parse
-   24| import urllib.request
-   25| from pathlib import Path
-   26| 
-   27| ROOT = Path(__file__).resolve().parent.parent
-   28| HISTORY = ROOT / 'src/lib/simulacra/history.ts'
-   29| API = 'https://commons.wikimedia.org/w/api.php'
-   30| # Wikimedia's User-Agent policy: identify the tool and a contact.
-   31| UA = 'SimulacraAmericana-portrait-mirror/1.0 (https://simulacraamericana.com; cam@partyhat.ai)'
-   32| WIDTH = 330
-   33| 
-   34| # `  id: ["Full Name", "Surname", "x/xy/File.jpg/330px-File.jpg"],` inside PEOPLE.
-   35| ROW = re.compile(r'^\s*(\w+):\s*\["([^"]+)",\s*"[^"]*",\s*"([^"]+)"\]', re.M)
-   36| 
-   37| 
-   38| def people() -> list[tuple[str, str, str]]:
-   39|     src = HISTORY.read_text()
-   40|     block = src[src.index('const PEOPLE = {'):]
-   41|     block = block[:block.index('\n}')]
-   42|     rows = []
-   43|     for pid, name, path in ROW.findall(block):
-   44|         # "b/b6/<File>/330px-<File>": the Commons file name is the third segment.
-   45|         rows.append((pid, name, urllib.parse.unquote(path.split('/')[2])))
-   46|     if not rows:
-   47|         sys.exit(f'no PEOPLE rows parsed from {HISTORY}')
-   48|     return rows
-   49| 
-   50| 
-   51| def get(url: str) -> bytes:
-   52|     req = urllib.request.Request(url, headers={'User-Agent': UA})
-   53|     for attempt in range(4):
-   54|         try:
-   55|             with urllib.request.urlopen(req, timeout=30) as r:
-   56|                 return r.read()
-   57|         except urllib.error.HTTPError as e:
-   58|             if e.code in (429, 503) and attempt < 3:
-   59|                 time.sleep(2 ** attempt * 2)
-   60|                 continue
-   61|             raise
-   62|     raise RuntimeError('unreachable')
-   63| 
-   64| 
-   65| def plain(value: str | None) -> str | None:
-   66|     """extmetadata values are HTML fragments; keep their text."""
-   67|     if not value:
-   68|         return None
-   69|     return re.sub(r'\s+', ' ', html.unescape(re.sub(r'<[^>]+>', '', value))).strip() or None
-   70| 
-   71| 
-   72| def imageinfo(titles: list[str]) -> dict[str, dict]:
-   73|     q = urllib.parse.urlencode({
-   74|         'action': 'query', 'format': 'json', 'formatversion': '2', 'prop': 'imageinfo',
-   75|         'iiprop': 'url|extmetadata', 'iiurlwidth': WIDTH, 'titles': '|'.join(f'File:{t}' for t in titles),
-   76|     })
-   77|     data = json.loads(get(f'{API}?{q}'))
-   78|     # The API normalises titles (underscores -> spaces); map back.
-   79|     norm = {n['to']: n['from'] for n in data['query'].get('normalized', [])}
-   80|     out = {}
-   81|     for page in data['query']['pages']:
-   82|         asked = norm.get(page['title'], page['title'])
-   83|         out[asked.removeprefix('File:')] = page
-   84|     return out
-   85| 
-   86| 
-   87| def main() -> None:
-   88|     ap = argparse.ArgumentParser()
-   89|     ap.add_argument('--out', type=Path, required=True, help='assets staging folder (outside the repo)')
-   90|     ap.add_argument('--force', action='store_true', help='re-download images that already exist')
-   91|     args = ap.parse_args()
-   92|     dest = args.out / 'portraits'
-   93|     dest.mkdir(parents=True, exist_ok=True)
-   94| 
-   95|     rows = people()
-   96|     pages: dict[str, dict] = {}
-   97|     files = sorted({f for _, _, f in rows})
-   98|     for i in range(0, len(files), 40):  # the API takes 50 titles per query
-   99|         pages.update(imageinfo(files[i:i + 40]))
-  100| 
-  101|     credits, problems = {}, []
-  102|     for pid, name, file in rows:
-  103|         page = pages.get(file)
-  104|         info = (page or {}).get('imageinfo', [None])[0]
-  105|         if not info:
-  106|             problems.append(f'{pid}: {file} not found on Commons')
-  107|             continue
-  108|         meta = info.get('extmetadata', {})
-  109|         val = lambda k: plain(meta.get(k, {}).get('value'))  # noqa: E731
-  110|         target = dest / f'{pid}.jpg'
-  111|         if args.force or not target.exists():
-  112|             target.write_bytes(get(info['thumburl']))
-  113|             time.sleep(0.2)
-  114|         credits[pid] = {
-  115|             'name': name,
-  116|             'file': f'File:{file}',
-  117|             'filePage': info['descriptionurl'],
-  118|             'author': val('Artist'),
-  119|             'credit': val('Credit'),
-  120|             'license': val('LicenseShortName'),
-  121|             'licenseUrl': val('LicenseUrl'),
-  122|             'attributionRequired': val('AttributionRequired') == 'true',
-  123|             'usageTerms': val('UsageTerms'),
-  124|         }
-  125|         lic = credits[pid]['license'] or ''
-  126|         if credits[pid]['attributionRequired'] and not credits[pid]['author']:
-  127|             problems.append(f'{pid}: {lic} requires attribution but the API gives no author')
-  128| 
-  129|     (dest / 'credits.json').write_text(json.dumps(credits, indent=2, ensure_ascii=False) + '\n')
-  130|     needs = sorted(p for p, c in credits.items() if c['attributionRequired'])
-  131|     print(f'{len(credits)}/{len(rows)} portraits mirrored to {dest}')
-  132|     print(f'{len(needs)} need attribution: {", ".join(needs) or "none"}')
-  133|     for p in problems:
-  134|         print('PROBLEM', p, file=sys.stderr)
-  135|     sys.exit(1 if problems else 0)
-  136| 
-  137| 
-  138| if __name__ == '__main__':
-  139|     main()
-```
-
-## `scripts/model-check.ts`
-
-```ts
-    1| // Prints the sample model's outcome for every what-if of every story
-    2| // election (src/lib/simulacra/stories.ts), to check the model outside the
-    3| // page: history's electoral vote, then each what-if's.
-    4| //   pnpm tsx scripts/model-check.ts
-    5| import { electionOf } from '../src/lib/simulacra/history';
-    6| import { _model } from '../src/lib/simulacra/sample';
-    7| import { STORIES } from '../src/lib/simulacra/stories';
-    8| 
-    9| const ev = (r: { ev: { A: number; B: number; O: number } }) => `${r.ev.A}–${r.ev.B}${r.ev.O ? `–${r.ev.O}` : ''}`;
-   10| 
-   11| for (const year of Object.keys(STORIES).map(Number)) {
-   12|   const e = electionOf(year);
-   13|   const history = _model.rerun(year);
-   14|   if (!e || !history) continue;
-   15|   const [a, b] = e.candidates;
-   16|   console.log(`\n${year}  ${a.short} over ${b?.short ?? 'no one'}: ${ev(history)} as it happened`);
-   17|   for (const w of _model.whatIfsFor(year)) {
-   18|     const r = _model.rerun(year, [w.key]);
-   19|     if (!r) continue;
-   20|     const flips = r.states.filter((s) => s.flipped).length;
-   21|     const winner = r.winner ? (e.candidates.find((c) => c.key === r.winner)?.short ?? 'Others') : 'no majority';
-   22|     console.log(`  ${w.key.padEnd(14)} ${ev(r).padEnd(12)} ${winner.padEnd(12)} ${String(flips).padStart(2)} flipped  (${r.confidence})`);
-   23|   }
-   24| }
-```
-
-## `scripts/publish-assets.sh`
-
-```bash
-    1| #!/usr/bin/env bash
-    2| # Publish the robot assets and mirrored portraits to s3://simulacra-americana-assets
-    3| # (served by CloudFront at assets.simulacraamericana.com) and invalidate.
-    4| # Re-runnable. The assets themselves are never in git.
-    5| #
-    6| #   scripts/publish-assets.sh [assets-dir]     default ../simulacra-assets
-    7| #
-    8| # Robot: COPIED (never moved) from the shared Partyhat bucket, only what the
-    9| # page loads (src/lib/robot: models/atlas-09-americana.glb and its rerun paint
-   10| # set). Portraits: from scripts/mirror-portraits.py's output.
-   11| set -euo pipefail
-   12| 
-   13| SRC="s3://${SOURCE_ASSETS_BUCKET:?set SOURCE_ASSETS_BUCKET to the bucket holding the source harness assets}/harness-assets"
-   14| DST=s3://simulacra-americana-assets
-   15| ASSETS=${1:-$(cd "$(dirname "$0")/.." && pwd)/../simulacra-assets}
-   16| LONG='public, max-age=31536000, immutable'
-   17| test "$(aws sts get-caller-identity --query Account --output text)" = "${AWS_ACCOUNT_ID:?set AWS_ACCOUNT_ID to the target AWS account}"
-   18| 
-   19| # Robot model and paint set (object-to-object copy, same account).
-   20| aws s3 cp "$SRC/models/atlas-09-americana.glb" "$DST/models/atlas-09-americana.glb" \
-   21|   --metadata-directive REPLACE --content-type model/gltf-binary --cache-control "$LONG" --only-show-errors
-   22| aws s3 cp "$SRC/models/atlas-09-americana-rerun/" "$DST/models/atlas-09-americana-rerun/" --recursive \
-   23|   --metadata-directive REPLACE --cache-control "$LONG" --only-show-errors
-   24| # --metadata-directive REPLACE drops the source content types; restore them.
-   25| for k in $(aws s3api list-objects-v2 --bucket simulacra-americana-assets --prefix models/atlas-09-americana-rerun/ \
-   26|              --query 'Contents[].Key' --output text); do
-   27|   case "$k" in
-   28|     *.json) ct=application/json ;; *.png) ct=image/png ;; *.jpg|*.jpeg) ct=image/jpeg ;;
-   29|     *.webp) ct=image/webp ;; *.ktx2) ct=image/ktx2 ;; *) continue ;;
-   30|   esac
-   31|   aws s3 cp "$DST/$k" "$DST/$k" --metadata-directive REPLACE --content-type "$ct" \
-   32|     --cache-control "$LONG" --only-show-errors
-   33| done
-   34| 
-   35| # Portraits and their credits (credits change when a portrait does: short cache).
-   36| if [ -d "$ASSETS/portraits" ]; then
-   37|   aws s3 sync "$ASSETS/portraits/" "$DST/portraits/" --exclude '*' --include '*.jpg' \
-   38|     --content-type image/jpeg --cache-control "$LONG" --only-show-errors
-   39|   aws s3 cp "$ASSETS/portraits/credits.json" "$DST/portraits/credits.json" \
-   40|     --content-type application/json --cache-control 'public, max-age=3600' --only-show-errors
-   41| else
-   42|   echo "no $ASSETS/portraits; run scripts/mirror-portraits.py --out $ASSETS first" >&2
-   43| fi
-   44| 
-   45| aws s3 ls "$DST/" --recursive --summarize | tail -2
-   46| 
-   47| # Invalidate (the distribution exists only after the stand-up apply).
-   48| DIST=$(cd "$(dirname "$0")/../infra" && terraform output -raw assets_distribution_id 2>/dev/null || true)
-   49| if [ -n "$DIST" ]; then
-   50|   aws cloudfront create-invalidation --distribution-id "$DIST" --paths '/*' \
-   51|     --query 'Invalidation.[Id,Status]' --output text
-   52| fi
-```
-
-## `scripts/size-check.ts`
-
-```ts
-    1| // Fails when any tracked source file is over the line limit.
-    2| import { execFileSync } from 'node:child_process';
-    3| import { readFileSync } from 'node:fs';
-    4| 
-    5| const LIMIT = 1000;
-    6| const SOURCE = /\.(ts|svelte|js|mjs|py|css)$/;
-    7| 
-    8| const files = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], { encoding: 'utf8' })
-    9|   .split('\n')
-   10|   .filter((f) => SOURCE.test(f));
-   11| 
-   12| const over = files
-   13|   .map((f) => ({ f, n: readFileSync(f, 'utf8').split('\n').length }))
-   14|   .filter(({ n }) => n > LIMIT);
-   15| 
-   16| for (const { f, n } of over) console.error(`${f}: ${n} lines (limit ${LIMIT})`);
-   17| if (over.length > 0) process.exit(1);
-   18| console.log(`size: ${files.length} files, none over ${LIMIT} lines`);
-```
-
-## `scripts/sync-data.sh`
-
-```bash
-    1| #!/usr/bin/env bash
-    2| # Census-derived data and service state: laptop -> private data bucket -> EFS.
-    3| # Re-runnable. Nothing here ever writes to git, an image, Vercel or the assets bucket.
-    4| #
-    5| #   scripts/sync-data.sh upload-cache   laptop harness_cache (minus */raw/) -> s3://.../cache/
-    6| #   scripts/sync-data.sh upload-seed    repo bundles/whatifs/configs/runs + laptop runs/_cache -> s3://.../seed/
-    7| #   scripts/sync-data.sh seed           one-off ECS task: seed -> EFS (refuses if already seeded)
-    8| #   scripts/sync-data.sh cache          one-off ECS task: cache -> EFS/cache (replaces it)
-    9| #   scripts/sync-data.sh backup         tarball the laptop's harness state + cache to s3://.../backups/<date>/
-   10| #
-   11| # The run id hashes the cache's manifest: the bytes on EFS must match the
-   12| # laptop's for run ids to line up, so the cache is synced byte-for-byte.
-   13| #
-   14| # Note: on aws-cli 2.23.4 (this laptop) `aws s3 cp` of a multipart object
-   15| # DOWN from this versioned bucket fails with NoSuchKey; `aws s3api get-object`
-   16| # works. Uploads and small-file syncs are unaffected.
-   17| set -euo pipefail
-   18| 
-   19| B=s3://simulacra-americana-data
-   20| REPO=$(cd "$(dirname "$0")/.." && pwd)
-   21| CACHE=${SIMHARNESS_CACHE:-$HOME/research_notes/historical_election_sim_data/harness_cache}
-   22| # The live harness the laptop has been running (its runs/_cache is the answer cache).
-   23| LAPTOP_HARNESS=${LAPTOP_HARNESS:-$HOME/Documents/fromDesktop/quickmoveaway/vaultSYncWebWithLocalOPtion/vaultsync-chatwindows/src/lib/simulacra/harness}
-   24| test "$(aws sts get-caller-identity --query Account --output text)" = "${AWS_ACCOUNT_ID:?set AWS_ACCOUNT_ID to the target AWS account}"
-   25| 
-   26| run_task() {
-   27|   local mode=$1 o
-   28|   o=$(cd "$REPO/infra" && terraform output -json seed_task)
-   29|   local cluster td subnets sg
-   30|   cluster=$(jq -r .cluster <<<"$o"); td=$(jq -r .task_definition <<<"$o")
-   31|   subnets=$(jq -r '.subnets | join(",")' <<<"$o"); sg=$(jq -r .security_group <<<"$o")
-   32|   local arn
-   33|   arn=$(aws ecs run-task --cluster "$cluster" --task-definition "$td" --launch-type FARGATE \
-   34|     --network-configuration "awsvpcConfiguration={subnets=[$subnets],securityGroups=[$sg],assignPublicIp=ENABLED}" \
-   35|     --overrides "{\"containerOverrides\":[{\"name\":\"seed\",\"environment\":[{\"name\":\"MODE\",\"value\":\"$mode\"}]}]}" \
-   36|     --query 'tasks[0].taskArn' --output text)
-   37|   echo "started $arn; waiting"
-   38|   aws ecs wait tasks-stopped --cluster "$cluster" --tasks "$arn"
-   39|   aws ecs describe-tasks --cluster "$cluster" --tasks "$arn" \
-   40|     --query 'tasks[0].containers[0].[exitCode,reason]' --output text
-   41|   echo "logs: aws logs tail /ecs/simulacra --log-stream-name-prefix seed --since 15m"
-   42| }
-   43| 
-   44| case "${1:-}" in
-   45|   upload-cache)
-   46|     aws s3 sync "$CACHE/" "$B/cache/" --exclude '*/raw/*' --exclude '.DS_Store' --only-show-errors
-   47|     aws s3 ls "$B/cache/" --recursive --summarize | tail -2 ;;
-   48|   upload-seed)
-   49|     for d in whatifs configs; do
-   50|       aws s3 sync "$REPO/$d/" "$B/seed/$d/" --exclude '.DS_Store' --only-show-errors
-   51|     done
-   52|     aws s3 sync "$REPO/serve/bundles/" "$B/seed/bundles/" --exclude '.DS_Store' --only-show-errors
-   53|     aws s3 sync "$REPO/runs/" "$B/seed/runs/" --exclude '.DS_Store' --only-show-errors
-   54|     # The answer cache and pickles aren't in git; they come from the laptop.
-   55|     aws s3 sync "$LAPTOP_HARNESS/runs/_cache/" "$B/seed/runs/_cache/" --exclude '.DS_Store' --only-show-errors
-   56|     aws s3 ls "$B/seed/" --recursive --summarize | tail -2 ;;
-   57|   seed)  run_task seed ;;
-   58|   cache) run_task cache ;;
-   59|   backup)
-   60|     d=$(date +%F); tmp=$(mktemp -d)
-   61|     (cd "$LAPTOP_HARNESS" && COPYFILE_DISABLE=1 tar czf "$tmp/harness-state-$d.tgz" serve/bundles sessions runs whatifs configs)
-   62|     (cd "$CACHE" && COPYFILE_DISABLE=1 tar czf "$tmp/harness-cache-derived-$d.tgz" --exclude='*/raw' .)
-   63|     (cd "$tmp" && shasum -a 256 ./*.tgz > SHA256SUMS)
-   64|     aws s3 cp "$tmp/" "$B/backups/$d/" --recursive --only-show-errors
-   65|     cat "$tmp/SHA256SUMS"; rm -rf "$tmp" ;;
-   66|   *)
-   67|     sed -n '2,12p' "$0"; exit 2 ;;
-   68| esac
-```
-
-## `serve/app.ts`
-
-```ts
-    1| // The server: /api/simulacra plus the static SvelteKit build, with an SPA
-    2| // fallback to build/index.html for any other GET.
-    3| import { existsSync } from 'node:fs';
-    4| import path from 'node:path';
-    5| import express, { type Express } from 'express';
-    6| import { createSimulacraRouter, optionsFromEnv, type SimulacraOptions } from './simulacra';
-    7| 
-    8| export interface AppOptions {
-    9|   simulacra: SimulacraOptions;
-   10|   /** The static build folder (`pnpm build`); not served when it has no index.html. */
-   11|   build: string;
-   12| }
-   13| 
-   14| export const defaultAppOptions = (): AppOptions => ({
-   15|   simulacra: optionsFromEnv(),
-   16|   build: path.resolve(import.meta.dirname, '..', 'build')
-   17| });
-   18| 
-   19| export function createApp(opts: AppOptions = defaultAppOptions()): Express {
-   20|   const app = express();
-   21|   app.disable('x-powered-by');
-   22|   app.use('/api/simulacra', createSimulacraRouter(opts.simulacra));
-   23|   const index = path.join(opts.build, 'index.html');
-   24|   if (existsSync(index)) {
-   25|     app.use(express.static(opts.build));
-   26|     app.get('/{*path}', (_req, res) => res.sendFile(index));
-   27|   }
-   28|   return app;
-   29| }
-```
-
-## `serve/bundle.ts`
-
-```ts
-    1| // What enters the server, parsed once with zod: the bundle contract and the
-    2| // request bodies (one definition, shared with the page: ./contract.ts), and
-    3| // the session files the intake worker writes. The names here are the
-    4| // server's: each value is also its parsed type.
-    5| import { z } from 'zod';
-    6| import {
-    7|   BucketSchema,
-    8|   BundleResultSchema,
-    9|   BundleSchema,
-   10|   EditsSchema,
-   11|   RunRequestSchema,
-   12|   SliceSchema,
-   13|   StepSchema,
-   14|   TableRowSchema,
-   15|   ToldSchema
-   16| } from './contract';
-   17| 
-   18| export { FIELDS, type Field, RUN_LIMITS } from './contract';
-   19| 
-   20| export const PageKey = BucketSchema;
-   21| export type PageKey = z.infer<typeof PageKey>;
-   22| 
-   23| export const Slice = SliceSchema;
-   24| export type Slice = z.infer<typeof Slice>;
-   25| 
-   26| /** One what-if combination's result, as the bundle holds it. Loose: additive fields pass through to the page. */
-   27| export const Result = BundleResultSchema;
-   28| export type Result = z.infer<typeof Result>;
-   29| 
-   30| export const TableRow = TableRowSchema;
-   31| export type TableRow = z.infer<typeof TableRow>;
-   32| 
-   33| export const Told = ToldSchema;
-   34| export type Told = z.infer<typeof Told>;
-   35| 
-   36| export const Bundle = BundleSchema;
-   37| export type Bundle = z.infer<typeof Bundle>;
-   38| 
-   39| // ── Request bodies ──
-   40| 
-   41| /** Hand edits: per slice, changes in fractions of its adults (summing to 0). */
-   42| export const Edits = EditsSchema;
-   43| export type Edits = z.infer<typeof Edits>;
-   44| 
-   45| /** POST /runs, within RUN_LIMITS. */
-   46| export const RunRequest = RunRequestSchema;
-   47| export type RunRequest = z.infer<typeof RunRequest>;
-   48| 
-   49| // ── Session files the intake worker writes (dev only) ──
-   50| 
-   51| export const QueueDone = z.looseObject({
-   52|   text: z.string(),
-   53|   year: z.number().nullish(),
-   54|   status: z.string(),
-   55|   key: z.string().nullish(),
-   56|   why: z.string().nullish()
-   57| });
-   58| export type QueueDone = z.infer<typeof QueueDone>;
-   59| 
-   60| export const QueueFailed = z.looseObject({
-   61|   text: z.string(),
-   62|   year: z.number().nullish(),
-   63|   at: z.number(),
-   64|   why: z.string().nullish()
-   65| });
-   66| export type QueueFailed = z.infer<typeof QueueFailed>;
-   67| 
-   68| export const Step = StepSchema;
-   69| export type Step = z.infer<typeof Step>;
-   70| 
-   71| export const IntakeStatus = z.looseObject({ text: z.string().nullable(), steps: z.array(Step) });
-```
-
-## `serve/bundles/RUN_ID`
-
-```
-    1| 2004-01ab47632c
-```
-
-## `serve/contract.test.ts`
-
-```ts
-    1| import { existsSync, readdirSync, readFileSync } from 'node:fs';
-    2| import path from 'node:path';
-    3| import { describe, expect, test } from 'vitest';
-    4| import { BundleSchema, RUN_LIMITS, RunRequestSchema } from './contract';
-    5| 
-    6| const ROOT = path.resolve(import.meta.dirname, '..');
-    7| const FIXTURE = path.join(ROOT, 'tests', 'fixtures', 'bundle.example.json');
-    8| const BUNDLES = path.join(ROOT, 'serve', 'bundles');
-    9| 
-   10| describe('BundleSchema', () => {
-   11|   test('parses the shared bundle example (tests/fixtures/bundle.example.json)', () => {
-   12|     const parsed = BundleSchema.safeParse(JSON.parse(readFileSync(FIXTURE, 'utf8')));
-   13|     expect(parsed.error?.issues ?? []).toEqual([]);
-   14|     // Published bundles write State.flipped as 0 / 1: parsed, it is a boolean.
-   15|     const flips = Object.values(parsed.data?.runs ?? {}).flatMap((r) => r.states.map((s) => s.flipped));
-   16|     expect(flips.length).toBeGreaterThan(0);
-   17|     expect(new Set(flips.map((f) => typeof f))).toEqual(new Set(['boolean']));
-   18|   });
-   19| 
-   20|   test('fields it does not name pass through, for the page', () => {
-   21|     const raw = JSON.parse(readFileSync(FIXTURE, 'utf8'));
-   22|     const run = BundleSchema.parse(raw).runs[''];
-   23|     expect(run && Object.keys(run).sort()).toEqual(Object.keys(raw.runs['']).sort());
-   24|   });
-   25| 
-   26|   const files = existsSync(BUNDLES) ? readdirSync(BUNDLES).filter((f) => /^\d{4}\.json$/.test(f)) : [];
-   27|   test.skipIf(files.length === 0)('parses every served bundle (skips when serve/bundles is absent)', () => {
-   28|     const bad = files.filter((f) => !BundleSchema.safeParse(JSON.parse(readFileSync(path.join(BUNDLES, f), 'utf8'))).success);
-   29|     expect(bad).toEqual([]);
-   30|   });
-   31| });
-   32| 
-   33| describe('RunRequestSchema', () => {
-   34|   const ok = (body: unknown) => RunRequestSchema.safeParse(body).success;
-   35| 
-   36|   test('a plain ask parses, with defaults and the words trimmed', () => {
-   37|     expect(RunRequestSchema.parse({ year: '1920', text: '  the league passes  ' })).toEqual({
-   38|       year: 1920,
-   39|       whatIfs: [],
-   40|       text: 'the league passes',
-   41|       edits: {}
-   42|     });
-   43|   });
-   44| 
-   45|   test('the year is an election year in range', () => {
-   46|     expect(ok({ year: RUN_LIMITS.firstYear })).toBe(true);
-   47|     expect(ok({ year: RUN_LIMITS.lastYear })).toBe(true);
-   48|     expect(ok({ year: 1788 })).toBe(false);
-   49|     expect(ok({ year: 2101 })).toBe(false);
-   50|     expect(ok({ year: 1920.5 })).toBe(false);
-   51|     expect(ok({ year: 'soon' })).toBe(false);
-   52|   });
-   53| 
-   54|   test('typed words: at most 300 characters once trimmed', () => {
-   55|     expect(ok({ year: 1920, text: 'x'.repeat(RUN_LIMITS.text) })).toBe(true);
-   56|     expect(ok({ year: 1920, text: ` ${'x'.repeat(RUN_LIMITS.text)} ` })).toBe(true);
-   57|     expect(ok({ year: 1920, text: 'x'.repeat(RUN_LIMITS.text + 1) })).toBe(false);
-   58|   });
-   59| 
-   60|   test('what-ifs: at most 32 keys of at most 80 characters', () => {
-   61|     const keys = (n: number, len = 8) => Array.from({ length: n }, (_, i) => `${i}`.padStart(len, 'k'));
-   62|     expect(ok({ year: 1920, whatIfs: keys(RUN_LIMITS.whatIfs) })).toBe(true);
-   63|     expect(ok({ year: 1920, whatIfs: keys(RUN_LIMITS.whatIfs + 1) })).toBe(false);
-   64|     expect(ok({ year: 1920, whatIfs: keys(1, RUN_LIMITS.key) })).toBe(true);
-   65|     expect(ok({ year: 1920, whatIfs: keys(1, RUN_LIMITS.key + 1) })).toBe(false);
-   66|   });
-   67| 
-   68|   test('edits: at most 64 groups, keys of at most 80 characters, each change within [-1, 1]', () => {
-   69|     const groups = (n: number) => Object.fromEntries(Array.from({ length: n }, (_, i) => [`g${i}`, { A: 0.1, home: -0.1 }]));
-   70|     expect(ok({ year: 1920, edits: groups(RUN_LIMITS.edits) })).toBe(true);
-   71|     expect(ok({ year: 1920, edits: groups(RUN_LIMITS.edits + 1) })).toBe(false);
-   72|     expect(ok({ year: 1920, edits: { ['k'.repeat(RUN_LIMITS.key + 1)]: { A: 0 } } })).toBe(false);
-   73|     expect(ok({ year: 1920, edits: { women: { A: 1, home: -1 } } })).toBe(true);
-   74|     expect(ok({ year: 1920, edits: { women: { A: 1.01 } } })).toBe(false);
-   75|     expect(ok({ year: 1920, edits: { women: { A: Number.POSITIVE_INFINITY } } })).toBe(false);
-   76|     expect(ok({ year: 1920, edits: { women: { nobody: 0.1 } } })).toBe(false);
-   77|   });
-   78| });
 ```

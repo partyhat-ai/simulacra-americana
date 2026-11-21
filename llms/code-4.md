@@ -1,7 +1,897 @@
 # synthetic-electorate-toy: source and docs, part 4 of 17
 
-Generated from commit `e5e4f20fbaeb` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
-Files `scripts/harness/build_franchise.py` to `scripts/harness/build_population_republic.py`. Lines are numbered as in the repository.
+Generated from commit `6a200effe03e` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Files `scripts/harness/build_corpus.py` to `scripts/harness/build_population_mid.py`. Lines are numbered as in the repository.
+
+## `scripts/harness/build_corpus.py`
+
+```python
+    1| #!/usr/bin/env python3
+    2| """build_corpus.py — dated Chronicling America corpus for one election year.
+    3| 
+    4| Builds C/sources/corpus_<year>.jsonl in the 1920 corpus format (see
+    5| C/sources/PROVENANCE-sources.md): page-level items from the loc.gov
+    6| Chronicling America collection, each with a ~120-word excerpt cut
+    7| programmatically from the fetched OCR, dated from 1 September of the election
+    8| year through the day before election day (no item after the cutoff).
+    9| 
+   10| Usage:
+   11|   python scripts/harness/build_corpus.py 1896 [1932 ...] --cache-dir DIR [--out-dir DIR]
+   12|   python scripts/harness/build_corpus.py --provenance 1896 1932 --cache-dir DIR  # markdown
+   13| 
+   14| Politeness: single-threaded; >=3.2 s between www.loc.gov searches, >=1.1 s
+   15| between tile.loc.gov OCR fetches; exponential backoff (honouring Retry-After)
+   16| on 429/5xx/Cloudflare errors; every HTTP response is cached on disk so reruns
+   17| make no new requests. Descriptive User-Agent.
+   18| 
+   19| Selection is fully automatic (no LLM): per topic, one national search plus the
+   20| best-covered state in each census region (from the national query's
+   21| location_state facet), plus a second national query. The top hits are fetched,
+   22| the densest topic-keyword window of the OCR is excerpted, scored for OCR
+   23| readability, ad/patent-medicine noise, prediction talk and candidate mentions,
+   24| and items are then picked round-robin across regions with per-paper caps and
+   25| near-duplicate (shingle Jaccard) rejection.
+   26| """
+   27| from __future__ import annotations
+   28| 
+   29| import argparse
+   30| import datetime as dt
+   31| import hashlib
+   32| import http.client
+   33| import json
+   34| import math
+   35| import os
+   36| import re
+   37| import sys
+   38| import tempfile
+   39| import time
+   40| import urllib.error
+   41| import urllib.parse
+   42| import urllib.request
+   43| 
+   44| UA = ("SimulacraHarness-corpus-builder/1.0 (historical election research; "
+   45|       "single-threaded, cached, backs off on 429)")
+   46| SEARCH = "https://www.loc.gov/collections/chronicling-america/"
+   47| DEFAULT_CACHE = os.environ.get("CORPUS_BUILD_CACHE") or os.path.join(
+   48|     tempfile.gettempdir(), "simharness_corpus_build_cache")
+   49| DEFAULT_OUT = os.path.expanduser(
+   50|     "~/research_notes/historical_election_sim_data/harness_cache/sources")
+   51| 
+   52| # ---------------------------------------------------------------- geography
+   53| REGION = {}
+   54| for _r, _ss in {
+   55|     "Northeast": ["maine", "new hampshire", "vermont", "massachusetts", "rhode island",
+   56|                   "connecticut", "new york", "new jersey", "pennsylvania"],
+   57|     "Midwest": ["ohio", "indiana", "illinois", "michigan", "wisconsin", "minnesota", "iowa",
+   58|                 "missouri", "north dakota", "south dakota", "nebraska", "kansas", "dakota"],
+   59|     "South": ["delaware", "maryland", "district of columbia", "virginia", "west virginia",
+   60|               "north carolina", "south carolina", "georgia", "florida", "kentucky",
+   61|               "tennessee", "alabama", "mississippi", "arkansas", "louisiana", "oklahoma",
+   62|               "texas", "indian territory"],
+   63|     "West": ["montana", "idaho", "wyoming", "colorado", "new mexico", "arizona", "utah",
+   64|              "nevada", "washington", "oregon", "california", "alaska", "hawaii"],
+   65| }.items():
+   66|     for _s in _ss:
+   67|         REGION[_s] = _r
+   68| REGIONS = ["Northeast", "Midwest", "South", "West"]
+   69| 
+   70| # ------------------------------------------------------------- year configs
+   71| # topics: (label, human description, [search queries], [extra window keywords])
+   72| # names: candidate / running-mate / incumbent / party words (case-sensitive).
+   73| Y: dict[int, dict] = {}
+   74| 
+   75| 
+   76| def year(y, election, names, topics, cutoff=None):
+   77|     e = dt.date.fromisoformat(election)
+   78|     Y[y] = dict(election=e, cutoff=dt.date.fromisoformat(cutoff) if cutoff else e - dt.timedelta(days=1),
+   79|                 names=names, topics=topics)
+   80| 
+   81| 
+   82| GENERIC_PARTY = ["Republican", "Republicans", "Democrat", "Democrats", "Democratic", "Democracy"]
+   83| 
+   84| year(1840, "1840-10-30", ["Harrison", "Tyler", "Van Buren", "Johnson", "Birney", "Whig", "Whigs",
+   85|                           "Loco Foco", "Locofoco", "Locofocos", "Tippecanoe", "Liberty party"] + GENERIC_PARTY, [
+   86|     ("hard_times", "Hard times after the Panic of 1837", ["hard times", "times money scarce"], ["distress", "wages", "credit", "failures"]),
+   87|     ("sub_treasury", "Independent Treasury (sub-treasury)", ["sub treasury", "independent treasury"], ["specie", "treasury"]),
+   88|     ("banks_currency", "Banks, specie payments and paper money", ["specie payments banks", "bank notes currency"], ["suspension", "specie", "currency"]),
+   89|     ("national_bank", "A national bank", ["national bank"], ["bank", "charter"]),
+   90|     ("standing_army", "Militia plan / standing army", ["standing army", "militia"], ["poinsett", "army"]),
+   91|     ("abolition", "Abolition and slavery", ["abolition", "abolitionists slavery"], ["slaves", "slavery"]),
+   92|     ("tariff", "Tariff and home industry", ["tariff", "protection home industry"], ["duties", "manufactures"]),
+   93|     ("public_lands", "Public lands and pre-emption", ["public lands", "pre-emption"], ["lands", "settlers"]),
+   94| ], cutoff="1840-10-29")
+   95| year(1844, "1844-11-01", ["Polk", "Dallas", "Clay", "Frelinghuysen", "Birney", "Tyler", "Whig", "Whigs",
+   96|                           "Loco Foco", "Locofoco", "Locofocos", "Liberty party"] + GENERIC_PARTY, [
+   97|     ("texas_annexation", "Annexation of Texas", ["annexation texas"], ["annex", "texas", "mexico"]),
+   98|     ("tariff_1842", "The tariff of 1842", ["tariff of 1842", "tariff protection"], ["duties", "manufactures"]),
+   99|     ("oregon", "The Oregon question", ["oregon territory", "oregon"], ["british", "boundary"]),
+  100|     ("national_bank", "A national bank", ["national bank"], ["bank", "currency"]),
+  101|     ("slavery_abolition", "Slavery and abolition", ["abolition slavery", "abolitionists"], ["slaves", "slavery"]),
+  102|     ("nativism", "Native Americanism and naturalization", ["native american", "naturalization foreigners"], ["catholic", "riots", "foreigners"]),
+  103|     ("distribution_lands", "Distribution of public land revenue", ["distribution public lands"], ["lands", "states"]),
+  104|     ("hard_money", "Currency and banks", ["currency banks specie"], ["specie", "paper"]),
+  105| ], cutoff="1844-10-31")
+  106| year(1848, "1848-11-07", ["Taylor", "Fillmore", "Cass", "Butler", "Van Buren", "Adams", "Polk", "Whig", "Whigs",
+  107|                           "Free Soil", "Free Soilers", "Barnburner", "Barnburners", "Loco Foco", "Locofoco",
+  108|                           "Locofocos"] + GENERIC_PARTY, [
+  109|     ("wilmot_proviso", "Slavery in the new territories (Wilmot Proviso)", ["wilmot proviso", "slavery territories"], ["slavery", "territory", "proviso"]),
+  110|     ("mexican_war", "The Mexican War and its costs", ["mexican war", "war debt mexico"], ["war", "mexico", "soldiers"]),
+  111|     ("tariff", "The tariff of 1846", ["tariff of 1846", "tariff"], ["duties", "manufactures"]),
+  112|     ("california_gold", "California and the gold discovery", ["california gold"], ["gold", "mines"]),
+  113|     ("internal_improvements", "Rivers, harbors and internal improvements", ["rivers and harbors", "internal improvements"], ["harbor", "river"]),
+  114|     ("immigration_ireland", "Irish famine and immigration", ["ireland famine", "emigrants"], ["irish", "emigrants"]),
+  115|     ("public_lands", "Public lands and homesteads", ["public lands settlers"], ["lands", "settlers"]),
+  116|     ("europe_revolutions", "Revolutions in Europe", ["revolution france", "revolution europe"], ["republic", "france"]),
+  117| ])
+  118| year(1852, "1852-11-02", ["Pierce", "King", "Scott", "Graham", "Hale", "Julian", "Fillmore", "Whig", "Whigs",
+  119|                           "Free Soil", "Free Soilers", "Free Democracy"] + GENERIC_PARTY, [
+  120|     ("fugitive_slave_law", "The Fugitive Slave Law", ["fugitive slave law", "fugitive slave"], ["slave", "fugitive"]),
+  121|     ("compromise_1850", "Finality of the Compromise of 1850", ["compromise measures", "compromise finality"], ["compromise", "agitation"]),
+  122|     ("tariff", "The tariff", ["tariff", "protection iron"], ["duties", "iron"]),
+  123|     ("foreigners", "Immigration and naturalization", ["foreigners naturalization", "adopted citizens"], ["foreign", "germans", "irish"]),
+  124|     ("temperance", "Temperance and the Maine Law", ["maine law", "liquor law temperance"], ["liquor", "temperance"]),
+  125|     ("internal_improvements", "Rivers, harbors and railroads", ["rivers and harbors", "railroad"], ["harbor", "railroad"]),
+  126|     ("homestead", "Homestead / free land", ["homestead bill", "public lands"], ["lands", "homestead"]),
+  127|     ("cuba", "Cuba and filibusters", ["cuba"], ["spain", "filibuster"]),
+  128| ])
+  129| year(1856, "1856-11-04", ["Buchanan", "Breckinridge", "Fremont", "Frémont", "Dayton", "Fillmore", "Donelson",
+  130|                           "Pierce", "Know Nothing", "Know Nothings", "American party", "Black Republican",
+  131|                           "Whig", "Whigs"] + GENERIC_PARTY, [
+  132|     ("kansas", "Violence and slavery in Kansas", ["kansas border ruffians", "kansas"], ["lawrence", "free state", "ruffians"]),
+  133|     ("slavery_extension", "Extension of slavery into the territories", ["slavery extension territories", "nebraska bill"], ["slavery", "territories"]),
+  134|     ("sumner_assault", "The assault on Sumner", ["sumner brooks assault"], ["senate", "assault"]),
+  135|     ("disunion", "Threats of disunion", ["disunion", "dissolution of the union"], ["union", "south"]),
+  136|     ("foreigners_catholics", "Foreigners and Catholics (nativism)", ["foreigners naturalization", "catholics"], ["foreign", "catholic"]),
+  137|     ("temperance", "Temperance / Maine Law", ["maine law", "liquor law"], ["liquor", "temperance"]),
+  138|     ("pacific_railroad", "A Pacific railroad", ["pacific railroad"], ["railroad", "pacific"]),
+  139|     ("cuba_ostend", "Cuba and the Ostend Manifesto", ["cuba ostend", "cuba"], ["spain", "cuba"]),
+  140| ])
+  141| year(1860, "1860-11-06", ["Lincoln", "Hamlin", "Douglas", "Johnson", "Breckinridge", "Lane", "Bell", "Everett",
+  142|                           "Buchanan", "Constitutional Union", "Black Republican", "Wide Awake", "Wide Awakes",
+  143|                           "Fusion"] + GENERIC_PARTY, [
+  144|     ("slavery_territories", "Slavery in the territories", ["slavery territories", "slave code territories"], ["slavery", "territories"]),
+  145|     ("secession", "Secession and disunion", ["secession", "disunion"], ["union", "dissolution"]),
+  146|     ("homestead", "The homestead bill", ["homestead bill", "free homes"], ["lands", "settlers"]),
+  147|     ("tariff", "Protective tariff", ["protective tariff", "tariff"], ["duties", "iron"]),
+  148|     ("john_brown", "John Brown and slave insurrection fears", ["john brown", "insurrection"], ["harper", "insurrection"]),
+  149|     ("pacific_railroad", "A Pacific railroad", ["pacific railroad"], ["railroad", "pacific"]),
+  150|     ("slave_trade", "Reopening the slave trade", ["african slave trade"], ["slave", "trade"]),
+  151|     ("hard_times", "Crops, money and business", ["crops prices money market"], ["crop", "prices"]),
+  152| ])
+  153| year(1864, "1864-11-08", ["Lincoln", "Johnson", "McClellan", "Pendleton", "Fremont", "Frémont", "Union party",
+  154|                           "Copperhead", "Copperheads"] + GENERIC_PARTY, [
+  155|     ("war_peace", "Peace negotiations vs. continuing the war", ["peace negotiations", "armistice"], ["peace", "war"]),
+  156|     ("draft", "The draft and substitutes", ["draft conscription", "drafted substitutes"], ["draft", "quota"]),
+  157|     ("emancipation", "Emancipation and abolition", ["emancipation", "abolition slavery"], ["slaves", "freedom"]),
+  158|     ("soldiers_vote", "Soldiers voting in the field", ["soldiers vote"], ["soldiers", "field"]),
+  159|     ("prices_currency", "Prices, gold and greenbacks", ["gold premium", "high prices"], ["greenbacks", "currency"]),
+  160|     ("arbitrary_arrests", "Arbitrary arrests and civil liberties", ["arbitrary arrests", "habeas corpus"], ["arrest", "military"]),
+  161|     ("war_news", "The military campaigns (Atlanta, Shenandoah)", ["atlanta sherman", "sheridan valley"], ["army", "rebels"]),
+  162|     ("taxes_debt", "War taxes and the debt", ["taxes war debt", "internal revenue"], ["tax", "debt"]),
+  163| ])
+  164| year(1868, "1868-11-03", ["Grant", "Colfax", "Seymour", "Blair", "Johnson"] + GENERIC_PARTY, [
+  165|     ("reconstruction", "Reconstruction of the South", ["reconstruction acts", "reconstruction"], ["military", "southern"]),
+  166|     ("negro_suffrage", "Black suffrage", ["negro suffrage", "colored voters"], ["negro", "suffrage", "colored"]),
+  167|     ("bonds_greenbacks", "Paying the bonds in greenbacks", ["bonds greenbacks", "five-twenty bonds"], ["bonds", "greenbacks", "currency"]),
+  168|     ("taxes", "Taxes and the public debt", ["taxation public debt", "internal revenue tax"], ["tax", "debt"]),
+  169|     ("ku_klux", "Ku Klux violence", ["ku klux", "outrages"], ["klan", "murdered"]),
+  170|     ("impeachment", "The impeachment of the president", ["impeachment"], ["senate", "acquittal"]),
+  171|     ("indian_war", "Indian wars on the plains", ["indian war", "indians"], ["indians", "frontier"]),
+  172|     ("tariff", "Tariff and protection", ["tariff", "protection"], ["duties", "wool"]),
+  173| ])
+  174| year(1872, "1872-11-05", ["Grant", "Wilson", "Greeley", "Brown", "O'Conor", "Liberal Republican",
+  175|                           "Liberal Republicans", "Liberals"] + GENERIC_PARTY, [
+  176|     ("amnesty", "Amnesty for former Confederates", ["amnesty"], ["disabilities", "southern"]),
+  177|     ("ku_klux", "Ku Klux prosecutions and violence", ["ku klux"], ["klan", "outrages"]),
+  178|     ("civil_service_reform", "Civil service reform", ["civil service reform"], ["office", "reform"]),
+  179|     ("credit_mobilier", "Corruption: Credit Mobilier", ["credit mobilier"], ["congress", "stock"]),
+  180|     ("tammany", "The Tammany Ring", ["tammany ring", "tweed"], ["ring", "frauds"]),
+  181|     ("tariff_free_trade", "Tariff vs. free trade", ["free trade", "tariff"], ["duties", "protection"]),
+  182|     ("currency", "Specie payments and currency", ["specie payments", "greenbacks"], ["currency", "gold"]),
+  183|     ("eight_hour", "Labor and the eight-hour day", ["eight hour", "workingmen"], ["labor", "hours"]),
+  184| ])
+  185| year(1876, "1876-11-07", ["Hayes", "Wheeler", "Tilden", "Hendricks", "Cooper", "Grant", "Greenback party",
+  186|                           "Greenbackers"] + GENERIC_PARTY, [
+  187|     ("southern_violence", "Southern elections, rifle clubs and violence", ["rifle clubs", "hamburg massacre"], ["negroes", "colored"]),
+  188|     ("reconstruction", "Carpet-bag rule and Reconstruction", ["carpet bag", "carpet-baggers"], ["southern", "state government"]),
+  189|     ("hard_times", "Hard times and unemployment", ["hard times", "out of employment"], ["work", "wages"]),
+  190|     ("currency", "Resumption and greenbacks", ["resumption act", "greenbacks"], ["specie", "currency"]),
+  191|     ("corruption", "Corruption and reform (Whisky Ring, Belknap)", ["whisky ring", "belknap"], ["fraud", "reform"]),
+  192|     ("indian_war", "The Sioux war", ["sioux war", "custer"], ["indians", "sioux"]),
+  193|     ("schools_sectarian", "Public schools and sectarian funds", ["public schools sectarian"], ["schools", "catholic"]),
+  194|     ("tariff", "Tariff", ["tariff"], ["duties", "protection"]),
+  195| ])
+  196| year(1880, "1880-11-02", ["Garfield", "Arthur", "Hancock", "English", "Weaver", "Hayes", "Greenback party",
+  197|                           "Greenbackers", "Morey"] + GENERIC_PARTY, [
+  198|     ("tariff", "Tariff for revenue vs. protection", ["tariff for revenue", "protective tariff"], ["duties", "protection"]),
+  199|     ("solid_south", "The Solid South and southern elections", ["solid south"], ["southern", "bourbon"]),
+  200|     ("chinese", "Chinese immigration", ["chinese immigration", "chinese"], ["chinese", "coolie"]),
+  201|     ("currency", "Greenbacks and resumption", ["greenbacks resumption", "national banks"], ["currency", "specie"]),
+  202|     ("civil_service", "Civil service reform", ["civil service reform"], ["office", "reform"]),
+  203|     ("exodus", "The Black exodus from the South", ["negro exodus", "exodusters"], ["colored", "kansas"]),
+  204|     ("state_rights", "State rights and federal elections", ["state rights", "federal elections"], ["states", "constitution"]),
+  205|     ("labor", "Workingmen and wages", ["workingmen wages"], ["labor", "wages"]),
+  206| ])
+  207| year(1884, "1884-11-04", ["Cleveland", "Hendricks", "Blaine", "Logan", "Butler", "St. John", "Arthur",
+  208|                           "Mugwump", "Mugwumps", "Greenback party", "Prohibition party"] + GENERIC_PARTY, [
+  209|     ("tariff", "Tariff and protection", ["tariff", "protection american industry"], ["duties", "wool"]),
+  210|     ("civil_service", "Civil service reform", ["civil service reform"], ["office", "spoils"]),
+  211|     ("labor", "Labor and contract labor", ["contract labor", "workingmen wages"], ["labor", "wages"]),
+  212|     ("chinese", "Chinese immigration", ["chinese immigration"], ["chinese", "coolies"]),
+  213|     ("prohibition", "Prohibition", ["prohibition"], ["liquor", "temperance"]),
+  214|     ("monopolies", "Railroads and monopolies", ["monopolies", "railroad monopoly"], ["corporations", "rates"]),
+  215|     ("solid_south", "The Solid South and the colored vote", ["solid south", "colored voters"], ["southern", "negro"]),
+  216|     ("silver", "Silver coinage", ["silver coinage", "silver dollar"], ["silver", "currency"]),
+  217| ])
+  218| year(1888, "1888-11-06", ["Harrison", "Morton", "Cleveland", "Thurman", "Fisk", "Prohibition party",
+  219|                           "Union Labor"] + GENERIC_PARTY, [
+  220|     ("tariff_reform", "Tariff reform / the Mills bill", ["tariff reform", "mills bill"], ["duties", "protection"]),
+  221|     ("surplus", "The Treasury surplus", ["treasury surplus"], ["surplus", "taxation"]),
+  222|     ("wool_protection", "Wool, wages and protection", ["wool tariff", "free wool"], ["wool", "wages"]),
+  223|     ("pensions", "Soldiers' pensions", ["pension veto", "soldiers pensions"], ["pension", "veterans"]),
+  224|     ("trusts", "Trusts", ["trusts"], ["trust", "monopoly"]),
+  225|     ("chinese", "Chinese exclusion", ["chinese exclusion"], ["chinese", "coolies"]),
+  226|     ("prohibition", "Prohibition", ["prohibition"], ["liquor", "saloon"]),
+  227|     ("civil_service", "Civil service reform", ["civil service reform"], ["office", "reform"]),
+  228| ])
+  229| year(1892, "1892-11-08", ["Cleveland", "Stevenson", "Harrison", "Reid", "Weaver", "Field", "Bidwell",
+  230|                           "Populist", "Populists", "People's party", "Peoples party", "Prohibition party"]
+  231|      + GENERIC_PARTY, [
+  232|     ("tariff", "The McKinley tariff", ["mckinley tariff", "tariff reform"], ["duties", "protection"]),
+  233|     ("force_bill", "The Force Bill / federal elections", ["force bill"], ["federal", "elections"]),
+  234|     ("silver", "Free silver", ["free silver", "silver coinage"], ["silver", "currency"]),
+  235|     ("homestead_strike", "The Homestead strike and labor", ["homestead strike", "pinkertons"], ["strikers", "labor"]),
+  236|     ("farmers_alliance", "Farmers' Alliance and the sub-treasury", ["farmers alliance", "sub-treasury"], ["farmers", "alliance"]),
+  237|     ("pensions", "Pensions", ["pensions"], ["pension", "soldiers"]),
+  238|     ("prohibition", "Prohibition", ["prohibition"], ["liquor", "saloon"]),
+  239|     ("railroads_monopolies", "Railroads and monopolies", ["railroad monopolies", "trusts"], ["rates", "corporations"]),
+  240| ])
+  241| year(1896, "1896-11-03", ["McKinley", "Hobart", "Bryan", "Sewall", "Watson", "Palmer", "Buckner", "Cleveland",
+  242|                           "Populist", "Populists", "People's party", "Peoples party", "Popocrat", "Popocrats"]
+  243|      + GENERIC_PARTY, [
+  244|     ("free_silver", "Free silver at 16 to 1", ["free coinage silver", "free silver"], ["silver", "coinage", "16 to 1"]),
+  245|     ("gold_standard", "The gold standard / sound money", ["gold standard", "sound money"], ["gold", "money"]),
+  246|     ("tariff", "Protective tariff", ["protective tariff", "protection"], ["duties", "tariff"]),
+  247|     ("farm_prices", "Farm prices and mortgages", ["price of wheat", "farmers mortgages"], ["wheat", "cotton", "prices"]),
+  248|     ("trusts_railroads", "Trusts and railroads", ["trusts monopolies", "railroad rates"], ["corporations", "trust"]),
+  249|     ("labor_injunctions", "Labor and government by injunction", ["government by injunction", "workingmen wages"], ["labor", "injunction"]),
+  250|     ("income_tax", "The income tax and the Supreme Court", ["income tax"], ["income", "court"]),
+  251|     ("bonds_reserve", "Bond issues and the gold reserve", ["bond issue gold reserve", "bonds"], ["bonds", "reserve"]),
+  252| ])
+  253| year(1900, "1900-11-06", ["McKinley", "Roosevelt", "Bryan", "Stevenson", "Debs", "Woolley", "Populist",
+  254|                           "Populists"] + GENERIC_PARTY, [
+  255|     ("imperialism", "Imperialism and the Philippines", ["imperialism", "philippines"], ["filipinos", "colonies"]),
+  256|     ("trusts", "Trusts", ["trusts"], ["trust", "monopoly"]),
+  257|     ("free_silver", "Free silver", ["free silver"], ["silver", "coinage"]),
+  258|     ("prosperity", "Prosperity and wages (full dinner pail)", ["full dinner pail", "prosperity wages"], ["wages", "work"]),
+  259|     ("coal_strike", "The anthracite coal strike", ["anthracite strike", "coal miners strike"], ["miners", "strike"]),
+  260|     ("china", "China and the Boxer crisis", ["china boxers", "pekin"], ["china", "troops"]),
+  261|     ("boers", "The Boer War", ["boers"], ["boer", "england"]),
+  262|     ("disfranchisement", "Black disfranchisement in the South", ["disfranchise negro", "suffrage amendment"], ["negro", "suffrage"]),
+  263| ])
+  264| year(1904, "1904-11-08", ["Roosevelt", "Fairbanks", "Parker", "Davis", "Debs", "Swallow", "Watson",
+  265|                           "Populist", "Populists"] + GENERIC_PARTY, [
+  266|     ("trusts", "Trusts and corporations", ["trusts", "beef trust"], ["trust", "corporations"]),
+  267|     ("tariff", "Tariff revision", ["tariff revision", "tariff"], ["duties", "protection"]),
+  268|     ("philippines", "The Philippines", ["philippines"], ["filipinos", "islands"]),
+  269|     ("panama_canal", "The Panama Canal", ["panama canal"], ["canal", "isthmus"]),
+  270|     ("labor_strikes", "Strikes and labor (Colorado, packinghouse)", ["strike miners", "packing house strike"], ["strike", "union"]),
+  271|     ("race_suffrage", "Race and the suffrage in the South", ["negro question", "disfranchisement"], ["negro", "suffrage"]),
+  272|     ("pensions", "Pensions (Order No. 78)", ["pension order"], ["pension", "veterans"]),
+  273|     ("cost_of_living", "Prices and wages", ["cost of living", "prices wages"], ["prices", "wages"]),
+  274| ])
+  275| year(1908, "1908-11-03", ["Taft", "Sherman", "Bryan", "Kern", "Debs", "Chafin", "Roosevelt", "Hisgen",
+  276|                           "Independence party"] + GENERIC_PARTY, [
+  277|     ("trusts", "Trusts and corporations", ["trusts", "standard oil"], ["trust", "corporations"]),
+  278|     ("tariff_revision", "Tariff revision", ["tariff revision"], ["duties", "schedules"]),
+  279|     ("bank_guaranty", "Bank deposit guaranty after the 1907 panic", ["guaranty of bank deposits", "guarantee deposits"], ["deposits", "banks"]),
+  280|     ("labor_injunctions", "Labor and injunctions", ["injunction labor", "injunctions"], ["labor", "courts"]),
+  281|     ("railroad_rates", "Railroad rates and regulation", ["railroad rates"], ["rates", "commission"]),
+  282|     ("prohibition", "Local and county option", ["local option", "county option"], ["saloon", "liquor"]),
+  283|     ("campaign_contributions", "Publicity of campaign contributions", ["campaign contributions publicity"], ["contributions", "funds"]),
+  284|     ("conservation", "Conservation of forests and water", ["conservation natural resources", "forests irrigation"], ["forests", "water"]),
+  285| ])
+  286| year(1912, "1912-11-05", ["Wilson", "Marshall", "Taft", "Sherman", "Butler", "Roosevelt", "Johnson", "Debs",
+  287|                           "Seidel", "Chafin", "Progressive party", "Progressives", "Bull Moose",
+  288|                           "Bull Moosers"] + GENERIC_PARTY, [
+  289|     ("trusts", "Trusts and monopoly", ["trusts", "anti-trust"], ["trust", "monopoly"]),
+  290|     ("tariff_cost_of_living", "Tariff and the high cost of living", ["high cost of living", "tariff revision"], ["prices", "duties"]),
+  291|     ("direct_democracy", "Initiative, referendum and recall", ["initiative referendum recall"], ["recall", "referendum"]),
+  292|     ("woman_suffrage", "Votes for women", ["woman suffrage", "votes for women"], ["suffrage", "women"]),
+  293|     ("labor", "Child labor, wages and hours", ["child labor", "minimum wage"], ["labor", "wages"]),
+  294|     ("income_tax", "The income tax amendment", ["income tax amendment"], ["income", "amendment"]),
+  295|     ("currency_banking", "Currency reform and the money trust", ["currency reform", "money trust"], ["banks", "currency"]),
+  296|     ("prohibition", "Saloons and local option", ["local option saloon", "prohibition"], ["saloon", "liquor"]),
+  297| ])
+  298| year(1916, "1916-11-07", ["Wilson", "Marshall", "Hughes", "Fairbanks", "Benson", "Hanly", "Roosevelt",
+  299|                           "Progressive party", "Progressives", "Bull Moose"] + GENERIC_PARTY, [
+  300|     ("preparedness", "Military preparedness", ["preparedness army navy"], ["preparedness", "navy"]),
+  301|     ("european_war", "The European war and neutrality", ["neutrality", "submarine"], ["war", "neutral"]),
+  302|     ("mexico", "Mexico and the border", ["mexican border", "villa"], ["mexico", "border", "guardsmen"]),
+  303|     ("eight_hour_law", "The eight-hour railroad law", ["eight hour law", "adamson"], ["railroad", "brotherhoods"]),
+  304|     ("hyphenates", "German-Americans and the hyphen", ["hyphenated", "german american"], ["hyphen", "german"]),
+  305|     ("woman_suffrage", "Woman suffrage", ["woman suffrage"], ["suffrage", "women"]),
+  306|     ("tariff", "Tariff", ["tariff"], ["duties", "protection"]),
+  307|     ("prohibition", "Prohibition amendments", ["prohibition amendment", "dry"], ["saloon", "liquor"]),
+  308| ])
+  309| year(1928, "1928-11-06", ["Hoover", "Curtis", "Smith", "Robinson", "Thomas", "Coolidge", "Raskob",
+  310|                           "Tammany"] + GENERIC_PARTY, [
+  311|     ("prohibition", "Prohibition and enforcement", ["prohibition enforcement", "wet dry"], ["liquor", "eighteenth"]),
+  312|     ("religion", "Religion in the campaign", ["catholic religious issue", "religious intolerance"], ["catholic", "protestant"]),
+  313|     ("farm_relief", "Farm relief (McNary-Haugen)", ["farm relief", "mcnary-haugen"], ["farmers", "surplus"]),
+  314|     ("prosperity", "Prosperity and business", ["prosperity", "business conditions"], ["prosperity", "employment"]),
+  315|     ("tariff", "Tariff", ["tariff"], ["duties", "protection"]),
+  316|     ("water_power", "Water power and Muscle Shoals", ["muscle shoals", "water power"], ["power", "utilities"]),
+  317|     ("immigration", "Immigration restriction", ["immigration restriction", "national origins"], ["immigration", "quota"]),
+  318|     ("women_voters", "Women voters", ["women voters"], ["women", "register"]),
+  319| ])
+  320| year(1932, "1932-11-08", ["Roosevelt", "Garner", "Hoover", "Curtis", "Thomas", "Foster", "Coolidge",
+  321|                           "Raskob"] + GENERIC_PARTY, [
+  322|     ("unemployment_relief", "Unemployment and relief", ["unemployment relief", "jobless"], ["unemployed", "relief"]),
+  323|     ("farm_crisis", "Farm prices and foreclosures", ["farm holiday", "farm mortgage foreclosure"], ["farmers", "prices"]),
+  324|     ("prohibition_repeal", "Repeal of prohibition", ["prohibition repeal", "repeal eighteenth amendment"], ["repeal", "liquor"]),
+  325|     ("banks", "Bank failures and hoarding", ["bank failure depositors", "hoarding"], ["bank", "deposits"]),
+  326|     ("veterans_bonus", "The veterans' bonus and the Bonus Army", ["bonus army", "veterans bonus"], ["bonus", "veterans"]),
+  327|     ("tariff", "Tariff", ["tariff"], ["duties", "smoot"]),
+  328|     ("rfc_public_works", "Federal loans and public works (RFC)", ["reconstruction finance corporation", "public works"], ["loans", "works"]),
+  329|     ("taxes_economy", "Taxes and government economy", ["sales tax", "taxes economy"], ["tax", "budget"]),
+  330| ])
+  331| year(1936, "1936-11-03", ["Roosevelt", "Garner", "Landon", "Knox", "Lemke", "Thomas", "Browder", "Hoover",
+  332|                           "Union party", "New Deal", "New Dealers"] + GENERIC_PARTY, [
+  333|     ("social_security", "Social security and old-age pensions", ["social security", "old age pension"], ["pension", "security"]),
+  334|     ("townsend_plan", "The Townsend plan", ["townsend plan"], ["townsend", "pension"]),
+  335|     ("relief_wpa", "Relief and the WPA", ["works progress administration", "relief"], ["relief", "wpa"]),
+  336|     ("drought_farm", "Drought and farm programs", ["drought", "agricultural adjustment"], ["farmers", "drought"]),
+  337|     ("labor_organizing", "Labor organizing (CIO)", ["labor union organize", "cio"], ["union", "labor"]),
+  338|     ("spending_debt", "Spending and the national debt", ["national debt", "government spending"], ["debt", "spending"]),
+  339|     ("trade_agreements", "Reciprocal trade agreements", ["reciprocal trade agreements"], ["trade", "tariff"]),
+  340|     ("supreme_court", "The Supreme Court and the NRA/AAA", ["supreme court decision", "nra"], ["court", "constitution"]),
+  341| ])
+  342| year(1940, "1940-11-05", ["Roosevelt", "Wallace", "Willkie", "McNary", "Thomas", "Browder", "Garner",
+  343|                           "New Deal", "New Dealers"] + GENERIC_PARTY, [
+  344|     ("aid_to_britain", "Aid to Britain / destroyers deal", ["aid to britain", "destroyers"], ["britain", "aid"]),
+  345|     ("draft", "The peacetime draft", ["selective service registration", "conscription"], ["draft", "registration"]),
+  346|     ("third_term", "The third-term tradition", ["third term"], ["tradition", "term"]),
+  347|     ("defense_jobs", "Defense spending and jobs", ["national defense contracts", "unemployment"], ["defense", "jobs"]),
+  348|     ("keep_out_of_war", "Keeping out of the war", ["keep out of war", "isolation"], ["war", "peace"]),
+  349|     ("farm_prices", "Farm prices", ["farm prices"], ["farmers", "prices"]),
+  350|     ("labor", "Labor, wages and hours", ["wages hours", "labor union"], ["labor", "wages"]),
+  351|     ("relief_wpa", "Relief and the WPA", ["wpa relief"], ["relief", "wpa"]),
+  352| ])
+  353| year(1944, "1944-11-07", ["Roosevelt", "Truman", "Dewey", "Bricker", "Thomas", "Wallace",
+  354|                           "New Deal", "New Dealers"] + GENERIC_PARTY, [
+  355|     ("soldier_vote", "Servicemen voting", ["soldier vote", "absentee ballots servicemen"], ["ballots", "servicemen"]),
+  356|     ("postwar_jobs", "Postwar jobs and reconversion", ["postwar jobs", "reconversion"], ["jobs", "postwar"]),
+  357|     ("world_organization", "A postwar world organization", ["dumbarton oaks", "world organization peace"], ["peace", "nations"]),
+  358|     ("rationing_prices", "Rationing and price control", ["rationing", "price control opa"], ["ration", "prices"]),
+  359|     ("labor_pac", "Labor and the CIO-PAC", ["political action committee", "labor union"], ["labor", "union"]),
+  360|     ("taxes", "Taxes", ["taxes"], ["tax", "income"]),
+  361|     ("veterans", "Veterans' benefits (GI Bill)", ["veterans benefits", "gi bill"], ["veterans", "benefits"]),
+  362|     ("farm_prices", "Farm prices", ["farm prices"], ["farmers", "prices"]),
+  363| ])
+  364| year(1948, "1948-11-02", ["Truman", "Barkley", "Dewey", "Warren", "Thurmond", "Wright", "Wallace", "Taylor",
+  365|                           "Dixiecrat", "Dixiecrats", "States' Rights", "States Rights", "Progressive party",
+  366|                           "Progressives"] + GENERIC_PARTY, [
+  367|     ("inflation", "High prices and inflation", ["high prices inflation", "cost of living"], ["prices", "inflation"]),
+  368|     ("housing", "The housing shortage", ["housing shortage"], ["housing", "homes"]),
+  369|     ("taft_hartley", "Taft-Hartley and labor", ["taft-hartley"], ["labor", "union"]),
+  370|     ("civil_rights", "Civil rights and the poll tax", ["civil rights", "poll tax"], ["negro", "rights"]),
+  371|     ("berlin_cold_war", "Berlin and the Soviet Union", ["berlin airlift", "russia"], ["soviet", "berlin"]),
+  372|     ("communism_home", "Communists at home", ["un-american activities", "communists"], ["communist", "spy"]),
+  373|     ("farm_price_supports", "Farm price supports", ["price supports", "farm prices"], ["farmers", "supports"]),
+  374|     ("draft", "The peacetime draft", ["draft registration", "selective service"], ["draft", "registration"]),
+  375| ])
+  376| year(1952, "1952-11-04", ["Eisenhower", "Ike", "Nixon", "Stevenson", "Sparkman", "Truman", "Hallinan",
+  377|                           "Taft", "Kefauver"] + GENERIC_PARTY, [
+  378|     ("korea", "The Korean War", ["korea war", "korea truce"], ["korea", "troops"]),
+  379|     ("communism", "Communists in government", ["communists in government", "communism"], ["communist", "loyalty"]),
+  380|     ("corruption", "Corruption in government", ["corruption", "mink coat"], ["corruption", "scandal"]),
+  381|     ("inflation_controls", "Prices, inflation and controls", ["price controls", "inflation"], ["prices", "controls"]),
+  382|     ("taxes", "Taxes", ["taxes"], ["tax", "income"]),
+  383|     ("tidelands_oil", "Tidelands oil", ["tidelands oil"], ["tidelands", "oil"]),
+  384|     ("civil_rights", "Civil rights and FEPC", ["fepc", "civil rights"], ["rights", "negro"]),
+  385|     ("farm_prices", "Farm price supports", ["farm price supports", "farm prices"], ["farmers", "prices"]),
+  386| ])
+  387| year(1956, "1956-11-06", ["Eisenhower", "Ike", "Nixon", "Stevenson", "Kefauver", "Truman"] + GENERIC_PARTY, [
+  388|     ("suez_hungary", "Suez and Hungary", ["suez", "hungary"], ["egypt", "soviet"]),
+  389|     ("h_bomb_tests", "H-bomb tests and the draft", ["h-bomb tests", "hydrogen bomb tests"], ["bomb", "tests"]),
+  390|     ("school_desegregation", "School desegregation", ["desegregation", "integration schools"], ["segregation", "schools"]),
+  391|     ("farm_soil_bank", "Farm prices and the soil bank", ["soil bank", "farm prices"], ["farmers", "prices"]),
+  392|     ("highways", "The highway program", ["highway program", "interstate highway"], ["highway", "roads"]),
+  393|     ("labor", "Labor and wages", ["labor union wages"], ["union", "wages"]),
+  394|     ("taxes", "Taxes and the budget", ["taxes balanced budget"], ["tax", "budget"]),
+  395|     ("cost_of_living", "Cost of living", ["cost of living"], ["prices", "living"]),
+  396| ])
+  397| year(1960, "1960-11-08", ["Kennedy", "Johnson", "Nixon", "Lodge", "Eisenhower", "Ike", "Jack",
+  398|                           "Kennedy-Johnson", "Nixon-Lodge"] + GENERIC_PARTY, [
+  399|     ("cuba_castro", "Castro and Cuba", ["castro cuba"], ["castro", "cuba"]),
+  400|     ("khrushchev_cold_war", "Khrushchev and the cold war", ["khrushchev", "soviet"], ["soviet", "khrushchev"]),
+  401|     ("defense_missiles", "Missiles and national defense", ["missile gap", "missiles defense"], ["missile", "defense"]),
+  402|     ("civil_rights", "Civil rights and sit-ins", ["sit-in", "civil rights"], ["negro", "rights"]),
+  403|     ("religion", "Religion and the presidency", ["catholic president", "religious issue"], ["catholic", "religion"]),
+  404|     ("economy_jobs", "Recession and unemployment", ["unemployment recession"], ["jobs", "unemployment"]),
+  405|     ("farm_surplus", "Farm surplus and prices", ["farm surplus", "farm prices"], ["farmers", "surplus"]),
+  406|     ("medical_care_aged", "Medical care for the aged", ["medical care aged", "social security medical"], ["aged", "medical"]),
+  407| ])
+  408| 
+  409| # --------------------------------------------------------------------- http
+  410| _last = {}
+  411| INTERVAL = {"www.loc.gov": 3.2, "tile.loc.gov": 1.5}
+  412| LOG: list = []
+  413| 
+  414| 
+  415| def _sleep_for(host):
+  416|     gap = INTERVAL.get(host, 1.5)
+  417|     t = _last.get(host, 0)
+  418|     now = time.time()
+  419|     if now - t < gap:
+  420|         time.sleep(gap - (now - t))
+  421|     _last[host] = time.time()
+  422| 
+  423| 
+  424| def fetch_json(url, cache_dir):
+  425|     key = hashlib.sha1(url.encode()).hexdigest()
+  426|     p = os.path.join(cache_dir, "http", key[:2], key + ".json")
+  427|     if os.path.exists(p):
+  428|         with open(p) as f:
+  429|             rec = json.load(f)
+  430|         return rec["body"], rec["ts"]
+  431|     host = urllib.parse.urlparse(url).netloc
+  432|     delay = 15
+  433|     for attempt in range(8):
+  434|         _sleep_for(host)
+  435|         try:
+  436|             req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/json"})
+  437|             with urllib.request.urlopen(req, timeout=60) as r:
+  438|                 raw = r.read().decode("utf-8", "replace")
+  439|             body = json.loads(raw)
+  440|             ts = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+  441|             os.makedirs(os.path.dirname(p), exist_ok=True)
+  442|             with open(p, "w") as f:
+  443|                 json.dump({"url": url, "ts": ts, "body": body}, f)
+  444|             return body, ts
+  445|         except urllib.error.HTTPError as e:
+  446|             if e.code in (429, 500, 502, 503, 504, 520, 521, 522, 524, 525):
+  447|                 ra = e.headers.get("Retry-After") if e.headers else None
+  448|                 wait = max(delay, int(ra) if ra and ra.isdigit() else 0)
+  449|                 print(f"  [http {e.code}] backoff {wait}s {url[:100]}", file=sys.stderr)
+  450|                 time.sleep(wait)
+  451|                 delay = min(delay * 2, 300)
+  452|                 continue
+  453|             if e.code == 404:
+  454|                 return None, None
+  455|             print(f"  [http {e.code}] giving up {url[:100]}", file=sys.stderr)
+  456|             return None, None
+  457|         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError, http.client.HTTPException) as e:
+  458|             print(f"  [err {type(e).__name__}] backoff {delay}s {url[:100]}", file=sys.stderr)
+  459|             time.sleep(delay)
+  460|             delay = min(delay * 2, 300)
+  461|     return None, None
+  462| 
+  463| 
+  464| def search(q, y, state, cache_dir, c=20, facets=False):
+  465|     cfg = Y[y]
+  466|     params = [("q", q), ("dates", f"{y}-09-01/{cfg['cutoff'].isoformat()}"), ("fo", "json"), ("c", str(c)),
+  467|               ("at", "results,pagination" + (",facets" if facets else ""))]
+  468|     if state:
+  469|         params.append(("fa", f"location_state:{state}"))
+  470|     url = SEARCH + "?" + urllib.parse.urlencode(params)
+  471|     body, ts = fetch_json(url, cache_dir)
+  472|     total = None
+  473|     res, fac = [], {}
+  474|     if body:
+  475|         total = (body.get("pagination") or {}).get("of")
+  476|         res = body.get("results") or []
+  477|         for f in body.get("facets") or []:
+  478|             if f.get("field") == "location_state" or "location_state" in str(f.get("type", "")):
+  479|                 for it in f.get("filters", []):
+  480|                     fac[it.get("title", "").lower()] = it.get("count", 0)
+  481|     LOG.append(dict(ts=ts, q=q, state=state or "—", total=total, returned=len(res)))
+  482|     return res, fac
+  483| 
+  484| 
+  485| def ocr_url_for(r):
+  486|     w = r.get("word_coordinates_url") or ""
+  487|     qs = urllib.parse.parse_qs(urllib.parse.urlparse(w).query)
+  488|     seg = (qs.get("segment") or [None])[0]
+  489|     if not seg:
+  490|         return None
+  491|     return ("https://tile.loc.gov/text-services/word-coordinates-service?segment="
+  492|             + urllib.parse.quote(seg, safe="") + "&format=alto_xml&full_text=1")
+  493| 
+  494| 
+  495| def fetch_ocr(url, cache_dir):
+  496|     body, ts = fetch_json(url, cache_dir)
+  497|     if not body or not isinstance(body, dict):
+  498|         return None, ts
+  499|     for v in body.values():
+  500|         if isinstance(v, dict) and "full_text" in v:
+  501|             return v["full_text"], ts
+  502|     return None, ts
+  503| 
+  504| 
+  505| # ------------------------------------------------------------------- text
+  506| _DICT = None
+  507| 
+  508| 
+  509| def words_dict():
+  510|     global _DICT
+  511|     if _DICT is None:
+  512|         s = set()
+  513|         for p in ("/usr/share/dict/words", "/usr/share/dict/web2"):
+  514|             if os.path.exists(p):
+  515|                 with open(p, errors="ignore") as f:
+  516|                     s.update(w.strip().lower() for w in f)
+  517|         s.update("a i the of and to in is was for on that by with as at from are be this which it "
+  518|                  "he his they their has have had not but or an its were been will would who all".split())
+  519|         _DICT = s
+  520|     return _DICT
+  521| 
+  522| 
+  523| def in_dict(w):
+  524|     d = words_dict()
+  525|     if w in d:
+  526|         return True
+  527|     for suf in ("'s", "s", "es", "ed", "d", "ing", "ly", "ies", "ers", "er", "ment", "ments"):
+  528|         if w.endswith(suf) and len(w) - len(suf) >= 2:
+  529|             b = w[: -len(suf)]
+  530|             if b in d or (suf == "ies" and b + "y" in d) or (suf in ("ed", "ing") and b + "e" in d):
+  531|                 return True
+  532|     return False
+  533| 
+  534| 
+  535| def normalize_ocr(t):
+  536|     t = t.replace("^^", "").replace("^", " ").replace("\n", " ")
+  537|     t = re.sub(r"(\w)- (\w)", r"\1\2", t)  # remaining line-break hyphens
+  538|     return re.sub(r"\s+", " ", t).strip()
+  539| 
+  540| 
+  541| STRAY = re.compile(r"^[\|■•»«\*\^_~`ijI!l1;:,\.'\"]{1,2}$")
+  542| 
+  543| 
+  544| def clean_tokens(toks):
+  545|     """Light cleaning: drop stray margin chars silently; collapse runs of garbage
+  546|     tokens to [OCR illegible]. Returns (tokens, changed_with_brackets)."""
+  547|     out, changed = [], False
+  548|     for w in toks:
+  549|         if STRAY.match(w) and w.lower() not in ("i", "a"):
+  550|             continue
+  551|         letters = sum(ch.isalpha() for ch in w)
+  552|         bad = len(w) >= 3 and letters / len(w) < 0.5 and not re.match(r"^[\$\d,\.%-]+$", w)
+  553|         if bad:
+  554|             if not out or out[-1] != "[OCR illegible]":
+  555|                 out.append("[OCR illegible]")
+  556|                 changed = True
+  557|             continue
+  558|         out.append(w)
+  559|     return out, changed
+  560| 
+  561| 
+  562| def quality(toks):
+  563|     al = [re.sub(r"[^a-z']", "", w.lower()).strip("'") for w in toks]
+  564|     al = [w for w in al if len(w) >= 2]
+  565|     if not al:
+  566|         return 0.0
+  567|     return sum(in_dict(w) for w in al) / len(al)
+  568| 
+  569| 
+  570| AD_RX = re.compile(r"\b(pills?|sarsaparilla|druggists?|cures?d?|liniment|bitters|remedy|per bottle|"
+  571|                    r"for sale|bargains?|ladies'? (?:hats|suits)|catarrh|rheumatism|kidney|dyspepsia|"
+  572|                    r"sale price|special sale)\b", re.I)
+  573| PRED_RX = re.compile(r"\b(electoral votes?|will carry|carry the state|majority of \d|plurality|"
+  574|                      r"straw vote|poll shows|betting odds|even money)\b", re.I)
+  575| 
+  576| 
+  577| def kw_list(topic):
+  578|     """Search and extra keywords, cut to 7 letters so they match as word prefixes."""
+  579|     _, _, queries, extra = topic
+  580|     stop = {"the", "of", "and", "to", "in", "for", "by", "a", "on", "with", "out", "is"}
+  581|     kws = {w[:7] for q in queries for w in re.split(r"[\s\-]+", q.lower()) if w and w not in stop and len(w) > 2}
+  582|     kws.update(w.lower()[:7] for w in extra)
+  583|     return sorted(kws)
+  584| 
+  585| 
+  586| def best_window(toks, kws, W=125):
+  587|     lows = [re.sub(r"[^a-z0-9]", "", w.lower()) for w in toks]
+  588|     hit = [1 if any(l.startswith(k.replace(" ", "")) for k in kws) and l else 0 for l in lows]
+  589|     if len(toks) <= W:
+  590|         return 0, len(toks), sum(hit)
+  591|     pref = [0]
+  592|     for h in hit:
+  593|         pref.append(pref[-1] + h)
+  594|     best, bs = -1, 0
+  595|     for s in range(0, len(toks) - W + 1):
+  596|         v = pref[s + W] - pref[s]
+  597|         if v > best:
+  598|             best, bs = v, s
+  599|     # centre the window on the hits a little: shift start back to a sentence start
+  600|     s = bs
+  601|     for j in range(bs, max(bs - 25, -1), -1):
+  602|         if j > 0 and re.search(r"[\.\?!]['\"]?$", toks[j - 1]) and toks[j][:1].isupper():
+  603|             s = j
+  604|             break
+  605|     e = min(len(toks), s + 120)
+  606|     for j in range(e, min(len(toks), s + 160)):
+  607|         if re.search(r"[\.\?!]['\"]?$", toks[j - 1]):
+  608|             e = j
+  609|             break
+  610|     else:
+  611|         for j in range(e, max(s + 90, e - 30), -1):
+  612|             if re.search(r"[\.\?!]['\"]?$", toks[j - 1]):
+  613|                 e = j
+  614|                 break
+  615|     return s, e, pref[e] - pref[s]
+  616| 
+  617| 
+  618| def cand_regex(y):
+  619|     names = Y[y]["names"]
+  620|     pat = r"\b(" + "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True)) + r")\b"
+  621|     rx_names = re.compile(pat)
+  622|     rx_gen = re.compile(r"\b(ticket|nominee|nominees|presidential candidate)\b", re.I)
+  623|     return lambda t: bool(rx_names.search(t) or rx_gen.search(t))
+  624| 
+  625| 
+  626| def lean_of(paper, y):
+  627|     p = paper.lower()
+  628|     if "springfield republican" in p:
+  629|         return "ind"
+  630|     if re.search(r"\b(labor|socialist|appeal to reason|worker|toiler|union record)\b", p):
+  631|         return "ind"
+  632|     if y >= 1856 and re.search(r"\brepublican\b", p) and "democrat" not in p:
+  633|         return "R"
+  634|     if re.search(r"\bdemocrat", p) and "republican" not in p:
+  635|         return "D"
+  636|     return "unknown"
+  637| 
+  638| 
+  639| def shingles(text, n=5):
+  640|     w = re.findall(r"[a-z]+", text.lower())
+  641|     return {" ".join(w[i:i + n]) for i in range(max(0, len(w) - n + 1))}
+  642| 
+  643| 
+  644| # ------------------------------------------------------------------- build
+  645| def first(v):
+  646|     if isinstance(v, list):
+  647|         return v[0] if v else None
+  648|     return v
+  649| 
+  650| 
+  651| def select(cands, topics, target):
+  652|     """Up to `target` items: per topic, round-robin across the least-covered regions (candidate
+  653|     mentions only once half the topic's quota is filled), then the leftovers by score; at most
+  654|     4 items per paper and no near-duplicates (shingle overlap > 0.3)."""
+  655|     per_topic = math.ceil(target / len(topics))
+  656|     chosen, paper_n = [], {}
+  657|     reg_n = {r: 0 for r in REGIONS + ["unknown"]}
+  658| 
+  659|     def ok(c):
+  660|         if paper_n.get(c["lccn"], 0) >= 4:
+  661|             return False
+  662|         for o in chosen:
+  663|             if o["lccn"] == c["lccn"] and o["date"] == c["date"] and o["page"] == c["page"]:
+  664|                 return False
+  665|             a, b = c["_sh"], o["_sh"]
+  666|             if a and b and len(a & b) / max(1, min(len(a), len(b))) > 0.3:
+  667|                 return False
+  668|         return True
+  669| 
+  670|     leftovers = []
+  671|     for topic in topics:
+  672|         pool = sorted([c for c in cands if c["topic"] == topic[0]], key=lambda c: -c["_score"])
+  673|         got = 0
+  674|         while got < per_topic and pool:
+  675|             regs = sorted(REGIONS, key=lambda r: reg_n[r])
+  676|             pick = None
+  677|             for reg in regs:
+  678|                 for c in pool:
+  679|                     if c["region"] == reg and ok(c) and not (c["mentions_candidates"] and got < per_topic // 2):
+  680|                         pick = c
+  681|                         break
+  682|                 if pick:
+  683|                     break
+  684|             if not pick:
+  685|                 for c in pool:
+  686|                     if ok(c):
+  687|                         pick = c
+  688|                         break
+  689|             if not pick:
+  690|                 break
+  691|             pool.remove(pick)
+  692|             chosen.append(pick)
+  693|             paper_n[pick["lccn"]] = paper_n.get(pick["lccn"], 0) + 1
+  694|             reg_n[pick["region"]] = reg_n.get(pick["region"], 0) + 1
+  695|             got += 1
+  696|         leftovers += pool
+  697|     for c in sorted(leftovers, key=lambda c: -c["_score"]):
+  698|         if len(chosen) >= target:
+  699|             break
+  700|         if ok(c):
+  701|             chosen.append(c)
+  702|             paper_n[c["lccn"]] = paper_n.get(c["lccn"], 0) + 1
+  703|     return chosen
+  704| 
+  705| 
+  706| def build_year(y, cache_dir, out_dir, target=88, verbose=True):
+  707|     cfg = Y[y]
+  708|     LOG.clear()
+  709|     start, cutoff = dt.date(y, 9, 1), cfg["cutoff"]
+  710|     is_cand = cand_regex(y)
+  711|     topics = cfg["topics"]
+  712|     seen_pages = set()
+  713|     cands = []
+  714|     rejected = {"date": 0, "no_ocr": 0, "low_quality": 0, "few_hits": 0, "territory": 0}
+  715|     used_states = {r: {} for r in REGIONS}
+  716| 
+  717|     def consider(r, ti, q):
+  718|         rid = r.get("id") or ""
+  719|         if rid in seen_pages:
+  720|             return
+  721|         seen_pages.add(rid)
+  722|         d = r.get("date")
+  723|         try:
+  724|             dd = dt.date.fromisoformat(d)
+  725|         except (TypeError, ValueError):  # missing or malformed date
+  726|             rejected["date"] += 1
+  727|             return
+  728|         if not (start <= dd <= cutoff):
+  729|             rejected["date"] += 1
+  730|             return
+  731|         state = (first(r.get("location_state")) or "").lower()
+  732|         if state in ("hawaii", "alaska") and y < 1960:
+  733|             rejected["territory"] += 1
+  734|             return
+  735|         ou = ocr_url_for(r)
+  736|         if not ou:
+  737|             rejected["no_ocr"] += 1
+  738|             return
+  739|         txt, ts = fetch_ocr(ou, cache_dir)
+  740|         if not txt:
+  741|             rejected["no_ocr"] += 1
+  742|             return
+  743|         toks = normalize_ocr(txt).split(" ")
+  744|         kws = kw_list(topics[ti])
+  745|         s, e, hits = best_window(toks, kws)
+  746|         raw = toks[s:e]
+  747|         qual = quality(raw)
+  748|         if qual < 0.70:
+  749|             rejected["low_quality"] += 1
+  750|             return
+  751|         if hits < 3:
+  752|             rejected["few_hits"] += 1
+  753|             return
+  754|         ctoks, changed = clean_tokens(raw)
+  755|         excerpt = " ".join(ctoks).strip()
+  756|         nwords = len(excerpt.split())
+  757|         if nwords < 60:
+  758|             rejected["few_hits"] += 1
+  759|             return
+  760|         mc = is_cand(excerpt)
+  761|         ads = len(AD_RX.findall(excerpt))
+  762|         preds = len(PRED_RX.findall(excerpt))
+  763|         score = hits / max(1, nwords) * 40 + (qual - 0.7) * 20 - 4 * mc - 2.5 * ads - 2 * preds
+  764|         m = re.search(r"[?&]sp=(\d+)", rid)
+  765|         sp = m.group(1) if m else "1"
+  766|         lccn = first(r.get("number_lccn")) or ""
+  767|         paper = first(r.get("partof_title")) or (r.get("title") or "")
+  768|         url = re.sub(r"&q=.*$", "", r.get("url") or rid).replace("http://", "https://")
+  769|         cands.append(dict(
+  770|             id=f"ca-{lccn}-{d}-{sp}", year=y, date=d, paper=paper,
+  771|             city=(first(r.get("location_city")) or "").title(), state=state.title(),
+  772|             region=REGION.get(state, "unknown"), lccn=lccn, page=int(sp),
+  773|             url=url, ocr_url=ou, topic=topics[ti][0], topic_code=f"T{ti + 1}",
+  774|             topic_label=topics[ti][1], query=q, excerpt=excerpt, excerpt_words=nwords,
+  775|             excerpt_is_verbatim=not changed, mentions_candidates=mc, leans=lean_of(paper, y),
+  776|             ocr_quality=round(qual, 3), retrieved_at=ts, _score=score, _sh=shingles(excerpt)))
+  777| 
+  778|     for ti, topic in enumerate(topics):
+  779|         label, desc, queries, extra = topic
+  780|         if verbose:
+  781|             print(f"[{y}] T{ti + 1} {label}", file=sys.stderr)
+  782|         # loc.gov searches take ~30 s each server-side, so: national searches with
+  783|         # larger pages first, then a state-facet search only for regions that
+  784|         # are still short of candidates for this topic.
+  785|         res, fac = search(queries[0], y, None, cache_dir, c=40, facets=True)
+  786|         for r in res[:10]:
+  787|             consider(r, ti, queries[0])
+  788|         for q in queries[1:]:
+  789|             rs, _ = search(q, y, None, cache_dir, c=30)
+  790|             for r in rs[:8]:
+  791|                 consider(r, ti, q)
+  792|         for reg in REGIONS:
+  793|             have = sum(1 for c in cands if c["topic"] == label and c["region"] == reg)
+  794|             if have >= 2:
+  795|                 continue
+  796|             opts = [(c, s) for s, c in fac.items() if REGION.get(s) == reg and c > 0
+  797|                     and not (s in ("hawaii", "alaska") and y < 1960)]
+  798|             if not opts:
+  799|                 continue
+  800|             opts.sort(key=lambda cs: (used_states[reg].get(cs[1], 0), -cs[0]))
+  801|             st = opts[0][1]
+  802|             used_states[reg][st] = used_states[reg].get(st, 0) + 1
+  803|             rs, _ = search(queries[0], y, st, cache_dir, c=15)
+  804|             for r in rs[:6]:
+  805|                 consider(r, ti, queries[0])
+  806| 
+  807|     chosen = select(cands, topics, target)
+  808|     chosen.sort(key=lambda c: (c["topic_code"], c["date"], c["id"]))
+  809|     assert all(c["date"] <= cutoff.isoformat() for c in chosen)
+  810|     os.makedirs(out_dir, exist_ok=True)
+  811|     outp = os.path.join(out_dir, f"corpus_{y}.jsonl")
+  812|     with open(outp, "w") as f:
+  813|         for c in chosen:
+  814|             f.write(json.dumps({k: v for k, v in c.items() if not k.startswith("_")}, ensure_ascii=False) + "\n")
+  815|     meta = dict(year=y, election=cfg["election"].isoformat(), cutoff=cutoff.isoformat(),
+  816|                 n_items=len(chosen), n_candidates=len(cands), n_queries=len(LOG),
+  817|                 pages_seen=len(seen_pages), rejected=rejected,
+  818|                 topics=[dict(code=f"T{i + 1}", label=t[0], desc=t[1], queries=t[2],
+  819|                              n=sum(c["topic"] == t[0] for c in chosen),
+  820|                              regions={r: sum(c["topic"] == t[0] and c["region"] == r for c in chosen)
+  821|                                       for r in REGIONS}) for i, t in enumerate(topics)],
+  822|                 mentions_candidates=sum(c["mentions_candidates"] for c in chosen),
+  823|                 verbatim=sum(c["excerpt_is_verbatim"] for c in chosen),
+  824|                 leans={k: sum(c["leans"] == k for c in chosen) for k in ("R", "D", "ind", "unknown")},
+  825|                 states=sorted({c["state"] for c in chosen}),
+  826|                 date_range=[min((c["date"] for c in chosen), default=None),
+  827|                             max((c["date"] for c in chosen), default=None)],
+  828|                 queries=list(LOG))
+  829|     with open(os.path.join(cache_dir, f"meta_{y}.json"), "w") as f:
+  830|         json.dump(meta, f, indent=1, default=str)
+  831|     print(f"[{y}] wrote {len(chosen)} items ({len(cands)} candidates, {len(LOG)} queries) -> {outp}",
+  832|           file=sys.stderr)
+  833|     return meta
+  834| 
+  835| 
+  836| def provenance_md(years, cache_dir):
+  837|     out = []
+  838|     for y in years:
+  839|         p = os.path.join(cache_dir, f"meta_{y}.json")
+  840|         if not os.path.exists(p):
+  841|             continue
+  842|         with open(p) as f:
+  843|             m = json.load(f)
+  844|         ts = [q["ts"] for q in m["queries"] if q.get("ts")]
+  845|         out.append(f"\n### corpus_{y}.jsonl\n")
+  846|         out.append(f"- Election {m['election']}; cutoff {m['cutoff']}; search filter "
+  847|                    f"`dates={y}-09-01/{m['cutoff']}`. Item dates {m['date_range'][0]} to {m['date_range'][1]}.")
+  848|         out.append(f"- **{m['n_items']} items** from {m['n_candidates']} scored candidates "
+  849|                    f"({m['pages_seen']} distinct pages returned); {m['n_queries']} searches"
+  850|                    + (f", retrieved {min(ts)} to {max(ts)} UTC" if ts else "") + ".")
+  851|         out.append(f"- Rejected before scoring: {m['rejected']}.")
+  852|         out.append(f"- `mentions_candidates=true`: {m['mentions_candidates']}; verbatim: {m['verbatim']}; "
+  853|                    f"leans: {m['leans']}; states ({len(m['states'])}): {', '.join(m['states'])}.")
+  854|         out.append("\n| Code | topic | Items | NE | MW | S | W | Queries |\n|---|---|---|---|---|---|---|---|")
+  855|         for t in m["topics"]:
+  856|             r = t["regions"]
+  857|             out.append(f"| {t['code']} | `{t['label']}` — {t['desc']} | {t['n']} | {r['Northeast']} | "
+  858|                        f"{r['Midwest']} | {r['South']} | {r['West']} | {'; '.join('`'+q+'`' for q in t['queries'])} |")
+  859|     return "\n".join(out)
+  860| 
+  861| 
+  862| def main():
+  863|     ap = argparse.ArgumentParser()
+  864|     ap.add_argument("years", nargs="+", type=int)
+  865|     ap.add_argument("--cache-dir", default=DEFAULT_CACHE)
+  866|     ap.add_argument("--out-dir", default=DEFAULT_OUT)
+  867|     ap.add_argument("--target", type=int, default=88)
+  868|     ap.add_argument("--provenance", action="store_true")
+  869|     a = ap.parse_args()
+  870|     os.makedirs(a.cache_dir, exist_ok=True)
+  871|     if a.provenance:
+  872|         print(provenance_md(a.years, a.cache_dir))
+  873|         return
+  874|     for y in a.years:
+  875|         if y not in Y:
+  876|             print(f"no config for {y}", file=sys.stderr)
+  877|             continue
+  878|         try:
+  879|             build_year(y, a.cache_dir, a.out_dir, target=a.target)
+  880|         except Exception as e:  # keep going across years
+  881|             print(f"[{y}] FAILED: {type(e).__name__}: {e}", file=sys.stderr)
+  882| 
+  883| 
+  884| if __name__ == "__main__":
+  885|     main()
+```
 
 ## `scripts/harness/build_franchise.py`
 
@@ -968,675 +1858,4 @@ Files `scripts/harness/build_franchise.py` to `scripts/harness/build_population_
   325|             est = df[df.note.str.startswith('[I]')]['count'].sum()
   326|             print(f'wrote {name}: {len(df)} rows, {df.state.nunique()} states, {df["count"].sum():,.0f} '
   327|                   f'({df[df.sex == "F"]["count"].sum():,.0f} women; {est / df["count"].sum():.0%} of count in [I] rows)')
-```
-
-## `scripts/harness/build_population_modern.py`
-
-```python
-    1| """NHGIS extract (nhgis_extract_modern.py) -> population/adults18_<year>_by_state_nhgis.csv
-    2| for 1980-2024: adults 18+ by state x sex x {white_nh_native, black_nh_native,
-    3| other_native, naturalized, noncitizen}, in the long format of build_population.
-    4| 
-    5|     python3 scripts/harness/build_population_modern.py 2000 [--extract N]   # one year
-    6|     python3 scripts/harness/build_population_modern.py all                  # every year in BUILDERS
-    7| 
-    8| (Only this CLI writes these tables: build_population.py is 21+ and stops at 1970.)
-    9| 
-   10| Sources by year (all NHGIS, state level):
-   11|   1980  STF2b NTB8B sex x age, iterated all / white not Spanish / Black not Spanish (100%);
-   12|         STF4Pb NTPB9 nativity x citizenship iterated all / white / Black / Spanish (sample,
-   13|         all ages); STF2a NTA13 Spanish origin by race. Not crossed with age: foreign-born
-   14|         adults = FB all ages x 1990 state adult share by citizenship [I]; race FB net of
-   15|         Spanish FB by the state's Spanish race mix [I]; FB sex split from 2000 [I].
-   16|   1990  MARS NP1 age x Hispanic x sex x race (white/Black NH 18+ by sex); STF3 NP37
-   17|         age x citizenship (sample); STF4b NPB20 nativity iterated by WNH/BNH (all ages,
-   18|         adult share [I]); FB sex split from 2000 [I].
-   19|   2000  SF4 PCT044B/C sex x 18+ x nativity / citizenship iterated all / WNH / BNH (sample),
-   20|         raked to SF1 P5 (NP005A) 18+ totals.
-   21|   2008  ACS 2006-2010 5-year; 2010, 2012, 2016, 2024 ACS 1-year; 2020 ACS 2016-2020
-   22|         5-year: B05003 (+H white alone NH, +B Black alone). Black NH native = Black alone
-   23|         native x NH share of Black alone in B03002 (all ages) [I]. 2010 and 2020 raked to
-   24|         PL 94-171 18+ state totals.
-   25| Every row's `note` says "tabulated" or what was [I]-estimated.
-   26| """
-   27| import argparse
-   28| import re
-   29| from pathlib import Path
-   30| 
-   31| import pandas as pd
-   32| 
-   33| from nhgis_common import CACHE, NHGIS_DIR, STATE_CODE, frame, row
-   34| 
-   35| EXTRACT = None  # set by CLI or found automatically
-   36| 
-   37| 
-   38| def src() -> Path:
-   39|     global EXTRACT
-   40|     if EXTRACT is None:
-   41|         reqs = sorted(NHGIS_DIR.glob('extract_request_*_modern.json'), key=lambda p: int(p.name.split('_')[2]))
-   42|         EXTRACT = int(reqs[-1].name.split('_')[2])
-   43|     d = NHGIS_DIR / f'extract_{EXTRACT}'
-   44|     return next(p for p in d.iterdir() if p.is_dir() and p.name.endswith('_csv'))
-   45| 
-   46| 
-   47| _CACHE = {}
-   48| FILE_OF = {}       # dataset name -> csv path
-   49| TABLE_PREFIX = {}  # (dataset, source table code) -> NHGIS column prefix
-   50| 
-   51| 
-   52| def load_prefixes():
-   53|     """Every codebook names its dataset ('Dataset: ... NHGIS code: 2024_ACS1') and, per table,
-   54|     'Source code: B05003 / NHGIS code: ATMV' (the column prefix)."""
-   55|     if FILE_OF:
-   56|         return
-   57|     for cb in src().glob('*_codebook.txt'):
-   58|         t = cb.read_text(encoding='latin-1')
-   59|         ds = re.search(r'Dataset:.*\n\s*NHGIS code:\s*(\S+)', t).group(1)
-   60|         FILE_OF[ds] = cb.with_name(cb.name.replace('_codebook.txt', '.csv'))
-   61|         for m in re.finditer(r'Source code:\s*(\S+)\s*\n\s*NHGIS code:\s*(\S+)', t):
-   62|             TABLE_PREFIX[(ds, m.group(1))] = m.group(2)
-   63| 
-   64| 
-   65| def read(ds: str) -> tuple:
-   66|     """Return (df indexed by state with code columns, {code: description})."""
-   67|     if ds in _CACHE:
-   68|         return _CACHE[ds]
-   69|     load_prefixes()
-   70|     raw = pd.read_csv(FILE_OF[ds], encoding='latin-1', header=None, low_memory=False, dtype=str)
-   71|     codes, descs = list(raw.iloc[0]), list(raw.iloc[1])
-   72|     d = raw.iloc[2:].copy()
-   73|     d.columns = codes
-   74|     d = d[d.STATE.str.casefold().isin(STATE_CODE)].copy()
-   75|     d['state'] = d.STATE.str.casefold().map(STATE_CODE)
-   76|     d = d.set_index('state')
-   77|     desc = {c: str(x) for c, x in zip(codes, descs)}
-   78|     ctx = {'GISJOIN', 'YEAR', 'STATE', 'STATEA', 'AREANAME', 'NAME_E', 'NAME_M', 'GEOID', 'STUSAB', 'REGIONA', 'DIVISIONA',
-   79|            'state'}
-   80|     for c in codes:
-   81|         if c not in ctx:
-   82|             d[c] = pd.to_numeric(d[c], errors='coerce')
-   83|     _CACHE[ds] = (d, desc)
-   84|     return _CACHE[ds]
-   85| 
-   86| 
-   87| def cols(desc: dict, *pats, table=None) -> list:
-   88|     """Codes whose description matches every regex in pats (and the table code prefix if given)."""
-   89|     out = []
-   90|     for c, s in desc.items():
-   91|         if table and not str(c).startswith(table):
-   92|             continue
-   93|         if all(re.search(p, s) for p in pats):
-   94|             out.append(c)
-   95|     return out
-   96| 
-   97| 
-   98| def is_adult(label: str) -> bool:
-   99|     for part in re.split(r'>>|:', label):
-  100|         p = part.strip()
-  101|         if p.startswith('Under'):
-  102|             return False
-  103|         m = re.match(r'(\d+)', p)
-  104|         if m and ('year' in p or re.fullmatch(r'\d+( to \d+| and \d+)?( years)?( and over)?', p)):
-  105|             return int(m.group(1)) >= 18
-  106|     raise ValueError(f'no age in {label!r}')
-  107| 
-  108| 
-  109| LABEL = {'white_nh_native': 'White alone/White, not Hispanic, native-born',
-  110|          'black_nh_native': 'Black alone/Black, not Hispanic, native-born',
-  111|          'other_native': 'Native-born, all other (Hispanic any race, Asian, AIAN, other, multiracial)',
-  112|          'naturalized': 'Foreign-born, naturalized citizen', 'noncitizen': 'Foreign-born, not a citizen'}
-  113| 
-  114| 
-  115| def emit(year, parts: dict, tables: dict, notes: dict):
-  116|     """parts: {(sex, group): Series by state}"""
-  117|     df = frame([row(year, st, sex, g, LABEL[g].split(',')[0], LABEL[g], round(float(v), 1), notes.get(g, 'tabulated'),
-  118|                     tables[g]) for (sex, g), s in parts.items() for st, v in s.items()])
-  119|     assert df.state.nunique() == 51, df.state.nunique()
-  120|     assert (df['count'] >= 0).all(), df[df['count'] < 0]
-  121|     return df
-  122| 
-  123| 
-  124| def check(year, df, indep: pd.Series, what: str):
-  125|     tot = df.groupby('state')['count'].sum()
-  126|     gap = (tot - indep.reindex(tot.index)) / indep.reindex(tot.index)
-  127|     print(f'{year}: groups {tot.sum():,.0f} vs {what} {indep.sum():,.0f} (national {100 * (tot.sum() / indep.sum() - 1):+.2f}%; '
-  128|           f'worst state {gap.abs().idxmax()} {100 * gap.abs().max():.2f}%)')
-  129| 
-  130| 
-  131| def split_native(native, wnn, bnn):
-  132|     """other_native = remainder; if WNH+BNH native exceed the sample-based native total, shrink them."""
-  133|     over = (wnn + bnn) / native
-  134|     k = over.clip(lower=1.0)
-  135|     return wnn / k, bnn / k, native - (wnn + bnn) / k
-  136| 
-  137| 
-  138| # ------------------------------------------------------------------- helpers per table
-  139| def pick(d, desc, prefix, *pats):
-  140|     """Sum of the columns of one table whose description matches every regex."""
-  141|     cs = cols(desc, *pats, table=prefix)
-  142|     assert cs, (prefix, pats)
-  143|     return d[cs].sum(axis=1)
-  144| 
-  145| 
-  146| def adult_sum(d, desc, prefix, *pats):
-  147|     cs = [c for c in cols(desc, *pats, table=prefix) if is_adult(desc[c])]
-  148|     assert cs, (prefix, pats)
-  149|     return d[cs].sum(axis=1)
-  150| 
-  151| 
-  152| def fb_sex_shares_2000():
-  153|     """Male share of foreign-born adults by citizenship, by state (SF4 PCT044C, all races)."""
-  154|     d, desc = read('2000_SF4')
-  155|     p = TABLE_PREFIX[('2000_SF4', 'NPCT044C')]
-  156|     out = {}
-  157|     for k, pat in (('nat', r'Naturalized citizen$'), ('nc', r'Not a citizen$')):
-  158|         m = pick(d, desc, p, r'^Total area: All races: Male >> 18 years and over', pat)
-  159|         f = pick(d, desc, p, r'^Total area: All races: Female >> 18 years and over', pat)
-  160|         out[k] = m / (m + f)
-  161|     return out
-  162| 
-  163| 
-  164| def adult_share_1990():
-  165|     """Share of the foreign born who are 18+, by citizenship (1990 STF3 NP37)."""
-  166|     d, desc = read('1990_STF3')
-  167|     p = TABLE_PREFIX[('1990_STF3', 'NP37')]
-  168|     g = lambda *pats: pick(d, desc, p, *pats)  # noqa: E731
-  169|     nat18, nc18 = g(r'^18 years and over', 'Naturalized'), g(r'^18 years and over', 'Not a citizen')
-  170|     nat, nc = nat18 + g(r'^Under 18', 'Naturalized'), nc18 + g(r'^Under 18', 'Not a citizen')
-  171|     return nat18 / nat, nc18 / nc, nat18, nc18, g(r'^18 years and over', r'Native$')
-  172| 
-  173| 
-  174| def assemble(year, by_sex, tables, notes):
-  175|     parts = {}
-  176|     for sex, (nat18, nz, nc, wnn, bnn) in by_sex.items():
-  177|         wnn, bnn, onn = split_native(nat18, wnn.clip(lower=0), bnn.clip(lower=0))
-  178|         parts.update({(sex, 'white_nh_native'): wnn, (sex, 'black_nh_native'): bnn, (sex, 'other_native'): onn,
-  179|                       (sex, 'naturalized'): nz, (sex, 'noncitizen'): nc})
-  180|     return emit(year, parts, tables, notes)
-  181| 
-  182| 
-  183| def rake(df, tot, what):
-  184|     cur = df.groupby('state')['count'].sum()
-  185|     k = tot.reindex(cur.index) / cur
-  186|     print(f'  rake to {what}: state factors {k.min():.4f}-{k.max():.4f}')
-  187|     df = df.copy()
-  188|     df['count'] = (df['count'] * df.state.map(k)).round(1)
-  189|     df['note'] = df['note'] + df.state.map(lambda s: f'; raked x{k[s]:.4f} to {what}')
-  190|     return df
-  191| 
-  192| 
-  193| # ------------------------------------------------------------------- ACS years
-  194| ACS = {2008: ('2006_2010_ACS5b', '2006_2010_ACS5a', 'ACS 2006-2010 5-year'),
-  195|        2010: ('2010_ACS1', '2010_ACS1', 'ACS 2010 1-year'),
-  196|        2012: ('2012_ACS1', '2012_ACS1', 'ACS 2012 1-year'),
-  197|        2016: ('2016_ACS1', '2016_ACS1', 'ACS 2016 1-year'),
-  198|        2020: ('2016_2020_ACS5b', '2016_2020_ACS5a', 'ACS 2016-2020 5-year'),
-  199|        2024: ('2024_ACS1', '2024_ACS1', 'ACS 2024 1-year')}
-  200| 
-  201| 
-  202| def black_ratio_2020(word):
-  203|     """2016-2020 ACS5: Black NH native 18+ of one sex / Black NH all ages, by state."""
-  204|     d, desc = read('2016_2020_ACS5b')
-  205|     da, desca = read('2016_2020_ACS5a')
-  206|     p3 = TABLE_PREFIX[('2016_2020_ACS5a', 'B03002')]
-  207|     bnh = pick(da, desca, p3, r'^Estimates: Not Hispanic or Latino: Black or African American alone$')
-  208|     bh = pick(da, desca, p3, r'^Estimates: Hispanic or Latino: Black or African American alone$')
-  209|     nat = pick(d, desc, TABLE_PREFIX[('2016_2020_ACS5b', 'B05003B')], rf'^Estimates: {word}: 18 years and over: Native$')
-  210|     return nat * bnh / (bnh + bh) / bnh
-  211| 
-  212| 
-  213| def year_acs(year):
-  214|     dsb, dsa, label = ACS[year]
-  215|     d, desc = read(dsb)
-  216|     da, desca = read(dsa)
-  217|     P = lambda ds, t: TABLE_PREFIX[(ds, t)]  # noqa: E731
-  218|     p3 = P(dsa, 'B03002')
-  219|     bnh = pick(da, desca, p3, r'^Estimates: Not Hispanic or Latino: Black or African American alone$')
-  220|     bh = pick(da, desca, p3, r'^Estimates: Hispanic or Latino: Black or African American alone$')
-  221|     r_bnh = bnh / (bnh + bh)
-  222|     # 1-year B05003B is suppressed in a few small-Black-population states (MT, WY, ...): there,
-  223|     # Black NH native 18+ = this year's Black NH (all ages, B03002) x the 2016-2020 5-year ratio [I]
-  224|     pb = P(dsb, 'B05003B')
-  225|     supp = d[[c for c in desc if str(c).startswith(pb + 'E')]].isna().any(axis=1)
-  226|     supp = list(supp[supp].index)
-  227|     by_sex = {}
-  228|     for sex, word in (('M', 'Male'), ('F', 'Female')):
-  229|         g = lambda t, pat: pick(d, desc, P(dsb, t), rf'^Estimates: {word}: 18 years and over: {pat}')  # noqa: E731
-  230|         bnn = g('B05003B', r'Native$') * r_bnh
-  231|         if supp:
-  232|             bnn[supp] = (bnh * black_ratio_2020(word))[supp]
-  233|         by_sex[sex] = (g('B05003', r'Native$'), g('B05003', r'Foreign.born: Naturalized'), g('B05003', r'Foreign.born: Not a U\.S\. citizen'),
-  234|                        g('B05003H', r'Native$'), bnn)
-  235|     b01 = adult_sum(da, desca, P(dsa, 'B01001'), r'^Estimates: (Male|Female): ')
-  236|     tables = {'white_nh_native': f'NHGIS {dsb} B05003H', 'black_nh_native': f'NHGIS {dsb} B05003B x {dsa} B03002',
-  237|               'other_native': f'NHGIS {dsb} B05003 - B05003H - B05003B', 'naturalized': f'NHGIS {dsb} B05003',
-  238|               'noncitizen': f'NHGIS {dsb} B05003'}
-  239|     notes = {'black_nh_native': f'[I] Black alone native 18+ x NH share of Black alone (B03002, all ages); {label}',
-  240|              'other_native': f'remainder: B05003 native 18+ minus white NH and Black NH native; {label}',
-  241|              'white_nh_native': f'tabulated; {label}', 'naturalized': f'tabulated; {label}', 'noncitizen': f'tabulated; {label}'}
-  242|     df = assemble(year, by_sex, tables, notes)
-  243|     m = df.state.isin(supp) & (df.group == 'black_nh_native')
-  244|     df.loc[m, 'note'] = f'[I] B05003B suppressed: Black NH all ages (B03002) x 2016-2020 ACS5 ratio of Black NH native 18+ to Black NH; {label}'
-  245|     check(year, df, b01, f'{dsa} B01001 18+')
-  246|     if year in (2010, 2020):
-  247|         ds = f'{year}_PL94171'
-  248|         dp, descp = read(ds)
-  249|         tot = pick(dp, descp, TABLE_PREFIX[(ds, 'P3' if year == 2020 else 'NP003')], r'^Total$')
-  250|         check(year, df, tot, 'PL 94-171 18+ (before rake)')
-  251|         df = rake(df, tot, f'PL 94-171 {year} 18+ state total')
-  252|     return df
-  253| 
-  254| 
-  255| # ------------------------------------------------------------------- 2000
-  256| def year_2000(year=2000):
-  257|     d, desc = read('2000_SF4')
-  258|     pn, pc = TABLE_PREFIX[('2000_SF4', 'NPCT044B')], TABLE_PREFIX[('2000_SF4', 'NPCT044C')]
-  259|     it = {'all': 'All races', 'w': 'White alone, not Hispanic or Latino', 'b': 'Black or African American alone, not Hispanic or Latino'}
-  260|     by_sex = {}
-  261|     for sex, word in (('M', 'Male'), ('F', 'Female')):
-  262|         g = lambda p, i, pat: pick(d, desc, p, rf'^Total area: {re.escape(it[i])}: {word} >> 18 years and over >> {pat}$')  # noqa: E731
-  263|         by_sex[sex] = (g(pn, 'all', 'Native'), g(pc, 'all', 'Naturalized citizen'), g(pc, 'all', 'Not a citizen'),
-  264|                        g(pn, 'w', 'Native'), g(pn, 'b', 'Native'))
-  265|     tables = {'white_nh_native': 'NHGIS 2000_SF4 PCT44B (White alone, not Hispanic)',
-  266|               'black_nh_native': 'NHGIS 2000_SF4 PCT44B (Black alone, not Hispanic)',
-  267|               'other_native': 'NHGIS 2000_SF4 PCT44B (all - WNH - BNH)', 'naturalized': 'NHGIS 2000_SF4 PCT44C',
-  268|               'noncitizen': 'NHGIS 2000_SF4 PCT44C'}
-  269|     notes = {'other_native': 'remainder: native 18+ minus white NH and Black NH native (SF4 sample)'}
-  270|     df = assemble(2000, by_sex, tables, {g: notes.get(g, 'tabulated (SF4 sample)') for g in LABEL})
-  271|     ds, dsc = read('2000_SF1a')
-  272|     tot = pick(ds, dsc, TABLE_PREFIX[('2000_SF1a', 'NP005A')], r'^Total$')
-  273|     check(2000, df, tot, 'SF1 P5 18+ (before rake)')
-  274|     return rake(df, tot, 'SF1 P5 2000 18+ state total (100% count)')
-  275| 
-  276| 
-  277| # ------------------------------------------------------------------- 1990
-  278| def year_1990(year=1990):
-  279|     r_nat, r_nc, nat18, nc18, nat_s = adult_share_1990()
-  280|     fb_a = (nat18 + nc18) / (nat18 / r_nat + nc18 / r_nc)
-  281|     msh = fb_sex_shares_2000()
-  282|     dm, descm = read('1990_MARS')
-  283|     pm = TABLE_PREFIX[('1990_MARS', 'NP1')]
-  284|     d4, desc4 = read('1990_STF4b')
-  285|     p4 = TABLE_PREFIX[('1990_STF4b', 'NPB20')]
-  286|     fb = lambda it: pick(d4, desc4, p4, rf'^Total area: {re.escape(it)}: Foreign born')  # noqa: E731
-  287|     fbw, fbb = fb('White, not of Hispanic origin') * fb_a, fb('Black, not of Hispanic origin') * fb_a
-  288|     # 1990 STF1 NP13 is Hispanic-only; the 100%-based 18+ by sex comes from MARS (all races, both origins)
-  289|     tot100 = {s: adult_sum(dm, descm, pm, rf'>> {w} >>') for s, w in (('M', 'Male'), ('F', 'Female'))}
-  290|     sample = nat_s + nat18 + nc18
-  291|     k = (tot100['M'] + tot100['F']) / sample  # sample -> 100% count
-  292|     by_sex = {}
-  293|     for sex, word in (('M', 'Male'), ('F', 'Female')):
-  294|         ms = (lambda x: x) if sex == 'M' else (lambda x: 1 - x)
-  295|         nz, nc = nat18 * k * ms(msh['nat']), nc18 * k * ms(msh['nc'])
-  296|         fbsh = (nz + nc) / (nat18 * k + nc18 * k)
-  297|         wnh = adult_sum(dm, descm, pm, rf'>> Not Hispanic >> {word} >> White$')
-  298|         bnh = adult_sum(dm, descm, pm, rf'>> Not Hispanic >> {word} >> Black$')
-  299|         by_sex[sex] = (tot100[sex] - nz - nc, nz, nc, wnh - fbw * k * fbsh, bnh - fbb * k * fbsh)
-  300|     tables = {'white_nh_native': 'NHGIS 1990_MARS NP1 - 1990_STF4b NPB20 (White, not Hispanic) FB',
-  301|               'black_nh_native': 'NHGIS 1990_MARS NP1 - 1990_STF4b NPB20 (Black, not Hispanic) FB',
-  302|               'other_native': 'NHGIS 1990_MARS NP1 18+ - FB - WNH - BNH native', 'naturalized': 'NHGIS 1990_STF3 NP37',
-  303|               'noncitizen': 'NHGIS 1990_STF3 NP37'}
-  304|     notes = {'white_nh_native': '[I] MARS white NH 18+ minus WNH foreign born (all ages x FB adult share, NP37) x FB sex share (2000)',
-  305|              'black_nh_native': '[I] MARS Black NH 18+ minus BNH foreign born (all ages x FB adult share, NP37) x FB sex share (2000)',
-  306|              'other_native': '[I] remainder of 100%-based 18+ (MARS NP1)',
-  307|              'naturalized': '[I] STF3 NP37 18+ (sample, scaled to 100% count); sex split from 2000 SF4 PCT44C',
-  308|              'noncitizen': '[I] STF3 NP37 18+ (sample, scaled to 100% count); sex split from 2000 SF4 PCT44C'}
-  309|     df = assemble(1990, by_sex, tables, notes)
-  310|     check(1990, df, sample, 'STF3 NP37 18+ (sample, independent)')
-  311|     print(f'  national 18+ {df["count"].sum():,.0f} vs published 1990 census 18+ 185,105,441 '
-  312|           f'({100 * (df["count"].sum() / 185105441 - 1):+.3f}%)')
-  313|     return df
-  314| 
-  315| 
-  316| # ------------------------------------------------------------------- 1980
-  317| def year_1980(year=1980):
-  318|     r_nat, r_nc, *_ = adult_share_1990()
-  319|     msh = fb_sex_shares_2000()
-  320|     d2, desc2 = read('1980_STF2b')
-  321|     p2 = TABLE_PREFIX[('1980_STF2b', 'NTB8B')]
-  322|     d4, desc4 = read('1980_STF4Pb')
-  323|     p4 = TABLE_PREFIX[('1980_STF4Pb', 'NTPB9')]
-  324|     da, desca = read('1980_STF2a')
-  325|     pa = TABLE_PREFIX[('1980_STF2a', 'NTA13')]
-  326|     d1, desc1 = read('1980_STF1')
-  327|     p1 = TABLE_PREFIX[('1980_STF1', 'NT10B')]
-  328|     g4 = lambda it, pat: pick(d4, desc4, p4, rf'^Total area: {re.escape(it)}: {pat}')  # noqa: E731
-  329|     nat_all, nc_all = g4('All races', 'Foreign born: Naturalized'), g4('All races', 'Foreign born: Not a citizen')
-  330|     sample_all = nat_all + nc_all + g4('All races', 'Native')
-  331|     nat18, nc18 = nat_all * r_nat, nc_all * r_nc
-  332|     fb_a = (nat18 + nc18) / (nat_all + nc_all)
-  333|     sp_fb = g4('Spanish origin subtotal (subtotal of summaries 20-23)', 'Foreign born')
-  334|     sp = da[[c for c in desca if str(c).startswith(pa) and desca[c].startswith('Spanish origin')]].sum(axis=1)
-  335|     sp_w = pick(da, desca, pa, r'^Spanish origin >> White$') / sp
-  336|     sp_b = pick(da, desca, pa, r'^Spanish origin >> Black$') / sp
-  337|     fbw = (g4('White', 'Foreign born') - sp_fb * sp_w).clip(lower=0) * fb_a
-  338|     fbb = (g4('Black', 'Foreign born') - sp_fb * sp_b).clip(lower=0) * fb_a
-  339|     it = lambda s: re.escape(s)  # noqa: E731
-  340|     by_sex, tot100 = {}, {}
-  341|     for sex, word in (('M', 'Male'), ('F', 'Female')):
-  342|         a = lambda iname: adult_sum(d2, desc2, p2, rf'^Total area: {it(iname)}: {word} >>')  # noqa: E731
-  343|         tot100[sex] = a('All races')
-  344|         ms = (lambda x: x) if sex == 'M' else (lambda x: 1 - x)
-  345|         # the sample nativity table is all ages; scale its FB counts to the 100% count
-  346|         k = d2[cols(desc2, r'^Total area: All races: ', table=p2)].sum(axis=1) / sample_all
-  347|         nz, nc = nat18 * k * ms(msh['nat']), nc18 * k * ms(msh['nc'])
-  348|         fbsh = (nz + nc) / ((nat18 + nc18) * k)
-  349|         wnh = a('White not of Spanish origin (on STF4B; not available for MCD\'s or CCD\'s under 2500')
-  350|         bnh = a('Black not of Spanish origin (on STF4B; not available for MCD\'s or CCD\'s under 2500')
-  351|         by_sex[sex] = (tot100[sex] - nz - nc, nz, nc, wnh - fbw * k * fbsh, bnh - fbb * k * fbsh)
-  352|     tables = {'white_nh_native': 'NHGIS 1980_STF2b NTB8B (White not of Spanish origin) - 1980_STF4Pb NTPB9 FB',
-  353|               'black_nh_native': 'NHGIS 1980_STF2b NTB8B (Black not of Spanish origin) - 1980_STF4Pb NTPB9 FB',
-  354|               'other_native': 'NHGIS 1980_STF2b NTB8B - FB - WNH - BNH native', 'naturalized': 'NHGIS 1980_STF4Pb NTPB9',
-  355|               'noncitizen': 'NHGIS 1980_STF4Pb NTPB9'}
-  356|     fbnote = 'FB all ages (STF4Pb, net of Spanish-origin FB by the state Spanish race mix, STF2a NTA13) x FB adult share (1990 NP37) x FB sex share (2000)'
-  357|     notes = {'white_nh_native': f'[I] 100% white not Spanish 18+ minus {fbnote}',
-  358|              'black_nh_native': f'[I] 100% Black not Spanish 18+ minus {fbnote}',
-  359|              'other_native': '[I] remainder of 100%-count 18+ (STF2b NTB8B)',
-  360|              'naturalized': '[I] STF4Pb all-ages naturalized x 1990 adult share (NP37), scaled to 100% count; sex split from 2000',
-  361|              'noncitizen': '[I] STF4Pb all-ages noncitizens x 1990 adult share (NP37), scaled to 100% count; sex split from 2000'}
-  362|     df = assemble(1980, by_sex, tables, notes)
-  363|     indep = adult_sum(d1, desc1, p1, r'^(Male|Female) >>')
-  364|     check(1980, df, indep, 'STF1 NT10B 18+ (100%)')
-  365|     return df
-  366| 
-  367| 
-  368| BUILDERS = {y: year_acs for y in ACS}
-  369| BUILDERS.update({1980: year_1980, 1990: year_1990, 2000: year_2000})
-  370| 
-  371| if __name__ == '__main__':
-  372|     ap = argparse.ArgumentParser()
-  373|     ap.add_argument('year')
-  374|     ap.add_argument('--extract', type=int)
-  375|     a = ap.parse_args()
-  376|     if a.extract:
-  377|         EXTRACT = a.extract
-  378|     years = sorted(BUILDERS) if a.year == 'all' else [int(a.year)]
-  379|     for y in years:
-  380|         df = BUILDERS[y](y)
-  381|         out = CACHE / f'population/adults18_{y}_by_state_nhgis.csv'
-  382|         df.to_csv(out, index=False)
-  383|         g = df.groupby('group')['count'].sum()
-  384|         print(f'wrote {out.name}: {len(df)} rows, {df["count"].sum():,.0f} adults 18+ | '
-  385|               + ', '.join(f'{k} {v / 1e6:.1f}M' for k, v in g.items()))
-```
-
-## `scripts/harness/build_population_republic.py`
-
-```python
-    1| """1790–1860 censuses → population/adults_<year>_by_state_nhgis.csv (same long
-    2| format as build_population.py). build_population.py uses BUILDERS too:
-    3| 
-    4|     python3 scripts/harness/build_population_republic.py [YEAR ...]   # default: every census 1790–1860
-    5|     python3 scripts/harness/build_population.py 1830
-    6| 
-    7| Source: NHGIS extract made by scripts/harness/nhgis_extract_republic.py (state tables;
-    8| see TABLES there). Groups: white, free_colored, enslaved (1790–1840);
-    9| native_white, foreign_white_unknown, free_colored, enslaved, other_races
-   10| (1850–1860; foreign-born citizenship is not tabulated, hence "_unknown").
-   11| 
-   12| None of these censuses tabulates age 21 exactly, so every adult count is an
-   13| [I] estimate from the age bands (note column says which). Band splits use a
-   14| stationary-growth age profile: each single-year cohort is W=0.97 the size of
-   15| the one a year younger (≈3% annual growth, early-republic rate), so the share
-   16| of a band [a, b] aged ≥21 is sum_{21..b} W^x / sum_{a..b} W^x.
-   17| """
-   18| import sys
-   19| from pathlib import Path
-   20| 
-   21| import pandas as pd
-   22| 
-   23| from nhgis_common import CACHE, NHGIS_DIR, STATE_CODE, frame, load, row
-   24| 
-   25| W = 0.97
-   26| # Territories / predecessor areas → the state they became (state code). Dakota is ambiguous → dropped.
-   27| AREA = {'southwest territory': 'TN', 'northwest territory': 'OH', 'orleans territory': 'LA',
-   28|         'louisiana territory': 'MO', 'district of columbia': 'DC'}
-   29| DS = {1790: 'ds1', 1800: 'ds2', 1810: 'ds3', 1820: 'ds4', 1830: 'ds5', 1840: 'ds7', 1850: 'ds10', 1860: 'ds14'}
-   30| FOREIGN_ADULT = {'M': 0.72, 'F': 0.70}  # [I] share of foreign-born whites aged 21+ (immigrants are adult-heavy)
-   31| 
-   32| 
-   33| def adult_share(a: int, b: int) -> float:
-   34|     """Share of the band [a, b] aged 21+, under the W age profile."""
-   35|     ages = range(a, b + 1)
-   36|     return sum(W ** x for x in ages if x >= 21) / sum(W ** x for x in ages)
-   37| 
-   38| 
-   39| def src_dir() -> Path:
-   40|     hits = sorted(NHGIS_DIR.glob('extract_*/nhgis*_csv/nhgis*_ds1_1790_state.csv'))
-   41|     if not hits:
-   42|         raise SystemExit('no 1790–1860 NHGIS extract: run scripts/harness/nhgis_extract_republic.py submit / wait N')
-   43|     return hits[-1].parent
-   44| 
-   45| 
-   46| def code_of(name: str):
-   47|     n = name.casefold().strip()
-   48|     if n in AREA:
-   49|         return AREA[n]
-   50|     n = n.replace(' territory', '')
-   51|     return STATE_CODE.get(n)
-   52| 
-   53| 
-   54| def read(ds: str) -> pd.DataFrame:
-   55|     d = load(ds, src_dir(), 'nhgis*_{ds}_*_state.csv')
-   56|     d.index = d.STATE.map(code_of).rename('state')  # not a new column: the 1850/1860 tables are too wide to insert into
-   57|     return d[d.index.notna()]
-   58| 
-   59| 
-   60| RACE = {'white': 'White', 'native_white': 'White', 'foreign_white_unknown': 'White', 'free_colored': 'Free colored',
-   61|         'enslaved': 'Slave', 'other_races': 'Other'}
-   62| 
-   63| 
-   64| def emit(year, cells, table):
-   65|     """cells: {(state, sex, group): (count, note, label)}"""
-   66|     return frame([row(year, st, sex, g, RACE[g], label, round(float(c), 1), note, table)
-   67|                   for (st, sex, g), (c, note, label) in cells.items()])
-   68| 
-   69| 
-   70| # ---------------------------------------------------------------- per-census adult counts
-   71| def white_1800_1820(year):
-   72|     """Free white males/females 16–25, 26–44, 45+ (1820 men also 16–18)."""
-   73|     d = read(DS[year])
-   74|     p = {1800: 'AAX', 1810: 'AA6', 1820: 'ABG'}[year]
-   75|     res = {}
-   76|     for st, r in d.iterrows():
-   77|         for sex, off in (('M', 0), ('F', 5)):
-   78|             b1625, b2644, b45 = (r[f'{p}{off + i:03d}'] for i in (3, 4, 5))
-   79|             if year == 1820 and sex == 'M':
-   80|                 b1925 = b1625 - r['ABH001']
-   81|                 n = adult_share(19, 25) * b1925 + b2644 + b45
-   82|                 note = f'[I] 21+ = {adult_share(19, 25):.3f}×(16–25 less 16–18) + 26–44 + 45+'
-   83|             else:
-   84|                 n = adult_share(16, 25) * b1625 + b2644 + b45
-   85|                 note = f'[I] 21+ = {adult_share(16, 25):.3f}×(16–25) + 26–44 + 45+'
-   86|             res[(st, sex, 'white')] = (n, note, f'Free white {"males" if sex == "M" else "females"} 16–25/26–44/45+')
-   87|     return d, res
-   88| 
-   89| 
-   90| def colored_1820():
-   91|     """Slave / free colored by sex: <14, 14–25, 26–44, 45+ (ABK001–016)."""
-   92|     d = read('ds4')
-   93|     res = {}
-   94|     f = adult_share(14, 25)
-   95|     for st, r in d.iterrows():
-   96|         for g, base in (('enslaved', 0), ('free_colored', 8)):
-   97|             for sex, off in (('M', 0), ('F', 4)):
-   98|                 c = lambda i: r[f'ABK{base + off + i:03d}']  # noqa: E731
-   99|                 res[(st, sex, g)] = (f * c(2) + c(3) + c(4), f'[I] 21+ = {f:.3f}×(14–25) + 26–44 + 45+',
-  100|                                      f'{"Slave" if g == "enslaved" else "Free colored"} {sex} 14–25/26–44/45+')
-  101|     return d, res
-  102| 
-  103| 
-  104| def colored_ratios():
-  105|     """Per state: adults-by-sex / group total in 1820, the template for 1790–1810."""
-  106|     d, res = colored_1820()
-  107|     tot = {'enslaved': d[[f'ABK{i:03d}' for i in range(1, 9)]].sum(axis=1),
-  108|            'free_colored': d[[f'ABK{i:03d}' for i in range(9, 17)]].sum(axis=1)}
-  109|     nat = {(sex, g): sum(res[(s, sex, g)][0] for s in d.index) / tot[g].sum() for sex in 'MF' for g in tot}
-  110|     rat = {}
-  111|     for st in d.index:
-  112|         for g in tot:
-  113|             for sex in 'MF':
-  114|                 rat[(st, sex, g)] = res[(st, sex, g)][0] / tot[g][st] if tot[g][st] > 200 else nat[(sex, g)]
-  115|     return rat, nat
-  116| 
-  117| 
-  118| def colored_from_totals(year, d, free_col, slave_col, rat, nat):
-  119|     res = {}
-  120|     for st, r in d.iterrows():
-  121|         for g, col in (('free_colored', free_col), ('enslaved', slave_col)):
-  122|             for sex in 'MF':
-  123|                 k = rat.get((st, sex, g))
-  124|                 src = '1820 same-state' if k is not None else '1820 national'
-  125|                 k = k if k is not None else nat[(sex, g)]
-  126|                 res[(st, sex, g)] = (r[col] * k, f'[I] {g} total ({col}) × {src} share {sex} 21+ ({k:.3f}); no sex/age in {year}',
-  127|                                      f'{"Free nonwhite" if g == "free_colored" else "Slave"} (total, sex/age not tabulated)')
-  128|     return res
-  129| 
-  130| 
-  131| def y1790(year=1790):
-  132|     d = read('ds1')
-  133|     d00, w00 = white_1800_1820(1800)
-  134|     rat, nat = colored_ratios()
-  135|     res = {}
-  136|     for st, r in d.iterrows():
-  137|         for sex, col in (('M', 'AAO002'), ('F', 'AAO004')):
-  138|             off = 0 if sex == 'M' else 5
-  139|             if st in d00.index:
-  140|                 b = d00.loc[st]
-  141|                 k = w00[(st, sex, 'white')][0] / sum(b[f'AAX{off + i:03d}'] for i in (3, 4, 5))
-  142|                 src = '1800 same-state'
-  143|             else:
-  144|                 k = adult_share(16, 25) * 0.30 + 0.70
-  145|                 src = 'default'
-  146|             res[(st, sex, 'white')] = (r[col] * k, f'[I] white {sex} 16+ ({col}{", NHGIS-estimated" if sex == "F" else ""}) × {src} 21+/16+ ratio ({k:.3f})',
-  147|                                        f'White {"males" if sex == "M" else "females (estimated)"} 16 and over')
-  148|     res.update(colored_from_totals(1790, d, 'AAQ001', 'AAQ002', rat, nat))
-  149|     return emit(1790, res, 'NHGIS 1790_cPop NT4, NT6')
-  150| 
-  151| 
-  152| def y1800_1810(year):
-  153|     d, res = white_1800_1820(year)
-  154|     rat, nat = colored_ratios()
-  155|     free_col, slave_col = {1800: ('AAY001', 'AAY002'), 1810: ('AA7001', 'AA7002')}[year]
-  156|     res.update(colored_from_totals(year, d, free_col, slave_col, rat, nat))
-  157|     return emit(year, res, f'NHGIS {year}_cPop NT5, NT6')
-  158| 
-  159| 
-  160| def y1820(year=1820):
-  161|     _, res = white_1800_1820(1820)
-  162|     _, col = colored_1820()
-  163|     res.update(col)
-  164|     return emit(1820, res, 'NHGIS 1820_cPop NT4A, NT4B, NT7')
-  165| 
-  166| 
-  167| def y1830_1840(year):
-  168|     d = read(DS[year])
-  169|     wp, cp = {1830: ('ABW', 'ABX'), 1840: ('ACY', 'ACZ')}[year]
-  170|     fw, fc = adult_share(20, 29), adult_share(10, 23)
-  171|     # colored block order: 1830 slave then free; 1840 free then slave
-  172|     blocks = {1830: (('enslaved', 0), ('free_colored', 12)), 1840: (('free_colored', 0), ('enslaved', 12))}[year]
-  173|     res = {}
-  174|     for st, r in d.iterrows():
-  175|         for sex, off in (('M', 0), ('F', 13)):
-  176|             w = lambda i: r[f'{wp}{off + i:03d}']  # noqa: E731
-  177|             res[(st, sex, 'white')] = (fw * w(5) + sum(w(i) for i in range(6, 14)),
-  178|                                        f'[I] 21+ = {fw:.3f}×(20–29) + 30+', f'Free white {sex} 20–29 and 30+ bands')
-  179|         for g, base in blocks:
-  180|             for sex, off in (('M', 0), ('F', 6)):
-  181|                 c = lambda i: r[f'{cp}{base + off + i:03d}']  # noqa: E731
-  182|                 res[(st, sex, g)] = (fc * c(2) + sum(c(i) for i in range(3, 7)),
-  183|                                      f'[I] 21+ = {fc:.3f}×(10–23) + 24+', f'{g} {sex} 10–23 and 24+ bands')
-  184|     t = {1830: 'NHGIS 1830_cPop NT4, NT5', 1840: 'NHGIS 1840_cPopX NT4, NT5'}[year]
-  185|     return emit(year, res, t)
-  186| 
-  187| 
-  188| def adults_1850_1860(year):
-  189|     """→ {(st, sex, group): (count, note, label)} for white / free_colored / enslaved / other_races."""
-  190|     d = read(DS[year])
-  191|     f = adult_share(20, 29)
-  192|     res = {}
-  193|     if year == 1850:
-  194|         # AEL: 3 race blocks × 2 sexes × 15 cells (<1,1–4,5–9,10–14,15–19,20–29,…,100+,unknown)
-  195|         layout = [('white', 0), ('free_colored', 30), ('enslaved', 60)]
-  196|         for st, r in d.iterrows():
-  197|             for g, base in layout:
-  198|                 for sex, off in (('M', 0), ('F', 15)):
-  199|                     c = [r[f'AEL{base + off + i:03d}'] for i in range(1, 16)]
-  200|                     known = sum(c[:14])
-  201|                     ad = f * c[5] + sum(c[6:14])
-  202|                     ad += c[14] * (ad / known if known else 0)
-  203|                     res[(st, sex, g)] = (ad, f'[I] 21+ = {f:.3f}×(20–29) + 30+, age-unknown allocated pro rata',
-  204|                                          f'{g} {sex} by age (NT4)')
-  205|     else:
-  206|         # AH0: 6 races × 15 age cells × 2 sexes, sex innermost
-  207|         races = [('white', 0), ('free_colored', 30), ('enslaved', 60), ('other_races', 90), ('other_races', 120), ('other_races', 150)]
-  208|         for st, r in d.iterrows():
-  209|             for g, base in races:
-  210|                 for sex, s in (('M', 1), ('F', 2)):
-  211|                     c = [r[f'AH0{base + 2 * i + s:03d}'] for i in range(15)]
-  212|                     known = sum(c[:14])
-  213|                     ad = f * c[5] + sum(c[6:14])
-  214|                     ad += c[14] * (ad / known if known else 0)
-  215|                     k = (st, sex, g)
-  216|                     prev = res.get(k, (0, '', ''))[0]
-  217|                     res[k] = (prev + ad, f'[I] 21+ = {f:.3f}×(20–29) + 30+, age-unknown allocated pro rata'
-  218|                               + ('; Indian + half breed + Asiatic' if g == 'other_races' else ''), f'{g} {sex} by age (NT4)')
-  219|     return res
-  220| 
-  221| 
-  222| def y1850_1860(year):
-  223|     res = adults_1850_1860(year)
-  224|     if year == 1850:
-  225|         n = read('ds12')
-  226|         fb = {'M': n['AGF001'], 'F': n['AGF002']}
-  227|         t = 'NHGIS 1850_cPAX NT4; 1850_sPAX NT1, NT5, NT7'
-  228|     else:
-  229|         n = read('ds14')
-  230|         fb = {'M': n['AH4007'], 'F': n['AH4008']}
-  231|         t = 'NHGIS 1860_cPAX NT4, NT7'
-  232|     out = {}
-  233|     for (st, sex, g), v in res.items():
-  234|         if g != 'white':
-  235|             out[(st, sex, g)] = v
-  236|             continue
-  237|         wa = v[0]
-  238|         fa = min(fb[sex].get(st, 0) * FOREIGN_ADULT[sex], 0.95 * wa)
-  239|         out[(st, sex, 'foreign_white_unknown')] = (fa, f'[I] foreign-born white {sex} (all ages) × {FOREIGN_ADULT[sex]} adult share; '
-  240|                                                    'citizenship not tabulated', f'Foreign-born white {sex}')
-  241|         out[(st, sex, 'native_white')] = (wa - fa, f'[I] white 21+ ({v[1][4:]}) less foreign-born adults; birthplace-unknown counted native',
-  242|                                           f'Native white {sex} (residual)')
-  243|     return emit(year, out, t)
-  244| 
-  245| 
-  246| def build(year: int) -> pd.DataFrame:
-  247|     if year == 1790:
-  248|         return y1790()
-  249|     if year in (1800, 1810):
-  250|         return y1800_1810(year)
-  251|     if year == 1820:
-  252|         return y1820()
-  253|     if year in (1830, 1840):
-  254|         return y1830_1840(year)
-  255|     return y1850_1860(year)
-  256| 
-  257| 
-  258| BUILDERS = {y: build for y in range(1790, 1861, 10)}
-  259| 
-  260| 
-  261| def free_share(year: int) -> dict:
-  262|     """Per state: free colored / (free colored + enslaved) among adult men, from the nearest census at or before `year`."""
-  263|     c = max(y for y in BUILDERS if y <= max(year, 1790))
-  264|     f = CACHE / f'population/adults_{c}_by_state_nhgis.csv'
-  265|     df = pd.read_csv(f) if f.exists() else build(c)
-  266|     m = df[(df.sex == 'M') & df.group.isin(['free_colored', 'enslaved'])].pivot_table(index='state', columns='group', values='count', aggfunc='sum')
-  267|     return (m.free_colored / (m.free_colored + m.enslaved)).fillna(1.0).to_dict()
-  268| 
-  269| 
-  270| if __name__ == '__main__':
-  271|     for y in (map(int, sys.argv[1:]) if len(sys.argv) > 1 else BUILDERS):
-  272|         df = build(y)
-  273|         out = CACHE / f'population/adults_{y}_by_state_nhgis.csv'
-  274|         df.to_csv(out, index=False)
-  275|         print(f'wrote {out.name}: {len(df)} rows, {df.state.nunique()} states, {df["count"].sum():,.0f} adults '
-  276|               f'({df[df.sex == "F"]["count"].sum():,.0f} women)')
 ```

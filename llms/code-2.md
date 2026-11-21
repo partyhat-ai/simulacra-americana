@@ -1,7 +1,7 @@
 # synthetic-electorate-toy: source and docs, part 2 of 17
 
-Generated from commit `e5e4f20fbaeb` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
-Files `EVAL.md` to `infra/.gitignore`. Lines are numbered as in the repository.
+Generated from commit `6a200effe03e` (2026-11-20) of github.com/partyhat-ai/synthetic-electorate-toy by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Files `EVAL.md` to `docs/DEPLOY.md`. Lines are numbered as in the repository.
 
 ## `EVAL.md`
 
@@ -87,261 +87,267 @@ Files `EVAL.md` to `infra/.gitignore`. Lines are numbered as in the repository.
    79| 
    80| ## Validation checks
    81| 
-   82| | ID | Check | Value | Threshold | Result |
-   83| |---|---|---|---|---|
-   84| | R1 | Unchanged rerun reproduces every state | max error 0.33 votes; EV 404–127 in 400/400 draws | ≤ 1 vote; exact EV | **Pass** |
-   85| | B1 | Holdout two-party RMSE | backbone 7.55; uniform swing 8.68; persistence 17.41; demographic 7.62 | ≤ uniform swing and persistence | **Pass** |
-   86| | B2 | Holdout turnout RMSE | backbone 2.92; persistence 16.46 | ≤ persistence | **Pass** (after a bug fix: see deviation 1) |
-   87| | B3 | Holdout Spearman | 0.923 | ≥ 0.8 | **Pass** |
-   88| | B4 | Holdout Brier | backbone 0.052; uniform swing 0.069 | ≤ uniform swing | **Pass** |
-   89| | B5 | Holdout EV error | 12 (predicted 160, actual 148; NC called for Harding: 55.1% predicted, 43.3% actual) | ≤ 0 (no holdout state was decided by < 5 points) | **Fail** |
-   90| | N1 | Women's turnout vs Corder–Wolbrecht | MAE 3.3 points; 3 of 5 inside the 90% interval | MAE ≤ 8 and ≥ 70% inside | **Fail** (coverage 60%) |
-   91| | N2 | Placebo, GA and MS | GA 2.1% (−1.8 to 5.5); MS 3.5% (−0.2 to 6.3) | within ±5 points of 0 | **Pass** |
-   92| | N3 | Agents' stated women's turnout vs Corder–Wolbrecht | MAE 15.5 points (11 women agents in 5 states) | ≤ 10 | **Fail** |
-   93| | L1 | Recall probe | year 100%; candidates 100%; winner 100% (n = 56) | reported | 1920 is **memorization-exposed**, as expected |
-   94| | L2 | Label swap | follows label 0%; follows platform 100% (n = 39) | < 20% | **Pass** |
-   95| | A1 | Cohort bias | median \|bias\| 0.41 logit; 0 cohorts over 1 logit (after smoothing); mean TVD 0.43 | reported | See below |
-   96| | A2 | Homogenization index | 0.90 (21 eligible cohorts) | ≤ 25% | **Fail** |
-   97| | A3 (`league`) | Paraphrase and model sensitivity | effect −0.091; paraphrase SD 0.054; Sonnet −0.18 vs Opus −0.03 (shared subsample) | SD < \|effect\|; signs agree | **Pass** (the models agree on sign, not size) |
-   98| | A3 (franchise) | same | no Opus arm for backbone-mode what-ifs | — | Not run (not applicable: these effects aren't applied) |
-   99| | A4 | Stereotype audit | 0 of 66 reasons flagged by the heuristic | ≤ 10% | **Pass** (heuristic only; not read by a person) |
-  100| 
-  101| **Score:** 9 passed, 4 failed (B5, N1, N3, A2); L1 and A1 are report-only.
-  102| 
-  103| ### N1 detail
-  104| 
-  105| Women's turnout, as a share of all women 21+ (Corder–Wolbrecht's
-  106| denominator):
-  107| 
-  108| | State | Backbone (90% interval) | Corder–Wolbrecht (95% interval) | Method |
-  109| |---|---|---|---|
-  110| | CT | 36.7 (32.7–41.4) | 32.6 (28.1–35.9) | residual |
-  111| | IL | 46.3 (33.1–55.5) | 45.6 (44.3–46.8) | ratio (IL women voted in 1916) |
-  112| | MA | 39.3 (34.6–44.1) | 33.6 (32.2–34.9) | residual |
-  113| | MI | 37.2 (32.0–43.2) | 40.6 (38.5–42.4) | residual |
-  114| | NY | 37.7 (33.1–42.7) | 35.2 (33.8–36.3) | residual |
-  115| 
-  116| - **The residual method runs high in the East.** κ, the men's-turnout change
-  117|   from 1916 to 1920, comes from the western "old" states, where turnout per
-  118|   eligible adult fell 0.31 logit. If men's turnout fell further in the East,
-  119|   the residual hands too many votes to women.
-  120| - **This is the key identifying assumption, and N1 is where it shows.** The
-  121|   fix is to estimate κ with regional variation, with county returns: the
-  122|   Corder–Wolbrecht approach.
-  123| 
-  124| ## Leakage
-  125| 
-  126| - **Probes (L1).** A separate instance, given the blinded brief, named 1920,
-  127|   Cox for the administration's party, Harding for the other, and Harding as
-  128|   the winner in 56 of 56 probes.
-  129|   - Blinding does not hide 1920 from a current model, and no current model
-  130|     will be clean for 1920.
-  131|   - Every quote is therefore flagged `memorizationExposed: true`, and cohort
-  132|     bias uses the national bias (the rule in `paired.py`).
-  133| - **Label swap (L2).** In all 39 usable pairs, the agent followed the platform
-  134|   to its new label. Answers track positions, not letters.
-  135| - **De-blinding in the voice.** 98 of 386 voter answers (25%) name a party
-  136|   ("I'll vote Republican", "the Lincoln ticket") that no brief ever named.
-  137|   - None names a candidate.
-  138|   - None uses hindsight language ("landslide", "will win").
-  139|   - Quotes are published with `namesRestored: true`. A party name in a quote
-  140|     is the model's own inference, now documented.
-  141| - **Dates.**
-  142|   - Every source item is dated 1920-06-01 to 1920-11-01.
-  143|   - p1 briefs were dated 30 October but could include items from 31 October
-  144|     and 1 November (deviation 11). A subagent noticed one and didn't use it.
-  145| 
-  146| ## Agent layer, beyond the thresholds
-  147| 
-  148| - **Turnout overstatement.** Agents' stated turnout exceeds the backbone's
-  149|   calibrated turnout by 11.8 points on average.
-  150|   - Northeastern native men: 0.76 vs 0.60.
-  151|   - Southern white men: 0.61 vs 0.36.
-  152|   - Figures are half-count smoothed (deviation 8).
+   82| To rerun these with the repo alone (no private cache), use the 1920 inputs in `data/1920/`
+   83| (`data/1920/PROVENANCE.md`): `SIMHARNESS_CACHE=data/1920 python3 -m simharness.run backbone`, then
+   84| `evaluate`, both with `--config configs/prototype-1920.json`. Today's code gives B1 7.47, B3 0.93 and B4 0.047
+   85| where the table below has 7.55, 0.923 and 0.052. That comes from code changes since this run, not the data;
+   86| every other figure is the same.
+   87| 
+   88| | ID | Check | Value | Threshold | Result |
+   89| |---|---|---|---|---|
+   90| | R1 | Unchanged rerun reproduces every state | max error 0.33 votes; EV 404–127 in 400/400 draws | ≤ 1 vote; exact EV | **Pass** |
+   91| | B1 | Holdout two-party RMSE | backbone 7.55; uniform swing 8.68; persistence 17.41; demographic 7.62 | ≤ uniform swing and persistence | **Pass** |
+   92| | B2 | Holdout turnout RMSE | backbone 2.92; persistence 16.46 | ≤ persistence | **Pass** (after a bug fix: see deviation 1) |
+   93| | B3 | Holdout Spearman | 0.923 | ≥ 0.8 | **Pass** |
+   94| | B4 | Holdout Brier | backbone 0.052; uniform swing 0.069 | ≤ uniform swing | **Pass** |
+   95| | B5 | Holdout EV error | 12 (predicted 160, actual 148; NC called for Harding: 55.1% predicted, 43.3% actual) | ≤ 0 (no holdout state was decided by < 5 points) | **Fail** |
+   96| | N1 | Women's turnout vs Corder–Wolbrecht | MAE 3.3 points; 3 of 5 inside the 90% interval | MAE ≤ 8 and ≥ 70% inside | **Fail** (coverage 60%) |
+   97| | N2 | Placebo, GA and MS | GA 2.1% (−1.8 to 5.5); MS 3.5% (−0.2 to 6.3) | within ±5 points of 0 | **Pass** |
+   98| | N3 | Agents' stated women's turnout vs Corder–Wolbrecht | MAE 15.5 points (11 women agents in 5 states) | ≤ 10 | **Fail** |
+   99| | L1 | Recall probe | year 100%; candidates 100%; winner 100% (n = 56) | reported | 1920 is **memorization-exposed**, as expected |
+  100| | L2 | Label swap | follows label 0%; follows platform 100% (n = 39) | < 20% | **Pass** |
+  101| | A1 | Cohort bias | median \|bias\| 0.41 logit; 0 cohorts over 1 logit (after smoothing); mean TVD 0.43 | reported | See below |
+  102| | A2 | Homogenization index | 0.90 (21 eligible cohorts) | ≤ 25% | **Fail** |
+  103| | A3 (`league`) | Paraphrase and model sensitivity | effect −0.091; paraphrase SD 0.054; Sonnet −0.18 vs Opus −0.03 (shared subsample) | SD < \|effect\|; signs agree | **Pass** (the models agree on sign, not size) |
+  104| | A3 (franchise) | same | no Opus arm for backbone-mode what-ifs | — | Not run (not applicable: these effects aren't applied) |
+  105| | A4 | Stereotype audit | 0 of 66 reasons flagged by the heuristic | ≤ 10% | **Pass** (heuristic only; not read by a person) |
+  106| 
+  107| **Score:** 9 passed, 4 failed (B5, N1, N3, A2); L1 and A1 are report-only.
+  108| 
+  109| ### N1 detail
+  110| 
+  111| Women's turnout, as a share of all women 21+ (Corder–Wolbrecht's
+  112| denominator):
+  113| 
+  114| | State | Backbone (90% interval) | Corder–Wolbrecht (95% interval) | Method |
+  115| |---|---|---|---|
+  116| | CT | 36.7 (32.7–41.4) | 32.6 (28.1–35.9) | residual |
+  117| | IL | 46.3 (33.1–55.5) | 45.6 (44.3–46.8) | ratio (IL women voted in 1916) |
+  118| | MA | 39.3 (34.6–44.1) | 33.6 (32.2–34.9) | residual |
+  119| | MI | 37.2 (32.0–43.2) | 40.6 (38.5–42.4) | residual |
+  120| | NY | 37.7 (33.1–42.7) | 35.2 (33.8–36.3) | residual |
+  121| 
+  122| - **The residual method runs high in the East.** κ, the men's-turnout change
+  123|   from 1916 to 1920, comes from the western "old" states, where turnout per
+  124|   eligible adult fell 0.31 logit. If men's turnout fell further in the East,
+  125|   the residual hands too many votes to women.
+  126| - **This is the key identifying assumption, and N1 is where it shows.** The
+  127|   fix is to estimate κ with regional variation, with county returns: the
+  128|   Corder–Wolbrecht approach.
+  129| 
+  130| ## Leakage
+  131| 
+  132| - **Probes (L1).** A separate instance, given the blinded brief, named 1920,
+  133|   Cox for the administration's party, Harding for the other, and Harding as
+  134|   the winner in 56 of 56 probes.
+  135|   - Blinding does not hide 1920 from a current model, and no current model
+  136|     will be clean for 1920.
+  137|   - Every quote is therefore flagged `memorizationExposed: true`, and cohort
+  138|     bias uses the national bias (the rule in `paired.py`).
+  139| - **Label swap (L2).** In all 39 usable pairs, the agent followed the platform
+  140|   to its new label. Answers track positions, not letters.
+  141| - **De-blinding in the voice.** 98 of 386 voter answers (25%) name a party
+  142|   ("I'll vote Republican", "the Lincoln ticket") that no brief ever named.
+  143|   - None names a candidate.
+  144|   - None uses hindsight language ("landslide", "will win").
+  145|   - Quotes are published with `namesRestored: true`. A party name in a quote
+  146|     is the model's own inference, now documented.
+  147| - **Dates.**
+  148|   - Every source item is dated 1920-06-01 to 1920-11-01.
+  149|   - p1 briefs were dated 30 October but could include items from 31 October
+  150|     and 1 November (deviation 11). A subagent noticed one and didn't use it.
+  151| 
+  152| ## Agent layer, beyond the thresholds
   153| 
-  154|   This is the survey self-report bias in a new form. It's harmless here,
-  155|   because levels come from the backbone, but it's why agents must never set
-  156|   levels.
-  157| - **Cohort bias (A1).** Agents' Republican two-party share is within ±0.5
-  158|   logit of the backbone for most white cohorts.
+  154| - **Turnout overstatement.** Agents' stated turnout exceeds the backbone's
+  155|   calibrated turnout by 11.8 points on average.
+  156|   - Northeastern native men: 0.76 vs 0.60.
+  157|   - Southern white men: 0.61 vs 0.36.
+  158|   - Figures are half-count smoothed (deviation 8).
   159| 
-  160|   | Cohort | Bias (logit) |
-  161|   |---|---|
-  162|   | border:F:black | +0.92 |
-  163|   | south:F:black | −0.86 |
-  164|   | south:M:native_white | −0.76 |
-  165|   | south:M:black | −0.61 |
-  166| 
-  167|   - Before half-count smoothing (see deviation 8), Black cohorts outside the
-  168|     South ran +0.8 to +1.6. The agents say "strongly Republican", which fits
-  169|     the documented history better than the backbone's weakly identified β_B.
-  170|     See the next section.
-  171|   - Southern white men: agents 23% Republican (smoothed) vs backbone 39%. The agents
-  172|     voice the Solid South; the backbone averages in Tennessee and North
-  173|     Carolina, where Harding took about 43% or more.
-  174| - **Homogenization (A2).** In 19 of 21 cohorts whose backbone share lies
-  175|   between 0.2 and 0.8, every agent gave the same choice. With four agents at
-  176|   a 60/40 split, chance unanimity is about 15%, so this is strong variance
-  177|   compression. The Bisbee et al. failure is present. Persona diversity at
-  178|   four agents per cohort didn't fix it, and Sonnet 5.5 has no temperature
-  179|   lever.
-  180|   - Consequences for this design: the agents' choices are not usable as
-  181|     distributions. Their *paired changes* can still be. Production should
-  182|     ask for `p_choice` (done), weight by it rather than by the discrete
-  183|     choice (done), and raise agents per cohort to 12 or more to measure
-  184|     compression properly.
-  185| - **Paired effect, `league`.**
-  186|   - The national two-party effect is −0.091 logit, 80% interval −0.129 to
-  187|     −0.047, adult-weighted.
-  188|   - Cohort effects run from −0.24 (naturalized men in the Northeast) to +0.13
-  189|     (Southern white men).
-  190|   - The shrinkage weights are 0.33–0.43, because four or five agents per
-  191|     cohort is small against the shrinkage pseudo-count of 8. Every
-  192|     cohort's effect is therefore pulled strongly toward its region.
-  193| - **Cross-checks on the franchise what-ifs.** These are not applied.
-  194|   - In `fifteenth`, Black Southern agents who could now register raised their
-  195|     stated turnout sharply: +0.93 logit nationally for the reached cohorts.
-  196|     Their quotes back the borrowed assumption: "I'm registered. I'll vote
-  197|     Republican Tuesday, same as my people."
-  198|   - In `no-19th`, women who lost the vote said so. The men asked showed a
-  199|     small shift toward Cox (−0.12 logit), which the backbone ignores by
-  200|     design.
-  201| 
-  202| ## The biggest uncertainty: how Black voters split
-  203| 
-  204| - **The data can't pin β_B.** Across the 37 states outside the South, a
-  205|   Goodman regression puts Black voters' shift toward Harding at −3.4 ± 1.9
-  206|   logit (region intercepts, 1916 lag). That runs against the documented
-  207|   history, and it is carried by six border states with larger Black shares
-  208|   and smaller swings.
-  209| - **What the published run uses.** The prior, N(1.5, 1),
-  210|   updated by that regression, gives a median of 0.50 (80% interval −0.70 to
-  211|   1.68).
-  212| - **The sensitivity**, same seed:
-  213| 
-  214| | β_B from | Black voters outside the South, Harding share | `fifteenth` Harding EV (80% range) | P(flip) > 10% |
-  215| |---|---|---|---|
-  216| | Prior updated by Goodman (published) | 73% (48–88%) | 416 (404–475) | NC 0.51, AR 0.29, VA 0.20, AL 0.19, FL 0.16, LA 0.16 |
-  217| | Prior only, N(1.5, 1) | 88% (67–96%) | 449 (404–489) | NC 0.82, AR 0.66, VA 0.55, AL 0.52, LA 0.48, FL 0.47, GA 0.35, MS 0.34 |
-  218| 
-  219| - **Which is closer to history?** The prior-only row encodes the
-  220|   documented loyalty of Black voters to the Republican party before 1932. The
-  221|   published row lets the confounded regression pull it down.
-  222| - **What would settle it:** county returns against county composition (NHGIS,
-  223|   needs registration), or a documented estimate of Black voters' choice in
-  224|   1920 from the literature (not found by the research agents).
-  225| 
-  226| The page should present `fifteenth` with its range, as the bundle does:
-  227| "Harding carries 404–475". The flips in AR, VA, AL, FL and LA are live
-  228| possibilities, not results.
-  229| 
-  230| ## Uncertainty budget
+  160|   This is the survey self-report bias in a new form. It's harmless here,
+  161|   because levels come from the backbone, but it's why agents must never set
+  162|   levels.
+  163| - **Cohort bias (A1).** Agents' Republican two-party share is within ±0.5
+  164|   logit of the backbone for most white cohorts.
+  165| 
+  166|   | Cohort | Bias (logit) |
+  167|   |---|---|
+  168|   | border:F:black | +0.92 |
+  169|   | south:F:black | −0.86 |
+  170|   | south:M:native_white | −0.76 |
+  171|   | south:M:black | −0.61 |
+  172| 
+  173|   - Before half-count smoothing (see deviation 8), Black cohorts outside the
+  174|     South ran +0.8 to +1.6. The agents say "strongly Republican", which fits
+  175|     the documented history better than the backbone's weakly identified β_B.
+  176|     See the next section.
+  177|   - Southern white men: agents 23% Republican (smoothed) vs backbone 39%. The agents
+  178|     voice the Solid South; the backbone averages in Tennessee and North
+  179|     Carolina, where Harding took about 43% or more.
+  180| - **Homogenization (A2).** In 19 of 21 cohorts whose backbone share lies
+  181|   between 0.2 and 0.8, every agent gave the same choice. With four agents at
+  182|   a 60/40 split, chance unanimity is about 15%, so this is strong variance
+  183|   compression. The Bisbee et al. failure is present. Persona diversity at
+  184|   four agents per cohort didn't fix it, and Sonnet 5.5 has no temperature
+  185|   lever.
+  186|   - Consequences for this design: the agents' choices are not usable as
+  187|     distributions. Their *paired changes* can still be. Production should
+  188|     ask for `p_choice` (done), weight by it rather than by the discrete
+  189|     choice (done), and raise agents per cohort to 12 or more to measure
+  190|     compression properly.
+  191| - **Paired effect, `league`.**
+  192|   - The national two-party effect is −0.091 logit, 80% interval −0.129 to
+  193|     −0.047, adult-weighted.
+  194|   - Cohort effects run from −0.24 (naturalized men in the Northeast) to +0.13
+  195|     (Southern white men).
+  196|   - The shrinkage weights are 0.33–0.43, because four or five agents per
+  197|     cohort is small against the shrinkage pseudo-count of 8. Every
+  198|     cohort's effect is therefore pulled strongly toward its region.
+  199| - **Cross-checks on the franchise what-ifs.** These are not applied.
+  200|   - In `fifteenth`, Black Southern agents who could now register raised their
+  201|     stated turnout sharply: +0.93 logit nationally for the reached cohorts.
+  202|     Their quotes back the borrowed assumption: "I'm registered. I'll vote
+  203|     Republican Tuesday, same as my people."
+  204|   - In `no-19th`, women who lost the vote said so. The men asked showed a
+  205|     small shift toward Cox (−0.12 logit), which the backbone ignores by
+  206|     design.
+  207| 
+  208| ## The biggest uncertainty: how Black voters split
+  209| 
+  210| - **The data can't pin β_B.** Across the 37 states outside the South, a
+  211|   Goodman regression puts Black voters' shift toward Harding at −3.4 ± 1.9
+  212|   logit (region intercepts, 1916 lag). That runs against the documented
+  213|   history, and it is carried by six border states with larger Black shares
+  214|   and smaller swings.
+  215| - **What the published run uses.** The prior, N(1.5, 1),
+  216|   updated by that regression, gives a median of 0.50 (80% interval −0.70 to
+  217|   1.68).
+  218| - **The sensitivity**, same seed:
+  219| 
+  220| | β_B from | Black voters outside the South, Harding share | `fifteenth` Harding EV (80% range) | P(flip) > 10% |
+  221| |---|---|---|---|
+  222| | Prior updated by Goodman (published) | 73% (48–88%) | 416 (404–475) | NC 0.51, AR 0.29, VA 0.20, AL 0.19, FL 0.16, LA 0.16 |
+  223| | Prior only, N(1.5, 1) | 88% (67–96%) | 449 (404–489) | NC 0.82, AR 0.66, VA 0.55, AL 0.52, LA 0.48, FL 0.47, GA 0.35, MS 0.34 |
+  224| 
+  225| - **Which is closer to history?** The prior-only row encodes the
+  226|   documented loyalty of Black voters to the Republican party before 1932. The
+  227|   published row lets the confounded regression pull it down.
+  228| - **What would settle it:** county returns against county composition (NHGIS,
+  229|   needs registration), or a documented estimate of Black voters' choice in
+  230|   1920 from the literature (not found by the research agents).
   231| 
-  232| These are standard deviations across draws.
-  233| 
-  234| | What-if | National R two-party (points), full | Backbone parameters only (population noise off) | Agents only (one backbone draw) | Harding EV SD, full / params only |
-  235| |---|---|---|---|---|
-  236| | `no-19th` | 0.48 | 0.51 | — | 6.6 / 7.0 |
-  237| | `fifteenth` | 0.55 | 0.56 | — | 27.4 / 22.9 |
-  238| | `league` | 0.78 | 0.78 | 0.79 | 6.6 / 6.5 |
+  232| The page should present `fifteenth` with its range, as the bundle does:
+  233| "Harding carries 404–475". The flips in AR, VA, AL, FL and LA are live
+  234| possibilities, not results.
+  235| 
+  236| ## Uncertainty budget
+  237| 
+  238| These are standard deviations across draws.
   239| 
-  240| **How to read this:**
-  241| - **Population noise is a small part of every what-if.** Turning it off
-  242|   barely changes the spread, and the full-draw SD for `fifteenth`'s EV
-  243|   (27.4) exceeds the params-only SD (22.9) only by what the flip-prone
-  244|   Southern states add.
-  245| - **For `league`, almost all the spread comes from the agent layer.** The
-  246|   calibrated baseline has no national spread, so only the agent bootstrap
-  247|   varies.
-  248| - **For `fifteenth`, β_B dominates.**
-  249| 
-  250| ## Deviations from the plan, in order
-  251| 
-  252| Each change was made after seeing the output it fixes. Each is listed with
-  253| its effect. None changes a threshold.
-  254| 
-  255| 1. **B2 predictor bug.** The holdout turnout predictor counted old-suffrage
-  256|    states' 1916 votes, which included women's, as men's.
-  257|    - First value: 16.90 (fail).
-  258|    - Fixed to project turnout per eligible adult by κ, as the backbone does:
-  259|      2.92 (pass).
-  260|    - Both values are reported here.
-  261| 2. **N1 denominator.** Corder–Wolbrecht's "eligible" counts equal the census
-  262|    21+ totals, non-citizens included. The backbone had divided by citizens.
-  263|    - Citizen-denominator result: MAE 9.6, coverage 40%.
-  264|    - Like-for-like result: MAE 3.3, coverage 60%.
-  265|    - Fail either way.
-  266| 3. **β_B specification.**
-  267|    - The first fit's Goodman regression (intercept, lag) gave β_B = −1.5
-  268|      after the prior, driven by region.
-  269|    - Changed to region intercepts: 0.50 after the prior.
-  270|    - The sensitivity table above covers the choice.
-  271| 4. **Black Southern turnout.** The first fit clipped a negative Goodman
-  272|    estimate to 0 in every draw. Changed to the regression posterior truncated
-  273|    to [0, white rate], which is Goodman with Duncan–Davis bounds: median 9%
-  274|    of the white rate (1–25%).
-  275| 5. **Black Southern choice.** The first fit gave Black Southern voters a
-  276|    shift relative to white Southerners, which made them lean Cox, against the
-  277|    `fifteenth` assumption.
-  278|    - Changed to the borrowed Northern split, with an accounting bound: their
-  279|      votes for either party are at most 80% of its certified vote.
-  280|    - The bound binds in South Carolina (70% of draws) and Mississippi (18%).
-  281| 6. **Sex turnout cap.** R1 first failed in Utah in 4 of 400 draws: a drawn
-  282|    men/women ratio implied men's turnout above 100%. Each sex is now capped at
-  283|    98%, and the excess moves to the other sex, so state totals stay exact.
-  284| 7. **Minor-party ledger.** R1 failed again after deviation 5: in NC and GA,
-  285|    whose certified minor-party vote is 0, the borrowed Black split carried a
-  286|    minor-party share. Fixed; R1 passes.
-  287| 8. **Paired smoothing.** Cohorts whose agents all said "won't vote" produced
-  288|    effects of −10 logit. A half-count (Jeffreys-style) smoothing was added,
-  289|    and the national effect is now adult-weighted.
-  290| 9. **A1 denominator.** Backbone turnout for A1 is now per legally eligible
-  291|    adult (exclusion included), matching what an agent's `p_vote` means.
-  292| 10. **The agents were answered by Claude Code subagents, not the Messages
-  293|     API.**
-  294|     - No `ANTHROPIC_API_KEY` was available. Credential exploration was
-  295|       declined, correctly.
-  296|     - The 442 requests went through the `transcript` backend to 9
-  297|       subagents: 7 Sonnet and 2 Opus, via the Agent tool's `model`
-  298|       setting. The exact model versions behind those settings aren't
-  299|       recorded by the tool.
-  300|     - Each subagent answered 18–59 requests in one context. No subagent saw
-  301|       both arms of the same person.
-  302|     - The subagents' own reports:
-  303|       - The probe subagent answered 28 of 56 probes by script, having read
-  304|         the first 28. All 56 name Harding.
-  305|       - The control-sonnet-2 subagent built answers with a helper script.
-  306|         All 56 reasons and quotes are distinct.
-  307|       - The control-sonnet-1 subagent says its later answers are shorter and
-  308|         more generic. Its quotes fall from 26 to 16 words.
-  309|     - This is a weaker instrument than independent API calls. The
-  310|       homogenization in A2 may be partly an artifact of batching.
-  311|     - **The production path is `anthropic-batch`**, and this pilot should be
-  312|       rerun on it before any agent-layer number is cited.
-  313| 11. **p1 prompt bugs,** found after the answers came back and fixed in p2.
-  314|     The p1 requests that were answered are unchanged on disk.
-  315|     - Non-citizen women were given the `no-19th` counterfactual, and their
-  316|       brief contradicted itself. Two subagents flagged it. Those pairs are
-  317|       excluded from the analysis.
-  318|     - Briefs were dated 30 October while admitting items dated up to
-  319|       1 November.
-  320|     - Surnames were drawn from one mixed list ("Mary Lindqvist", a Black
-  321|       North Carolina woman).
-  322|     - Before any answer, the Ohio line "women have voted for president since
-  323|       1917" was corrected: no presidential election fell in 1917–19.
-  324| 
-  325| ## What wasn't done
-  326| 
-  327| - **County-level ecological inference.** County returns are cached; county
-  328|   composition needs NHGIS registration.
-  329| - **Strict mode.** The 1910 census would be aged ten years.
-  330| - **Other holdouts.** The 26th Amendment, VRA and Amendment 4 holdouts are
-  331|   designed but not run.
-  332| - **Population what-ifs.** Huntington–Hill and Webster are implemented and
-  333|   unit-tested, but not exercised.
-  334| - **Reading the stereotype audit.** A4 used the regex pass only.
-  335| - **Alien declarant voting in 1920.** Not coded in any dataset found; treated
-  336|   as barred everywhere.
+  240| | What-if | National R two-party (points), full | Backbone parameters only (population noise off) | Agents only (one backbone draw) | Harding EV SD, full / params only |
+  241| |---|---|---|---|---|
+  242| | `no-19th` | 0.48 | 0.51 | — | 6.6 / 7.0 |
+  243| | `fifteenth` | 0.55 | 0.56 | — | 27.4 / 22.9 |
+  244| | `league` | 0.78 | 0.78 | 0.79 | 6.6 / 6.5 |
+  245| 
+  246| **How to read this:**
+  247| - **Population noise is a small part of every what-if.** Turning it off
+  248|   barely changes the spread, and the full-draw SD for `fifteenth`'s EV
+  249|   (27.4) exceeds the params-only SD (22.9) only by what the flip-prone
+  250|   Southern states add.
+  251| - **For `league`, almost all the spread comes from the agent layer.** The
+  252|   calibrated baseline has no national spread, so only the agent bootstrap
+  253|   varies.
+  254| - **For `fifteenth`, β_B dominates.**
+  255| 
+  256| ## Deviations from the plan, in order
+  257| 
+  258| Each change was made after seeing the output it fixes. Each is listed with
+  259| its effect. None changes a threshold.
+  260| 
+  261| 1. **B2 predictor bug.** The holdout turnout predictor counted old-suffrage
+  262|    states' 1916 votes, which included women's, as men's.
+  263|    - First value: 16.90 (fail).
+  264|    - Fixed to project turnout per eligible adult by κ, as the backbone does:
+  265|      2.92 (pass).
+  266|    - Both values are reported here.
+  267| 2. **N1 denominator.** Corder–Wolbrecht's "eligible" counts equal the census
+  268|    21+ totals, non-citizens included. The backbone had divided by citizens.
+  269|    - Citizen-denominator result: MAE 9.6, coverage 40%.
+  270|    - Like-for-like result: MAE 3.3, coverage 60%.
+  271|    - Fail either way.
+  272| 3. **β_B specification.**
+  273|    - The first fit's Goodman regression (intercept, lag) gave β_B = −1.5
+  274|      after the prior, driven by region.
+  275|    - Changed to region intercepts: 0.50 after the prior.
+  276|    - The sensitivity table above covers the choice.
+  277| 4. **Black Southern turnout.** The first fit clipped a negative Goodman
+  278|    estimate to 0 in every draw. Changed to the regression posterior truncated
+  279|    to [0, white rate], which is Goodman with Duncan–Davis bounds: median 9%
+  280|    of the white rate (1–25%).
+  281| 5. **Black Southern choice.** The first fit gave Black Southern voters a
+  282|    shift relative to white Southerners, which made them lean Cox, against the
+  283|    `fifteenth` assumption.
+  284|    - Changed to the borrowed Northern split, with an accounting bound: their
+  285|      votes for either party are at most 80% of its certified vote.
+  286|    - The bound binds in South Carolina (70% of draws) and Mississippi (18%).
+  287| 6. **Sex turnout cap.** R1 first failed in Utah in 4 of 400 draws: a drawn
+  288|    men/women ratio implied men's turnout above 100%. Each sex is now capped at
+  289|    98%, and the excess moves to the other sex, so state totals stay exact.
+  290| 7. **Minor-party ledger.** R1 failed again after deviation 5: in NC and GA,
+  291|    whose certified minor-party vote is 0, the borrowed Black split carried a
+  292|    minor-party share. Fixed; R1 passes.
+  293| 8. **Paired smoothing.** Cohorts whose agents all said "won't vote" produced
+  294|    effects of −10 logit. A half-count (Jeffreys-style) smoothing was added,
+  295|    and the national effect is now adult-weighted.
+  296| 9. **A1 denominator.** Backbone turnout for A1 is now per legally eligible
+  297|    adult (exclusion included), matching what an agent's `p_vote` means.
+  298| 10. **The agents were answered by Claude Code subagents, not the Messages
+  299|     API.**
+  300|     - No `ANTHROPIC_API_KEY` was available. Credential exploration was
+  301|       declined, correctly.
+  302|     - The 442 requests went through the `transcript` backend to 9
+  303|       subagents: 7 Sonnet and 2 Opus, via the Agent tool's `model`
+  304|       setting. The exact model versions behind those settings aren't
+  305|       recorded by the tool.
+  306|     - Each subagent answered 18–59 requests in one context. No subagent saw
+  307|       both arms of the same person.
+  308|     - The subagents' own reports:
+  309|       - The probe subagent answered 28 of 56 probes by script, having read
+  310|         the first 28. All 56 name Harding.
+  311|       - The control-sonnet-2 subagent built answers with a helper script.
+  312|         All 56 reasons and quotes are distinct.
+  313|       - The control-sonnet-1 subagent says its later answers are shorter and
+  314|         more generic. Its quotes fall from 26 to 16 words.
+  315|     - This is a weaker instrument than independent API calls. The
+  316|       homogenization in A2 may be partly an artifact of batching.
+  317|     - **The production path is `anthropic-batch`**, and this pilot should be
+  318|       rerun on it before any agent-layer number is cited.
+  319| 11. **p1 prompt bugs,** found after the answers came back and fixed in p2.
+  320|     The p1 requests that were answered are unchanged on disk.
+  321|     - Non-citizen women were given the `no-19th` counterfactual, and their
+  322|       brief contradicted itself. Two subagents flagged it. Those pairs are
+  323|       excluded from the analysis.
+  324|     - Briefs were dated 30 October while admitting items dated up to
+  325|       1 November.
+  326|     - Surnames were drawn from one mixed list ("Mary Lindqvist", a Black
+  327|       North Carolina woman).
+  328|     - Before any answer, the Ohio line "women have voted for president since
+  329|       1917" was corrected: no presidential election fell in 1917–19.
+  330| 
+  331| ## What wasn't done
+  332| 
+  333| - **County-level ecological inference.** County returns are cached; county
+  334|   composition needs NHGIS registration.
+  335| - **Strict mode.** The 1910 census would be aged ten years.
+  336| - **Other holdouts.** The 26th Amendment, VRA and Amendment 4 holdouts are
+  337|   designed but not run.
+  338| - **Population what-ifs.** Huntington–Hill and Webster are implemented and
+  339|   unit-tested, but not exercised.
+  340| - **Reading the stereotype audit.** A4 used the regex pass only.
+  341| - **Alien declarant voting in 1920.** Not coded in any dataset found; treated
+  342|   as barred everywhere.
 ```
 
 ## `LICENSE`
@@ -1309,6 +1315,134 @@ Files `EVAL.md` to `infra/.gitignore`. Lines are numbered as in the repository.
    40| }
 ```
 
+## `data/1920/PROVENANCE.md`
+
+```markdown
+    1| # 1920 inputs: provenance and licences
+    2| 
+    3| These files are everything the 1920 backbone and its validation checks read
+    4| (R1, B1–B5, N1–N2 in `EVAL.md`). With them, anyone can rerun the 1920
+    5| results without the private cache, an NHGIS account or IPUMS:
+    6| 
+    7| ```sh
+    8| SIMHARNESS_CACHE=data/1920 python3 -m simharness.run backbone --config configs/prototype-1920.json
+    9| SIMHARNESS_CACHE=data/1920 python3 -m simharness.run evaluate --config configs/prototype-1920.json
+   10| ```
+   11| 
+   12| Checked on 2026-11-20: this folder and the full private cache give identical
+   13| results (B1 7.47, B2 2.92, B3 0.93, B4 0.047, R1 0.33; uniform swing 8.68,
+   14| persistence 17.41). `EVAL.md` reports B1 7.55 and B4 0.052 from an earlier run
+   15| (`runs/1920-bcbd86b43f`); the difference comes from code changes since then, not from the data.
+   16| 
+   17| Not here, because the backbone doesn't read them: the interviews' newspaper
+   18| corpus (`sources/corpus_1920.jsonl`) and party platforms
+   19| (`context/platforms_1920.json`). Nothing here comes from NHGIS or IPUMS; those
+   20| extracts stay out of the repo (`docs/DEPLOY.md`, "Census data").
+   21| 
+   22| ## Licences
+   23| 
+   24| | File | Licence | Why |
+   25| |---|---|---|
+   26| | `population/*.csv` | Public domain | U.S. Census Bureau publications (works of the U.S. government, 17 U.S.C. § 105) |
+   27| | `franchise/state_franchise_1920.csv` | CC0 1.0 | Gray & Jenkins and Teele datasets (both CC0); notes cite National Park Service pages (public domain) |
+   28| | `franchise/women_suffrage_pre19th.csv` | CC0 1.0 | Teele dataset (CC0) |
+   29| | `benchmarks/corder_wolbrecht_turnout_by_sex.csv` | CC0 1.0 | Corder & Wolbrecht dataset (CC0) |
+   30| | `labels/state_pres_1916_1920_1924.csv` | **CC BY-SA 4.0** | Includes figures from Wikipedia (see below); its other columns come from Algara & Amlani (CC0), the House Clerk and NARA (public domain) |
+   31| 
+   32| The repo's MIT licence covers its code, not these files.
+   33| 
+   34| **Attribution for `labels/state_pres_1916_1920_1924.csv`.** The `wp_*`
+   35| columns, and the `total` (so `other`) in the state-years whose `value_source`
+   36| names Wikipedia (15 in 1920, 12 in 1924, 6 in 1916), are adapted from the
+   37| results-by-state tables of the English Wikipedia articles "1916 United States
+   38| presidential election" (revision 1375915930), "1920 United States presidential
+   39| election" (revision 1374763539) and "1924 United States presidential election"
+   40| (revision 1377402879), by Wikipedia contributors, licensed CC BY-SA 4.0
+   41| (https://creativecommons.org/licenses/by-sa/4.0/). Wikipedia credits those
+   42| tables to Dave Leip's Atlas of U.S. Presidential Elections. This file is shared
+   43| under the same licence.
+   44| 
+   45| ## Sources
+   46| 
+   47| ### Census: `population/`
+   48| U.S. Census Bureau, *Fourteenth Census of the United States Taken in the Year
+   49| 1920*, Vol. III, Population: Composition and Characteristics (1922), and
+   50| *Abstract of the Fourteenth Census* (1923). PDFs from
+   51| https://www2.census.gov/library/publications/decennial/1920/ (retrieved 2026-09-30).
+   52| 
+   53| - **`adults_1920_by_state.csv`**: each state's Vol. III Table 5, "Population 21
+   54|   years of age and over, by sex, class of population, and citizenship": Male and
+   55|   Female 1920.
+   56| - **`adults_1910_by_state.csv`**: the 1910 columns those tables reprint (Male 1910),
+   57|   and each state's Table 4 for 1910 females. These are the 1910 enumeration counts,
+   58|   published in 1912–13.
+   59| - **`urban_rural_1920_by_state.csv`**: Abstract, Population Table 15 (urban and rural
+   60|   by state) and Agriculture Table 3 (farm population).
+   61| 
+   62| The scans have no usable text layer; machine OCR misread this typeface (3/8, 9/0,
+   63| 5/6). Every number was transcribed cell by cell from the 300-dpi page images, and
+   64| none was typed from memory. Checks, all passing exactly with no tolerance:
+   65| - In every state and column: Total = sum of races, White = native + foreign-born,
+   66|   and foreign-born white = naturalized + first papers + alien + unknown.
+   67| - The 49 state sums equal the printed United States Table 5 in all 48 cells.
+   68| - The 1910 female totals equal the printed U.S. figure (24,555,754).
+   69| - Urban + rural = total in every state.
+   70| - The table also matches NHGIS's 1920 state tables exactly (`DISCLOSURES.md` C17).
+   71| 
+   72| National 1920 totals (21 and over): men 31,403,370; women 29,483,150.
+   73| 
+   74| ### Returns: `labels/state_pres_1916_1920_1924.csv`
+   75| - **Algara, C. & Amlani, S.**, county presidential returns 1868–2020,
+   76|   doi:10.7910/DVN/DGUMFI (Harvard Dataverse v1.1, CC0). This is the default:
+   77|   the county sum.
+   78| - **U.S. House, Office of the Clerk**, *Statistics of the Presidential and
+   79|   Congressional Election* (1921, 1925), history.house.gov. Where the county sum
+   80|   differs from the Clerk by more than 0.5% on R or D, the Clerk's R and D are used
+   81|   (`value_source`). The transcribed recap columns sum exactly to the printed
+   82|   totals (1920: 16,147,249 R; 9,140,864 D; 531 EV).
+   83| - **National Archives**, Electoral College results 1920, archives.gov: the
+   84|   electoral votes (`nara_ev_*`).
+   85| - **Wikipedia**, as attributed above: the total vote where the Clerk is used (the
+   86|   Clerk prints no state totals), and the `wp_*` comparison columns.
+   87| 
+   88| Every discrepancy and the decision rule are recorded in the file's `note` and
+   89| `value_source` columns. National 1920 totals as chosen: Harding 16,145,577; Cox
+   90| 9,142,289; other 1,511,118; total 26,798,984.
+   91| 
+   92| ### Franchise: `franchise/`
+   93| - **Gray, T. & Jenkins, J.**, state-level franchise data, doi:10.7910/DVN/QIY9EM
+   94|   (CC0): poll tax, literacy test, secret ballot, ex-felon rules and women's vote,
+   95|   for 1920.
+   96| - **Teele, D.**, women's suffrage replication data, doi:10.7910/DVN/EVYI2H, checked
+   97|   against doi:10.7910/DVN/JZYGRB (both CC0). Teele hand-coded the dates from
+   98|   Keyssar (2000), Tables A.17–A.18. Arkansas and Texas granted only primary
+   99|   suffrage, so their presidential year is NA.
+  100| - **National Park Service**, "Georgia and the 19th Amendment" and "Mississippi and
+  101|   the 19th Amendment" (nps.gov): women in GA and MS could not register in time for
+  102|   November 1920 (`women_able_to_vote_nov1920 = 0`).
+  103| 
+  104| ### Held-out benchmark: `benchmarks/`
+  105| **Corder, J. K. & Wolbrecht, C.**, turnout by sex, 1920 and 1924,
+  106| doi:10.7910/DVN/QB526J (CC0). Only the evaluate stage reads it
+  107| (`test_benchmarks_isolated`).
+  108| 
+  109| ## File hashes
+  110| 
+  111| Written by `scripts/harness/data_1920_hashes.py --write`; checked by `tests/test_data_1920.py`.
+  112| 
+  113| <!-- hashes:start -->
+  114| | File | Bytes | sha256 |
+  115| |---|---|---|
+  116| | `benchmarks/corder_wolbrecht_turnout_by_sex.csv` | 7981 | `66bbd07dc8a5b5c6774cd2d2011e3d28e4a8bfe36fb121fee9ae89f23141897a` |
+  117| | `franchise/state_franchise_1920.csv` | 14998 | `e70f04ec2c75e64472de9c30d7d04fa888e2cf1d54726c2a8560ef060efb71c1` |
+  118| | `franchise/women_suffrage_pre19th.csv` | 10779 | `54da193f57a1e799d6bcd39a98d44b846ffccb29eb5505c6e3c7261ec0031a4d` |
+  119| | `labels/state_pres_1916_1920_1924.csv` | 29225 | `39b0dbc19249663ad64548d84e0bf1135506d11a82175c48f23d1c355e6d5794` |
+  120| | `population/adults_1910_by_state.csv` | 365922 | `78ec7a0ca2094430f5350cf04999fe9fe84249921f61fa40dd4bf9c9d4b87de1` |
+  121| | `population/adults_1920_by_state.csv` | 441664 | `3a760fb7fb5f976b8db8d76068b1e4de554495e6a330100c54339d0b0c9841ee` |
+  122| | `population/urban_rural_1920_by_state.csv` | 137287 | `c703c252af31ab600a3b7579e2e9e696aec1c69fae7d186ac63267153bdcd822` |
+  123| <!-- hashes:end -->
+```
+
 ## `docker/entrypoint.sh`
 
 ```bash
@@ -1634,292 +1768,41 @@ Files `EVAL.md` to `infra/.gitignore`. Lines are numbered as in the repository.
   298| (the derived part, everything except `*/raw/`) and on EFS. They are never in
   299| git, an image, Vercel or the assets bucket.
   300| 
-  301| To re-sync after rebuilding the cache on a laptop, run
-  302| `scripts/sync-data.sh upload-cache`, then `scripts/sync-data.sh cache`. Run
-  303| ids hash the cache manifest, so a changed cache means new run ids.
+  301| The 1920 inputs in `data/1920/` are different: they are transcribed from the census
+  302| volumes (public domain) or come from CC0 datasets, plus one CC BY-SA returns file, and are
+  303| committed so the 1920 results can be rerun from the repo (`data/1920/PROVENANCE.md`).
   304| 
-  305| ## Alarms
-  306| 
-  307| All alarms go to SNS `simulacra-alarms`, which emails cam@partyhat.ai:
-  308| - no healthy target for 3 minutes;
-  309| - more than 5 target 5xx in 5 minutes;
-  310| - more than 10 ELB 5xx in 5 minutes;
-  311| - any worker STOP, refusal or traceback (the entrypoint echoes worker lines
-  312|   to the log with a `[worker]` prefix);
-  313| - the AWS Budget forecast passing 80%, and actual spend passing 100% of $150
-  314|   a month. The budget filters on the `project` cost-allocation tag. AWS can
-  315|   take up to 24 hours to see a new tag, so activating it may fail on the
-  316|   first apply; re-apply the next day.
-  317| 
-  318| ## Cost estimate (us-east-1, October 2026 list prices)
-  319| 
-  320| | Item | Basis | ~/month |
-  321| |---|---|---|
-  322| | ALB | $16.43 base plus about 1 LCU | $22 |
-  323| | Fargate | 1 vCPU, 4 GB, ARM, 24/7 | $34 |
-  324| | Public IPv4 | Task plus 2 ALB addresses at $3.65 each | $11 |
-  325| | EFS (elastic) | About 1–2 GB, growing 5–7 MB per new what-if, plus I/O | $1–3 |
-  326| | AWS Backup | EFS warm storage | <$1 |
-  327| | CloudFront | About 19 MB per first-time visitor; inside the 1 TB/month free tier up to about 50k visitors | $0 |
-  328| | S3, ECR, logs, alarms, Secrets Manager | | $3–5 |
-  329| | **AWS total** | | **≈ $75–80** |
-  330| | Vercel | Hobby is $0, but its terms exclude commercial use; Pro is $20 per member | $0–20 |
-  331| | Anthropic | $0.74–$1.91 per new typed what-if, from any visitor. Repeats and precomputed combinations are free | At most $200, by the monthly cap ($20 a day) |
-  332| 
-  333| The Anthropic line dominates. The daily and monthly caps (Spend, above) bound it.
-```
-
-## `docs/harness/README.md`
-
-```markdown
-    1| # Simulacra Americana harness
-    2| 
-    3| This is the simulation behind `/api/simulacra`. Its code and data sit at the repo
-    4| root (`simharness/`, `configs/`, `profiles/`, `whatifs/`, `extracts/`, `runs/`,
-    5| `serve/`); this README lives in `docs/harness/`, and the method documents stay
-    6| at the root.
-    7| 
-    8| - **The statistical backbone** decides the counts.
-    9| - **LLM agents** supply the counterfactual response and the quotes.
-   10| 
-   11| Read [`METHOD.md`](../../METHOD.md) first. Then read [`EVAL.md`](../../EVAL.md) (the 1920 prototype's results, failures included).
-   12| 
-   13| **[`VALIDITY.md`](../../VALIDITY.md)** takes stock of what the harness can and can't claim: contamination by the language model's knowledge, leakage, historical bias, the held-out checks that exist and the ones that don't, and the next steps in order.
-   14| 
-   15| **[`DISCLOSURES.md`](../../DISCLOSURES.md)** is the running log of every known inaccuracy and honesty flag.
-   16| Add to it the moment something is found.
-   17| 
-   18| Nothing here is imported by the page; the page reads bundles through the
-   19| server. The bundle's shape is `simharness.serialize.Bundle`, with a shared
-   20| example at `tests/fixtures/bundle.example.json`; the server's zod schema
-   21| (`serve/bundle.ts`) parses the same file, and the page's side of the contract
-   22| is `src/lib/simulacra/schemas.ts`.
-   23| 
-   24| ## Layout
-   25| 
-   26| | Path | What |
-   27| |---|---|
-   28| | `simharness/config.py` | Run config. A run's id hashes the config and the data manifest. |
-   29| | `simharness/data.py` | Loaders for the cache (labels, census, franchise, corpus, platforms) |
-   30| | `simharness/backbone.py` | Turnout and choice by cell, 400 posterior draws, exact calibration |
-   31| | `simharness/whatifs.py` | The what-ifs: what each changes, its assumption, and the facts a counterfactual brief states |
-   32| | `simharness/cohorts.py`, `agents.py` | Agent cohorts (merge rule) and invented people drawn from them |
-   33| | `simharness/prompts.py` | The versioned prompts: blinded control, non-hypothetical counterfactual, probe, schemas |
-   34| | `simharness/agentlayer.py` | Every model request for a run |
-   35| | `simharness/llm.py` | Backends: `anthropic`, `anthropic-batch`, `transcript` |
-   36| | `simharness/paired.py` | Paired differences, cohort bias, the shrinkage |
-   37| | `simharness/quotes.py` | Quote selection and the stereotype audit |
-   38| | `simharness/aggregate.py`, `serialize.py` | Draws → states, EV and ranges → the page's shape |
-   39| | `simharness/evaluate.py`, `benchmarks.py` | The validation checks. Only these read held-out benchmarks. |
-   40| | `simharness/scenario.py` | Any typed what-if → a spec of one of five kinds (franchise, population, issue, event, candidate) with generic mechanics |
-   41| | `simharness/world.py` | The staging pass for a compiled what-if's world, and the audit of the interviews' reasoning (DISCLOSURES D33) |
-   42| | `simharness/evidence.py` | Historical evidence: web-search research, grounded extraction, source tiers, agreement, blend, confidence tiers |
-   43| | `simharness/intake.py` | Typed what-if intake: compile → research → register → run → `serve/bundles/`; the router's queue |
-   44| | `simharness/agent.py` | The research agent: the same stages as tools a model chooses, behind a permission gate; replay and approval |
-   45| | `simharness/trace.py` | Step-level traces of the agent (`sessions/traces/`), their summaries and retention |
-   46| | `simharness/agent_eval.py` | Golden tasks for the agent from the compiled what-ifs, scored field by field |
-   47| | `simharness/profiles.py` | Loads one profile per election (names, blinded descriptors, label letters, ballot wording, sources): 1920 and 1924 in code, the other 58 from `profiles/<year>.json` |
-   48| | `simharness/run.py` | The command line (`python3 -m simharness.run <stage>`) |
-   49| | `simharness/pipeline.py` | The stages: backbone, plan, ask, analyze, verify, dryrun, evaluate (`Run`) |
-   50| | `simharness/publish.py` | The publish stage: every what-if combination → the bundle |
-   51| | `serve/simulacra.ts`, `serve/index.ts` | The Express router that serves the bundles, and the server that mounts it at `/api/simulacra` next to the static page |
-   52| | `serve/bundles/<year>.json` | The bundles the server serves (`SIMULACRA_BUNDLES` overrides the folder) |
-   53| | `extracts/` | IPUMS extract definitions: we ship definitions, never microdata |
-   54| | `runs/<id>/` | Everything a run wrote: config, fit, requests, answers, analysis, validation, `published/1920.json`. The repo keeps only `config.json`, `analysis.json`, `validation.json` and `published/`; `fit.pkl`, `effects.pkl` and `agents/` are regenerable and stay local |
-   55| | `runs/_cache/` | Identical-request answer cache (regenerable from `runs/*`; gitignored) |
-   56| | `whatifs/<key>.json`, `whatifs/evidence/<key>.json` | Compiled what-ifs (exploratory) and every what-if's researched evidence; both hashed into run ids |
-   57| | `sessions/` | Dev only, gitignored: typed requests, the unknown-text queue, intake outcomes, the spend ledger |
-   58| | `scripts/harness/` | The cache build scripts (returns, franchise, population, corpus, NHGIS extracts) and `bundle_fixture.py` |
-   59| | `scripts/harness/nhgis_common.py` | The NHGIS extract client and the population builders' shared helpers |
-   60| | `scripts/harness/sessions-report.py` | What people typed, the share unmodelled, unknowns by kind, today's spend |
-   61| 
-   62| The raw data lives outside the repo, in `SIMHARNESS_CACHE`. It defaults to
-   63| `~/research_notes/historical_election_sim_data/harness_cache`, and each folder
-   64| there has a `PROVENANCE-*.md`.
-   65| 
-   66| Some sources can't be redistributed (IPUMS, NHGIS), so the cache stays
-   67| outside the repo. Only aggregates reach `runs/`.
-   68| 
-   69| ## Run it
-   70| 
-   71| From the repo root (`pip install -e '.[test]'` once; add `'.[llm]'` for the paid stages):
-   72| 
-   73| ```sh
-   74| python3 -m simharness.run backbone      # fit + unchanged-run reproduction
-   75| python3 -m simharness.run plan          # agents and requests (no model calls)
-   76| python3 -m simharness.run ask           # send requests (backend from the config)
-   77| python3 -m simharness.run analyze       # paired effects, probes, bias, audit
-   78| python3 -m simharness.run evaluate      # validation checks → validation.json
-   79| python3 -m simharness.run publish       # every what-if combination → published/1920.json
-   80| python3 -m pytest -q                    # fast unit checks (tests/)
-   81| ```
-   82| 
-   83| Typed what-ifs and historical evidence (all paid stages priced first and recorded in
-   84| `sessions/spend.jsonl`; see `simharness/intake.py`):
-   85| 
-   86| ```sh
-   87| H=~/.venvs/simharness/bin/python
-   88| $H -m simharness.run whatif --text "charlie chaplin ran as an independent" --config configs/live-1920.json
-   89| $H -m simharness.run whatif --queue --config configs/live-1920.json     # what the page couldn't model
-   90| $H -m simharness.run research --config configs/live-1920.json           # evidence for the config's what-ifs
-   91| $H -m simharness.run research --key league --refresh | --reextract ...  # one what-if; search again, or re-read saved notes
-   92| ```
-   93| 
-   94| How a typed what-if is modelled:
-   95| 1. **Compile** (`research.compile_model`; Opus in the live configs): the words become a settled-fact change of one kind,
-   96|    with who it reaches, a plausibility grade, keywords and research questions.
-   97|    Nominee and party names are sent back and masked. A request that means an
-   98|    existing what-if only adds keywords.
-   99| 2. **Research** (`research.research_model`, Sonnet, + web search): scholarship, official statistics and
-  100|    archives on the change itself, the same groups in the most similar
-  101|    situations, and any named person's record before the context date.
-  102| 3. **Extract** (`research.extract_model`; Opus in the live configs): findings grounded in the sources the
-  103|    search returned. Each is graded by source tier × match, and signed for the
-  104|    scenario (a situation the change undoes counts the other way).
-  105| 4. **Stage** (`world.py`, when `research.world_model` is set): the year's
-  106|    items the change makes false leave the counterfactual brief, in-world news
-  107|    and a belief check are added, and the groups to interview are named.
-  108| 5. **Interview**: the usual paired control/counterfactual briefs. A candidate
-  109|    gets a third labelled ballot line (p4). Identical earlier requests are
-  110|    reused, so only the new arm is paid for.
-  111|    Answers that fail the belief check or the reasoning audit are left out, or
-  112|    re-asked on `agents.escalate_model`.
-  113| 6. **Evaluate**: the interviews against the record on votes and turnout
-  114|    (corroborated, consistent, contradicted, untested). For exploratory
-  115|    what-ifs, the evidence is also a precision-weighted prior on each cohort's
-  116|    effect.
-  117| 7. **Confidence**: high, medium, low or very low ("Extremely low
-  118|    confidence"), with the reasons. The tier reaches the page as
-  119|    `confidenceTier`, `confidenceFlags` and `confidenceReasons`, and as a
-  120|    sentence in the summary.
-  121| 
-  122| ### The research agent
-  123| 
-  124| `simharness/agent.py` runs the same stages as tools, in an order a model chooses:
-  125| it can compile again with a note when a reading is wrong, research again with
-  126| sharper questions when the evidence is thin, take an existing what-if, or stop
-  127| before any interview. It is off unless asked for.
-  128| 
-  129| ```sh
-  130| $H -m simharness.run whatif --agent --text "..." --year 1920                 # held for approval (--publish ask)
-  131| $H -m simharness.run whatif --agent --publish gate --text "..." --year 1920  # live if the bundle's checks pass
-  132| $H -m simharness.run whatif --agent --dry-run --text "..." --year 1920       # no writes, interviews or publishing
-  133| $H -m simharness.run trace                                                    # recent traces, and what is held
-  134| $H -m simharness.run trace --id <trace>                                       # one trace: path, refusals, dollars
-  135| $H -m simharness.run approve --id <trace>                                     # put a held bundle live
-  136| $H -m simharness.run replay --id <trace> --model claude-sonnet-5-5            # recorded tool results, new model
-  137| $H -m simharness.run agent-eval --year 1920 --limit 3                         # golden tasks, dry run (~$1-3 each)
-  138| ```
-  139| 
-  140| Permissions are enforced in code, never by the prompt. Each tool has a tier (read,
-  141| spend, write, publish), and the gate checks preconditions before it runs:
-  142| - `register` needs a spec that passed `validate` unchanged since, plus evidence and,
-  143|   for interviewed changes, a staged world.
-  144| - `use_existing` attaches the reader's words only to the what-if the compiler matched.
-  145| - `run_interviews` prices the uncached requests first, and refuses to run if the
-  146|   typical cost exceeds what the text has left.
-  147| - `publish` puts a bundle live only if it passes `bundle_checks` (the new what-if is
-  148|   in it, no served result is missing, and the unchanged rerun is identical to the
-  149|   served one) and the policy is `gate`. Otherwise the bundle is held in
-  150|   `sessions/pending-publish/` for `approve`.
-  151| 
-  152| The reader's words and anything from the web reach the model only as data. Raw
-  153| pages never do: research returns graded findings that cite returned sources.
-  154| Every model turn and tool call (arguments, decision, full result, dollars, time)
-  155| is written to `sessions/traces/<id>.jsonl`. Traces are kept as long as the session
-  156| logs (`SIMULACRA_RETAIN_DAYS`). A replay re-serves a trace's recorded tool results
-  157| to a new model or prompt and compares the paths.
-  158| 
-  159| The queue worker uses the agent when `SIMULACRA_AGENT=1`. `SIMULACRA_AGENT_PUBLISH`
-  160| is `gate` by default; with `ask`, every new what-if waits for approval, and the
-  161| waiting page is told it will go live once reviewed.
-  162| 
-  163| Untrusted text is fenced in every pass: the reader's words reach compile and research inside
-  164| `<reader_text>`, and the search's notes and source titles reach extraction inside `<research_notes>`
-  165| and `<sources>` (`scenario.fence` swaps angle brackets so the text can't close its fence). Each system
-  166| prompt says fenced text is material, never instructions. A text that tries to instruct the compiler
-  167| is answered as not modelable.
-  168| 
-  169| With `SIMULACRA_LOG=1`, the server (`pnpm serve`) logs requests to `sessions/`, queues unknown text,
-  170| and reloads a changed bundle without a restart. `SIMULACRA_AUTORUN=configs/live-1920.json`
-  171| also starts the queue worker as text arrives (`SIMULACRA_PYTHON` picks the interpreter;
-  172| it runs from the repo root).
-  173| 
-  174| The `ask` stage depends on the backend:
-  175| - **`anthropic` or `anthropic-batch`:** needs `pip install -e '.[llm]'`
-  176|   (`anthropic>=1.0`; older SDKs lack `output_config`). The key comes from
-  177|   `ANTHROPIC_API_KEY`, else `~/.config/simulacra/anthropic.env`
-  178|   (`ANTHROPIC_API_KEY=…`, mode 600; `llm.api_key()`), and is never written to
-  179|   the repo, a run folder or a log. The commands above use a venv outside the
-  180|   repo, `~/.venvs/simharness`, with that extra installed.
-  181| - **`transcript`:** writes `runs/<id>/agents/transcript/requests.jsonl` and
-  182|   reads `responses.jsonl`, one `{"id", "model", "answer"}` per line. Any
-  183|   runner can fill it.
-  184| 
-  185| ### Interview runs
-  186| 
-  187| Every stage takes `--config`; the default is `configs/prototype-1920.json`.
-  188| Two small 1920 configs exist for cheap runs on the API:
-  189| - `configs/quick-1920.json`: two cohorts, one agent each, all four arms, on
-  190|   Haiku 4.5 (a few cents).
-  191| - `configs/rung1-1920.json`: six cohorts × 2 agents, `league` only, control
-  192|   and counterfactual arms (under a dime).
-  193| 
-  194| The `agents` block's knobs (`config.AgentConfig`) select what is sent: `arms`
-  195| (any of `control`, `cf`, `swap`, `probe`), `only_cohorts`, `per_cohort`,
-  196| `check_share` (0 skips the check-model subsample), `bulk_model`,
-  197| `check_model`, `effort` and `max_tokens`. `plan` prints the request counts and
-  198| the dollar estimate before anything is sent. Model constraints the backend
-  199| handles: Haiku 4.5 rejects `output_config.effort` (it is stripped), and
-  200| Sonnet 5.5 rejects non-default sampling parameters, so spread comes from
-  201| persona diversity, not temperature.
-  202| 
-  203| A run's id hashes the config, the data and all of `simharness/*.py`
-  204| (DISCLOSURES G1), so any code change starts a new run folder and a fresh
-  205| `ask`; identical requests are still answered from the cache (G4).
-  206| 
-  207| **Changing what the interviews collect.** A new answer field touches, together:
-  208| `prompts.SYSTEM` (what the field is), `prompts.answer_schema` (add it to
-  209| `required`; keep `additionalProperties: false`), `prompts.QUESTIONS` only if
-  210| the field needs asking (keep the paraphrases parallel), `paired.normalize`
-  211| only if it feeds a count, and `publish._voters` to put it in the voter
-  212| payload (plus the zod schemas in `serve/bundle.ts` and
-  213| `src/lib/simulacra/schemas.ts` if the page is to read it). Bump `PROMPT_VERSION` in `prompts.py`; answers from two prompt
-  214| versions are never mixed in one analysis.
-  215| 
-  216| Serve the bundles:
-  217| 1. `pnpm build` (the static page, into `build/`), then `pnpm serve` (`serve/index.ts`, `PORT`, default 8787).
-  218| 2. The router reads `serve/bundles/<year>.json`; set `SIMULACRA_BUNDLES` to serve another folder, such as `runs/<id>/published`.
-  219| 
-  220| ## Years
-  221| 
-  222| - **1920** is the original fit, identified by the 1916→1920 suffrage
-  223|   experiment.
-  224| - **1924** is carried forward from it (`backbone.carry_forward`; DISCLOSURES
-  225|   C13–C16). It has its own `configs/live-1924.json`.
-  226| - **All 60 elections, 1789–2024, are built.** Each other year has
-  227|   `profiles/<year>.json` and `configs/live-<year>.json`. Years other than 1916–1924 use
-  228|   `backbone.general_fit` (DISCLOSURES B10–B13). The unchanged rerun of every
-  229|   year reproduces each state's certified returns and history's electoral votes.
-  230| - `run dryrun --year Y [--all-cohorts] [--samples N]` runs backbone → verify →
-  231|   plan for any year with no model calls, and prints sample briefs, counts and
-  232|   the cost estimate (`runs/<id>/dryrun.json`).
-  233| - `run verify` checks any year: exact reproduction, plus Corder–Wolbrecht
-  234|   where it exists. `evaluate` stays 1920's check set.
-  235| - **Adding a year:**
-  236|   - a `profiles/<year>.json`;
-  237|   - returns, voting rules and platforms in the cache;
-  238|   - a `live-<year>.json` config.
-  239| 
-  240|   The queue sends typed what-ifs to their year's config.
-```
-
-## `infra/.gitignore`
-
-```
-    1| .terraform/
-    2| *.tfstate
-    3| *.tfstate.*
-    4| *.tfplan
-    5| terraform.tfvars
+  305| To re-sync after rebuilding the cache on a laptop, run
+  306| `scripts/sync-data.sh upload-cache`, then `scripts/sync-data.sh cache`. Run
+  307| ids hash the cache manifest, so a changed cache means new run ids.
+  308| 
+  309| ## Alarms
+  310| 
+  311| All alarms go to SNS `simulacra-alarms`, which emails cam@partyhat.ai:
+  312| - no healthy target for 3 minutes;
+  313| - more than 5 target 5xx in 5 minutes;
+  314| - more than 10 ELB 5xx in 5 minutes;
+  315| - any worker STOP, refusal or traceback (the entrypoint echoes worker lines
+  316|   to the log with a `[worker]` prefix);
+  317| - the AWS Budget forecast passing 80%, and actual spend passing 100% of $150
+  318|   a month. The budget filters on the `project` cost-allocation tag. AWS can
+  319|   take up to 24 hours to see a new tag, so activating it may fail on the
+  320|   first apply; re-apply the next day.
+  321| 
+  322| ## Cost estimate (us-east-1, October 2026 list prices)
+  323| 
+  324| | Item | Basis | ~/month |
+  325| |---|---|---|
+  326| | ALB | $16.43 base plus about 1 LCU | $22 |
+  327| | Fargate | 1 vCPU, 4 GB, ARM, 24/7 | $34 |
+  328| | Public IPv4 | Task plus 2 ALB addresses at $3.65 each | $11 |
+  329| | EFS (elastic) | About 1–2 GB, growing 5–7 MB per new what-if, plus I/O | $1–3 |
+  330| | AWS Backup | EFS warm storage | <$1 |
+  331| | CloudFront | About 19 MB per first-time visitor; inside the 1 TB/month free tier up to about 50k visitors | $0 |
+  332| | S3, ECR, logs, alarms, Secrets Manager | | $3–5 |
+  333| | **AWS total** | | **≈ $75–80** |
+  334| | Vercel | Hobby is $0, but its terms exclude commercial use; Pro is $20 per member | $0–20 |
+  335| | Anthropic | $0.74–$1.91 per new typed what-if, from any visitor. Repeats and precomputed combinations are free | At most $200, by the monthly cap ($20 a day) |
+  336| 
+  337| The Anthropic line dominates. The daily and monthly caps (Spend, above) bound it.
 ```
