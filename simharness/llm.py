@@ -35,8 +35,26 @@ PRICES = {
 }
 
 
+_WARNED: set[str] = set()
+
+
+def prices(model: str) -> tuple[float, float, float]:
+    """A model's $/M tokens. A dated or suffixed id (claude-opus-5-5-20261001) takes its base model's price.
+    An unknown model is priced at the dearest known rate, never a cheaper guess, so the caps and the
+    ledger can overstate its spend but never understate it; it is reported once."""
+    if model in PRICES:
+        return PRICES[model]
+    base = max((k for k in PRICES if model.startswith(k + '-')), key=len, default=None)
+    if base:
+        return PRICES[base]
+    if model not in _WARNED:
+        _WARNED.add(model)
+        print(f'llm: no price for {model}; charging the dearest known rate. Add it to llm.PRICES.', flush=True)
+    return max(PRICES.values(), key=lambda p: p[1])
+
+
 def cost(model: str, usage: dict, batch: bool = False) -> float:
-    p_in, p_out, p_cache = PRICES.get(model, PRICES['claude-sonnet-5-5'])
+    p_in, p_out, p_cache = prices(model)
     fresh = usage.get('input_tokens', 0)
     cached = usage.get('cache_read_input_tokens', 0)
     written = usage.get('cache_creation_input_tokens', 0)
@@ -166,17 +184,37 @@ class AnthropicBackend(Backend):
 class AnthropicBatchBackend(AnthropicBackend):
     name = 'anthropic-batch'
 
-    def run(self, requests, poll_seconds: int = 30):
+    # A batch normally ends within the hour; the API expires one after 24.
+    MAX_WAIT = 6 * 3600
+    CANCEL_WAIT = 600
+
+    def run(self, requests, poll_seconds: int = 30, max_wait: float | None = None, sleep=time.sleep, clock=time.monotonic):
+        """Waits at most max_wait (default MAX_WAIT) seconds. Past it the batch is cancelled: answers already
+        made are kept (they are paid for) and the rest come back as failed. If even the cancellation hasn't
+        ended after CANCEL_WAIT more seconds, it raises TimeoutError with the batch id."""
         from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
         from anthropic.types.messages.batch_create_params import Request
         batch = self.client.messages.batches.create(requests=[
             Request(custom_id=r['id'], params=MessageCreateParamsNonStreaming(**self.params(r))) for r in requests
         ])
-        while self.client.messages.batches.retrieve(batch.id).processing_status != 'ended':
-            time.sleep(poll_seconds)
+        self.wait(batch.id, poll_seconds, self.MAX_WAIT if max_wait is None else max_wait, sleep, clock)
+        return self.collect(batch.id, requests)
+
+    def wait(self, batch_id: str, poll_seconds: float, max_wait: float, sleep=time.sleep, clock=time.monotonic):
+        deadline, cancelled = clock() + max_wait, False
+        while self.client.messages.batches.retrieve(batch_id).processing_status != 'ended':
+            if clock() >= deadline:
+                if cancelled:
+                    raise TimeoutError(f'batch {batch_id} did not end within {self.CANCEL_WAIT}s of its cancellation')
+                print(f'batch {batch_id}: not done after {max_wait:.0f}s; cancelling and keeping the answers made', flush=True)
+                self.client.messages.batches.cancel(batch_id)
+                deadline, cancelled = clock() + self.CANCEL_WAIT, True
+            sleep(poll_seconds)
+
+    def collect(self, batch_id: str, requests: list[dict]) -> list[dict]:
         by_id = {r['id']: r for r in requests}
         out = []
-        for res in self.client.messages.batches.results(batch.id):
+        for res in self.client.messages.batches.results(batch_id):
             r = by_id[res.custom_id]
             if res.result.type != 'succeeded':
                 out.append({'id': r['id'], 'model': r['model'], 'backend': self.name, 'ok': False, 'error': res.result.type})
@@ -187,8 +225,9 @@ class AnthropicBatchBackend(AnthropicBackend):
                 data = json.loads(text)
                 out.append({'id': r['id'], 'model': r['model'], 'backend': self.name, 'ok': True,
                             'data': data, 'usage': msg.usage.model_dump(), 'raw': text})
-            except json.JSONDecodeError as e:
-                out.append({'id': r['id'], 'model': r['model'], 'backend': self.name, 'ok': False, 'error': str(e)})
+            except json.JSONDecodeError as e:  # truncated: paid for, so keep the usage (as _one does)
+                out.append({'id': r['id'], 'model': r['model'], 'backend': self.name, 'ok': False, 'error': str(e),
+                            'usage': msg.usage.model_dump()})
         return out
 
 

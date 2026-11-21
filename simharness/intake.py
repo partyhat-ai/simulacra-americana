@@ -421,12 +421,29 @@ def _norm(text: str) -> str:
     return ' '.join(text.lower().split())
 
 
-def _pid_alive(pid: int) -> bool:
+def _lock():
+    """Take the worker lock, or say who holds it: (fd, None) when taken, (None, pid) when a live worker
+    has it. flock is atomic and the kernel drops it when its process dies, so two workers can't both
+    pass a check-then-write, and a crashed worker leaves nothing stale. The file stays; its content is
+    only the holder's pid, for the message."""
+    import fcntl
+    fd = os.open(LOCK, os.O_CREAT | os.O_RDWR, 0o644)
     try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        held = os.pread(fd, 32, 0).decode(errors='replace').strip()
+        os.close(fd)
+        return None, held or '?'
+    os.ftruncate(fd, 0)
+    os.pwrite(fd, str(os.getpid()).encode(), 0)
+    return fd, None
+
+
+def _unlock(fd: int):
+    import fcntl
+    os.ftruncate(fd, 0)
+    fcntl.flock(fd, fcntl.LOCK_UN)
+    os.close(fd)
 
 
 def _config_for(year: int, fallback: Path | None = None) -> Path | None:
@@ -455,9 +472,9 @@ def process_queue(config_path: str | Path, limit: int = 3) -> list[dict]:
     SESSIONS.mkdir(exist_ok=True)
     from . import trace
     trace.prune(SESSIONS / 'traces')  # traces hold the reader's words: kept as long as the session logs
-    if LOCK.exists() and _pid_alive(int(LOCK.read_text().strip() or 0)):
-        return [{'status': 'busy', 'pid': LOCK.read_text().strip()}]
-    LOCK.write_text(str(os.getpid()))
+    fd, holder = _lock()
+    if fd is None:
+        return [{'status': 'busy', 'pid': holder}]
     try:
         done = set()
         for l in DONE.read_text().splitlines() if DONE.exists() else []:
@@ -526,4 +543,4 @@ def process_queue(config_path: str | Path, limit: int = 3) -> list[dict]:
         return results
     finally:
         llm.SPEND_WHO = None
-        LOCK.unlink(missing_ok=True)
+        _unlock(fd)
