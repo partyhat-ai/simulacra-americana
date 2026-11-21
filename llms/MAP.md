@@ -1,6 +1,6 @@
 # simulacra-americana: file map
 
-Generated from commit `61ba45dc3c4c` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `63ce42152a8f` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 
 1125 tracked files. 196 are reproduced in full in the `code-N.md` parts; the rest are listed with the reason they are not.
 
@@ -26,7 +26,7 @@ Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/si
 | `biome.json` | 775 | 40 |  | code-2.md |
 | `data/1920/PROVENANCE.md` | 7,015 | 122 | 1920 inputs: provenance and licences | code-2.md |
 | `docker/entrypoint.sh` | 652 | 17 | The API container's entrypoint: check the state mount, surface the worker's | code-2.md |
-| `docs/DEPLOY.md` | 17,920 | 337 | Deploying Simulacra Americana | code-2.md |
+| `docs/DEPLOY.md` | 17,996 | 338 | Deploying Simulacra Americana | code-2.md |
 | `docs/harness/README.md` | 15,973 | 241 | Simulacra Americana harness | code-3.md |
 | `infra/.gitignore` | 60 | 5 |  | code-3.md |
 | `infra/.terraform.lock.hcl` | 1,481 | 26 | This file is maintained automatically by "terraform init". | code-3.md |

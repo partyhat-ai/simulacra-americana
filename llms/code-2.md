@@ -1,6 +1,6 @@
 # simulacra-americana: source and docs, part 2 of 17
 
-Generated from commit `61ba45dc3c4c` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `63ce42152a8f` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 Files `EVAL.md` to `docs/DEPLOY.md`. Lines are numbered as in the repository.
 
 ## `EVAL.md`
@@ -1592,268 +1592,269 @@ Files `EVAL.md` to `docs/DEPLOY.md`. Lines are numbered as in the repository.
    71|    --platform linux/arm64 --push`) or from the workflow's build step.
    72| 6. Put the secret value, which never goes through Terraform:
    73|    `aws secretsmanager put-secret-value --secret-id simulacra/prod --secret-string '{"ANTHROPIC_API_KEY":"…","SIMULACRA_ACCESS_KEYS":"{}"}'`.
-   74|    Both fields must exist or the task can't start; `"{}"` means no one can
-   75|    queue new text yet (see "Access keys").
-   76|    Terraform creates the empty secret in step 7. If you want the value in
-   77|    place before the task first starts, run
-   78|    `terraform apply -target=aws_secretsmanager_secret.prod` first.
-   79| 7. (production) `terraform apply -var image=<ecr>/simulacra-api:<sha>`. This waits for
-   80|    the certificates to issue, then creates everything else, including the
-   81|    bill-monthly items: ALB, EFS, CloudFront. Pass `-var image` on the very
-   82|    apply that FIRST creates `aws_ecs_task_definition.api`: the task def
-   83|    ignores later container changes, so a revision created with the
-   84|    placeholder image stays a placeholder. If that happens, roll a real
-   85|    revision with `Deploy API` (as with this stack: revision 1 was busybox, and
-   86|    revision 2 was rendered from the template and rolled by hand).
-   87| 8. Seed state:
-   88|    - `scripts/sync-data.sh upload-cache` (270 objects, 15 MB).
-   89|    - `scripts/sync-data.sh upload-seed`.
-   90|    - `scripts/sync-data.sh seed`. It refuses if the volume is already seeded.
-   91| 
-   92|    The service's task exits with "not seeded" until this has run. ECS keeps
-   93|    retrying, so seed right after step 7.
-   94| 9. Assets: `python3 scripts/mirror-portraits.py --out ../simulacra-assets`,
-   95|    then `scripts/publish-assets.sh`.
-   96| 10. (production) DNS for the endpoints: `infra/vercel-dns.sh endpoints`, then `--apply`.
-   97| 11. Confirm the SNS subscription email to cam@partyhat.ai. Until it's
-   98|     confirmed, alarms reach nobody.
-   99| 12. Free reproducibility check on the server: a one-off task running
-  100|     `python -m simharness.run dryrun --year 1920` should plan without errors.
-  101|     New run ids mean the cache bytes differ from the laptop's.
-  102| 
-  103| ## CI setup
-  104| 
-  105| 1. Create `partyhat-ai/synthetic-voters-toy` and push.
-  106| 2. The deploy role trusts exactly one `sub`, `var.github_oidc_sub`: this
-  107|    repo's main branch. For this org the claim carries numeric ids, so it is
-  108|    `repo:<owner>@<owner-id>/<repo>@<repo-id>:ref:refs/heads/main`;
-  109|    the documented `repo:owner/name:...` silently never matches. The prefix
-  110|    comes from `gh api repos/partyhat-ai/synthetic-voters-toy/actions/oidc/customization/sub`.
-  111|    The variable refuses a wildcard. A workflow on any other branch, a tag, a
-  112|    pull request or an environment gets a different `sub` and can't assume
-  113|    the role.
-  114| 3. Set the repo variables from Terraform's outputs:
-  115|    ```
-  116|    gh variable set AWS_DEPLOY_ROLE_ARN -b "$(terraform -chdir=infra output -raw deploy_role_arn)"
-  117|    gh variable set TASKDEF_VARS -b "$(terraform -chdir=infra output -json taskdef_vars)"
-  118|    ```
-  119| 4. A `workflow_dispatch` workflow can only be dispatched once its file is on
-  120|    the default branch.
-  121| 5. Merges are squash-only (repo settings: merge commits and rebase merges
-  122|    off). Branch protection and rulesets need GitHub Team or Pro for a private
-  123|    repo, and this org is on the free plan, so nothing yet stops a direct push
-  124|    to main or a merge with CI red. The deploy gate below holds regardless:
-  125|    only a main SHA with a green CI run ships.
-  126| 
-  127| ## Deploying
-  128| 
-  129| **API** (manual only; a merge never ships):
-  130| ```
-  131| gh workflow run "Deploy API" -R partyhat-ai/synthetic-voters-toy --ref main -f confirm=DEPLOY
-  132| ```
-  133| The workflow:
-  134| - refuses any ref but main, and any SHA without a successful CI push run
-  135|   (`ci.yml`) for that exact commit;
-  136| - renders the task definition from `infra/taskdef.json.tftpl` and fails if
-  137|   any variable, required env var or secret is missing;
-  138| - builds on an ARM runner and tags the image with the full commit SHA;
-  139| - registers the revision, updates the service and waits until it's stable;
-  140| - fails if the circuit breaker rolled back;
-  141| - checks through the load balancer: `/healthz` returns 200, and
-  142|   `/api/simulacra/elections/1920` is `simulated: true` with slices.
-  143| 
-  144| To change an env var or secret, edit the template; that is the only place
-  145| it's defined.
-  146| 
-  147| **Web:** the Vercel project is `simulacra-americana` in scope
-  148| `camerons-projects-2a650f0d`, deployed from the CLI (`vercel deploy`, then
-  149| `vercel promote <url>`). `vercel.json` holds the build, the SPA fallback and
-  150| the same-origin rewrite to `api.`. `PUBLIC_ASSET_BASE` is a project env var
-  151| (production and preview). `www.` redirects 308 to the apex as a domain
-  152| setting (`vercel api /v9/projects/simulacra-americana/domains/www.simulacraamericana.com -X PATCH`).
-  153| Once the repo is connected to Vercel's Git integration, Vercel builds a preview from every push. Promoting to production is
-  154| manual (`vercel promote <url>`) and needs the owner's sign-off. After a promotion,
-  155| check that the site loads, a year opens through the rewrite, and the robot
-  156| loads from `assets.`.
-  157| 
-  158| ## Rolling back
-  159| 
-  160| - **API:** run `aws ecs update-service --cluster simulacra --service simulacra-api --task-definition simulacra-api:<previous>`.
-  161|   Every revision was rendered from the full template, so an older revision
-  162|   still carries its env and secrets. This is unlike the auth server's
-  163|   derive-from-running deploys. An image's revision can be redeployed as long
-  164|   as ECR keeps the image (the last 30).
-  165| - **Web:** `vercel rollback`, or "Instant Rollback" to a previous production
-  166|   deployment in the dashboard.
-  167| - **State (EFS):**
-  168|   1. In AWS Backup, open vault `simulacra-state` and restore a recovery point
-  169|      to a new directory on the same filesystem.
-  170|   2. Stop the service (`desired-count 0`) and swap the directories.
-  171|   3. Start the service again.
-  172| 
-  173|   An EFS restore puts the files in `aws-backup-restore_<ts>/` at the
-  174|   filesystem root, outside the access point. Move them with a one-off task
-  175|   that mounts the root.
-  176| - **Bundles only:** the repo's committed `serve/bundles` and the tarballs in
-  177|   `s3://simulacra-americana-data/backups/<date>/` are the fallbacks. Copy the
-  178|   year's `<year>.json` onto `/state/bundles`. The router reloads it by mtime
-  179|   without a restart.
-  180| 
-  181| ## Assets
-  182| 
-  183| Edit or add assets in the assets folder outside the repo, then run
-  184| `scripts/publish-assets.sh`, which uploads them and invalidates `/*`.
-  185| 
-  186| The robot files are copied, never moved, from the shared Partyhat bucket.
-  187| Only what the page loads is copied: `models/atlas-09-americana.glb` and
-  188| `models/atlas-09-americana-rerun/`.
-  189| 
-  190| The page versions assets with `?v=`, and CloudFront's cache key includes the
-  191| query string, so a new `?v=` takes effect immediately.
-  192| 
-  193| ## Portraits and credits
-  194| 
-  195| `scripts/mirror-portraits.py` resolves each portrait through the Commons API
-  196| and writes `portraits/credits.json` with the author, licence and licence URL
-  197| taken from the API. 76 of the 77 are public domain. One
-  198| needs attribution: `roosevelt2`, CC BY 2.0, Leon Perskie. The About sources
-  199| must show that credit.
-  200| 
-  201| ## Rotating the Anthropic key
-  202| 
-  203| 1. Create a new key in the Anthropic console.
-  204| 2. Replace the one field, keeping `SIMULACRA_ACCESS_KEYS`:
-  205|    ```
-  206|    cur=$(aws secretsmanager get-secret-value --secret-id simulacra/prod --query SecretString --output text)
-  207|    aws secretsmanager put-secret-value --secret-id simulacra/prod \
-  208|      --secret-string "$(jq -c --arg k "<new>" '.ANTHROPIC_API_KEY=$k' <<<"$cur")"
-  209|    ```
-  210| 3. Force a new deployment so the task picks up the key:
-  211|    `aws ecs update-service --cluster simulacra --service simulacra-api --force-new-deployment`.
-  212|    This brings a few seconds of 503s, and it kills a running worker, whose
-  213|    what-if is retried.
-  214| 4. Revoke the old key once the new task is healthy.
-  215| 5. Move the console usage alert to the new key.
-  216| 
-  217| ## Access keys
-  218| 
-  219| Reading is open: every year, every precomputed what-if and every combination
-  220| of them is free to serve. Only text the page doesn't recognise costs money
-  221| (compile, web research, staging, interviews). The API queues it for every
-  222| visitor, with or without an access key; a key (`Authorization: Bearer <key>`)
-  223| only puts its name on that text's lines in the spend ledger.
-  224| 
-  225| Keys live in the secret's `SIMULACRA_ACCESS_KEYS` field: a JSON object, as a
-  226| string, of name → key. Names are lowercase (`[a-z0-9_-]`, up to 40); keys
-  227| are 24–128 characters of `[A-Za-z0-9_-]`. The name is what the spend ledger
-  228| records. To add one:
-  229| ```
-  230| key=$(openssl rand -base64 36 | tr '+/' '-_' | tr -d '=')
-  231| cur=$(aws secretsmanager get-secret-value --secret-id simulacra/prod --query SecretString --output text)
-  232| aws secretsmanager put-secret-value --secret-id simulacra/prod --secret-string "$(
-  233|   jq -c --arg name "<name>" --arg key "$key" \
-  234|     '.SIMULACRA_ACCESS_KEYS = ((.SIMULACRA_ACCESS_KEYS // "{}" | fromjson) + {($name): $key} | tojson)' <<<"$cur")"
-  235| aws ecs update-service --cluster simulacra --service simulacra-api --force-new-deployment
-  236| echo "https://simulacraamericana.com/#key=$key"
-  237| ```
-  238| The link sets the key for that browser tab (the page keeps it in
-  239| `sessionStorage` and drops it from the address bar; a fragment never reaches
-  240| a server log). To revoke a key, delete its name the same way and redeploy.
-  241| 
-  242| ## Spend
-  243| 
-  244| **Two dollar caps bound the intake, counted across every visitor together:**
-  245| `SIMULACRA_DAILY_USD` per UTC day (20 in the task definition) and
-  246| `SIMULACRA_MONTHLY_USD` per UTC calendar month (200). The worker records each
-  247| stage in `/state/sessions/spend.jsonl` (priced before it is sent and recorded
-  248| after, with the access key's name when the request carried one; every line
-  249| counts toward the caps, keyed or not).
-  250| 
-  251| - **Before queuing** (`serve/guard.ts`, `checkCaps`): once today's or this
-  252|   month's recorded spend reaches its cap, POST /runs queues nothing and the
-  253|   run answers at once with `unknownWhy` saying the budget is spent.
-  254| - **Before each text** (`simharness/intake.py`, `left`): the worker checks the
-  255|   same ledger. With nothing left, the text is settled as `over-cap` in
-  256|   `queue-done.jsonl` and the waiting page is told why.
-  257| - **During a text** (`intake.Budget`): the text runs with what is left as its
-  258|   ceiling and stops at the first stage that reaches it. A stage is priced when
-  259|   it finishes, so a cap can be passed by at most the one stage that crosses
-  260|   it (at most about $2, the cost of one text's interviews).
-  261| 
-  262| A text that fails is retried once. After two failures it is settled as
-  263| `gave-up` and copied to `/state/sessions/queue-dead.jsonl`, so a text that
-  264| always fails is billed at most twice and never holds up the texts behind it.
-  265| 
-  266| To change a cap, edit its value in `infra/taskdef.json.tftpl` and deploy.
-  267| 
-  268| The research agent (`simharness/agent.py`) is off in production. It runs only
-  269| when the task definition sets `SIMULACRA_AGENT=1`. It spends under the same caps
-  270| and `Budget`, and its own model turns are recorded in the ledger as stage `agent`.
-  271| With `SIMULACRA_AGENT_PUBLISH=ask`, nothing it builds goes live until
-  272| `python -m simharness.run approve --id <trace>` is run in a one-off task.
-  273| 
-  274| The per-IP limits (`serve/simulacra.ts`, `DEFAULT_LIMITS`): 1,200
-  275| requests per 10 minutes, 120 runs per 10 minutes, and 10 queued texts an
-  276| hour; past the last, POST /runs answers 429. The rate limits read the
-  277| visitor's address from `X-Forwarded-For` two proxies deep (`TRUST_PROXY_HOPS`:
-  278| Vercel, then the ALB). A request sent to the ALB directly can forge that
-  279| header, so the per-IP limits can be dodged; the dollar caps can't, since they
-  280| count every visitor together. To stop the spending at once,
-  281| remove or revoke the Anthropic key, or stop the service
-  282| (`aws ecs update-service --cluster simulacra --service simulacra-api --desired-count 0`).
-  283| 
-  284| Session logs (`requests.jsonl` and the queue files) keep 7 days of lines
-  285| (`SIMULACRA_RETAIN_DAYS`), pruned at start and hourly while no worker runs.
-  286| `spend.jsonl` keeps every line, but drops a line's `note` (the visitor's
-  287| words) after the same 7 days. The worker's `intake.log` is emptied past 20 MB (CloudWatch keeps its
-  288| copy). To read them, run a one-off task, or download the latest AWS Backup
-  289| recovery point.
-  290| 
-  291| AWS can't see Anthropic spend. Set a usage alert on the production key in the
-  292| Anthropic console.
-  293| 
-  294| ## Census data
-  295| 
-  296| The NHGIS/IPUMS extracts and the derived `population/*_nhgis.csv` files are
-  297| not for redistribution. They live only in `s3://simulacra-americana-data/cache/`
-  298| (the derived part, everything except `*/raw/`) and on EFS. They are never in
-  299| git, an image, Vercel or the assets bucket.
-  300| 
-  301| The 1920 inputs in `data/1920/` are different: they are transcribed from the census
-  302| volumes (public domain) or come from CC0 datasets, plus one CC BY-SA returns file, and are
-  303| committed so the 1920 results can be rerun from the repo (`data/1920/PROVENANCE.md`).
-  304| 
-  305| To re-sync after rebuilding the cache on a laptop, run
-  306| `scripts/sync-data.sh upload-cache`, then `scripts/sync-data.sh cache`. Run
-  307| ids hash the cache manifest, so a changed cache means new run ids.
-  308| 
-  309| ## Alarms
-  310| 
-  311| All alarms go to SNS `simulacra-alarms`, which emails cam@partyhat.ai:
-  312| - no healthy target for 3 minutes;
-  313| - more than 5 target 5xx in 5 minutes;
-  314| - more than 10 ELB 5xx in 5 minutes;
-  315| - any worker STOP, refusal or traceback (the entrypoint echoes worker lines
-  316|   to the log with a `[worker]` prefix);
-  317| - the AWS Budget forecast passing 80%, and actual spend passing 100% of $150
-  318|   a month. The budget filters on the `project` cost-allocation tag. AWS can
-  319|   take up to 24 hours to see a new tag, so activating it may fail on the
-  320|   first apply; re-apply the next day.
-  321| 
-  322| ## Cost estimate (us-east-1, October 2026 list prices)
-  323| 
-  324| | Item | Basis | ~/month |
-  325| |---|---|---|
-  326| | ALB | $16.43 base plus about 1 LCU | $22 |
-  327| | Fargate | 1 vCPU, 4 GB, ARM, 24/7 | $34 |
-  328| | Public IPv4 | Task plus 2 ALB addresses at $3.65 each | $11 |
-  329| | EFS (elastic) | About 1–2 GB, growing 5–7 MB per new what-if, plus I/O | $1–3 |
-  330| | AWS Backup | EFS warm storage | <$1 |
-  331| | CloudFront | About 19 MB per first-time visitor; inside the 1 TB/month free tier up to about 50k visitors | $0 |
-  332| | S3, ECR, logs, alarms, Secrets Manager | | $3–5 |
-  333| | **AWS total** | | **≈ $75–80** |
-  334| | Vercel | Hobby is $0, but its terms exclude commercial use; Pro is $20 per member | $0–20 |
-  335| | Anthropic | $0.74–$1.91 per new typed what-if, from any visitor. Repeats and precomputed combinations are free | At most $200, by the monthly cap ($20 a day) |
-  336| 
-  337| The Anthropic line dominates. The daily and monthly caps (Spend, above) bound it.
+   74|    Both fields must exist or the task can't start; `"{}"` means no keys yet,
+   75|    so ledger lines carry no key names. Visitors can still queue text, within
+   76|    the dollar caps (see "Access keys").
+   77|    Terraform creates the empty secret in step 7. If you want the value in
+   78|    place before the task first starts, run
+   79|    `terraform apply -target=aws_secretsmanager_secret.prod` first.
+   80| 7. (production) `terraform apply -var image=<ecr>/simulacra-api:<sha>`. This waits for
+   81|    the certificates to issue, then creates everything else, including the
+   82|    bill-monthly items: ALB, EFS, CloudFront. Pass `-var image` on the very
+   83|    apply that FIRST creates `aws_ecs_task_definition.api`: the task def
+   84|    ignores later container changes, so a revision created with the
+   85|    placeholder image stays a placeholder. If that happens, roll a real
+   86|    revision with `Deploy API` (as with this stack: revision 1 was busybox, and
+   87|    revision 2 was rendered from the template and rolled by hand).
+   88| 8. Seed state:
+   89|    - `scripts/sync-data.sh upload-cache` (270 objects, 15 MB).
+   90|    - `scripts/sync-data.sh upload-seed`.
+   91|    - `scripts/sync-data.sh seed`. It refuses if the volume is already seeded.
+   92| 
+   93|    The service's task exits with "not seeded" until this has run. ECS keeps
+   94|    retrying, so seed right after step 7.
+   95| 9. Assets: `python3 scripts/mirror-portraits.py --out ../simulacra-assets`,
+   96|    then `scripts/publish-assets.sh`.
+   97| 10. (production) DNS for the endpoints: `infra/vercel-dns.sh endpoints`, then `--apply`.
+   98| 11. Confirm the SNS subscription email to cam@partyhat.ai. Until it's
+   99|     confirmed, alarms reach nobody.
+  100| 12. Free reproducibility check on the server: a one-off task running
+  101|     `python -m simharness.run dryrun --year 1920` should plan without errors.
+  102|     New run ids mean the cache bytes differ from the laptop's.
+  103| 
+  104| ## CI setup
+  105| 
+  106| 1. Create `partyhat-ai/synthetic-voters-toy` and push.
+  107| 2. The deploy role trusts exactly one `sub`, `var.github_oidc_sub`: this
+  108|    repo's main branch. For this org the claim carries numeric ids, so it is
+  109|    `repo:<owner>@<owner-id>/<repo>@<repo-id>:ref:refs/heads/main`;
+  110|    the documented `repo:owner/name:...` silently never matches. The prefix
+  111|    comes from `gh api repos/partyhat-ai/synthetic-voters-toy/actions/oidc/customization/sub`.
+  112|    The variable refuses a wildcard. A workflow on any other branch, a tag, a
+  113|    pull request or an environment gets a different `sub` and can't assume
+  114|    the role.
+  115| 3. Set the repo variables from Terraform's outputs:
+  116|    ```
+  117|    gh variable set AWS_DEPLOY_ROLE_ARN -b "$(terraform -chdir=infra output -raw deploy_role_arn)"
+  118|    gh variable set TASKDEF_VARS -b "$(terraform -chdir=infra output -json taskdef_vars)"
+  119|    ```
+  120| 4. A `workflow_dispatch` workflow can only be dispatched once its file is on
+  121|    the default branch.
+  122| 5. Merges are squash-only (repo settings: merge commits and rebase merges
+  123|    off). Branch protection and rulesets need GitHub Team or Pro for a private
+  124|    repo, and this org is on the free plan, so nothing yet stops a direct push
+  125|    to main or a merge with CI red. The deploy gate below holds regardless:
+  126|    only a main SHA with a green CI run ships.
+  127| 
+  128| ## Deploying
+  129| 
+  130| **API** (manual only; a merge never ships):
+  131| ```
+  132| gh workflow run "Deploy API" -R partyhat-ai/synthetic-voters-toy --ref main -f confirm=DEPLOY
+  133| ```
+  134| The workflow:
+  135| - refuses any ref but main, and any SHA without a successful CI push run
+  136|   (`ci.yml`) for that exact commit;
+  137| - renders the task definition from `infra/taskdef.json.tftpl` and fails if
+  138|   any variable, required env var or secret is missing;
+  139| - builds on an ARM runner and tags the image with the full commit SHA;
+  140| - registers the revision, updates the service and waits until it's stable;
+  141| - fails if the circuit breaker rolled back;
+  142| - checks through the load balancer: `/healthz` returns 200, and
+  143|   `/api/simulacra/elections/1920` is `simulated: true` with slices.
+  144| 
+  145| To change an env var or secret, edit the template; that is the only place
+  146| it's defined.
+  147| 
+  148| **Web:** the Vercel project is `simulacra-americana` in scope
+  149| `camerons-projects-2a650f0d`, deployed from the CLI (`vercel deploy`, then
+  150| `vercel promote <url>`). `vercel.json` holds the build, the SPA fallback and
+  151| the same-origin rewrite to `api.`. `PUBLIC_ASSET_BASE` is a project env var
+  152| (production and preview). `www.` redirects 308 to the apex as a domain
+  153| setting (`vercel api /v9/projects/simulacra-americana/domains/www.simulacraamericana.com -X PATCH`).
+  154| Once the repo is connected to Vercel's Git integration, Vercel builds a preview from every push. Promoting to production is
+  155| manual (`vercel promote <url>`) and needs the owner's sign-off. After a promotion,
+  156| check that the site loads, a year opens through the rewrite, and the robot
+  157| loads from `assets.`.
+  158| 
+  159| ## Rolling back
+  160| 
+  161| - **API:** run `aws ecs update-service --cluster simulacra --service simulacra-api --task-definition simulacra-api:<previous>`.
+  162|   Every revision was rendered from the full template, so an older revision
+  163|   still carries its env and secrets. This is unlike the auth server's
+  164|   derive-from-running deploys. An image's revision can be redeployed as long
+  165|   as ECR keeps the image (the last 30).
+  166| - **Web:** `vercel rollback`, or "Instant Rollback" to a previous production
+  167|   deployment in the dashboard.
+  168| - **State (EFS):**
+  169|   1. In AWS Backup, open vault `simulacra-state` and restore a recovery point
+  170|      to a new directory on the same filesystem.
+  171|   2. Stop the service (`desired-count 0`) and swap the directories.
+  172|   3. Start the service again.
+  173| 
+  174|   An EFS restore puts the files in `aws-backup-restore_<ts>/` at the
+  175|   filesystem root, outside the access point. Move them with a one-off task
+  176|   that mounts the root.
+  177| - **Bundles only:** the repo's committed `serve/bundles` and the tarballs in
+  178|   `s3://simulacra-americana-data/backups/<date>/` are the fallbacks. Copy the
+  179|   year's `<year>.json` onto `/state/bundles`. The router reloads it by mtime
+  180|   without a restart.
+  181| 
+  182| ## Assets
+  183| 
+  184| Edit or add assets in the assets folder outside the repo, then run
+  185| `scripts/publish-assets.sh`, which uploads them and invalidates `/*`.
+  186| 
+  187| The robot files are copied, never moved, from the shared Partyhat bucket.
+  188| Only what the page loads is copied: `models/atlas-09-americana.glb` and
+  189| `models/atlas-09-americana-rerun/`.
+  190| 
+  191| The page versions assets with `?v=`, and CloudFront's cache key includes the
+  192| query string, so a new `?v=` takes effect immediately.
+  193| 
+  194| ## Portraits and credits
+  195| 
+  196| `scripts/mirror-portraits.py` resolves each portrait through the Commons API
+  197| and writes `portraits/credits.json` with the author, licence and licence URL
+  198| taken from the API. 76 of the 77 are public domain. One
+  199| needs attribution: `roosevelt2`, CC BY 2.0, Leon Perskie. The About sources
+  200| must show that credit.
+  201| 
+  202| ## Rotating the Anthropic key
+  203| 
+  204| 1. Create a new key in the Anthropic console.
+  205| 2. Replace the one field, keeping `SIMULACRA_ACCESS_KEYS`:
+  206|    ```
+  207|    cur=$(aws secretsmanager get-secret-value --secret-id simulacra/prod --query SecretString --output text)
+  208|    aws secretsmanager put-secret-value --secret-id simulacra/prod \
+  209|      --secret-string "$(jq -c --arg k "<new>" '.ANTHROPIC_API_KEY=$k' <<<"$cur")"
+  210|    ```
+  211| 3. Force a new deployment so the task picks up the key:
+  212|    `aws ecs update-service --cluster simulacra --service simulacra-api --force-new-deployment`.
+  213|    This brings a few seconds of 503s, and it kills a running worker, whose
+  214|    what-if is retried.
+  215| 4. Revoke the old key once the new task is healthy.
+  216| 5. Move the console usage alert to the new key.
+  217| 
+  218| ## Access keys
+  219| 
+  220| Reading is open: every year, every precomputed what-if and every combination
+  221| of them is free to serve. Only text the page doesn't recognise costs money
+  222| (compile, web research, staging, interviews). The API queues it for every
+  223| visitor, with or without an access key; a key (`Authorization: Bearer <key>`)
+  224| only puts its name on that text's lines in the spend ledger.
+  225| 
+  226| Keys live in the secret's `SIMULACRA_ACCESS_KEYS` field: a JSON object, as a
+  227| string, of name → key. Names are lowercase (`[a-z0-9_-]`, up to 40); keys
+  228| are 24–128 characters of `[A-Za-z0-9_-]`. The name is what the spend ledger
+  229| records. To add one:
+  230| ```
+  231| key=$(openssl rand -base64 36 | tr '+/' '-_' | tr -d '=')
+  232| cur=$(aws secretsmanager get-secret-value --secret-id simulacra/prod --query SecretString --output text)
+  233| aws secretsmanager put-secret-value --secret-id simulacra/prod --secret-string "$(
+  234|   jq -c --arg name "<name>" --arg key "$key" \
+  235|     '.SIMULACRA_ACCESS_KEYS = ((.SIMULACRA_ACCESS_KEYS // "{}" | fromjson) + {($name): $key} | tojson)' <<<"$cur")"
+  236| aws ecs update-service --cluster simulacra --service simulacra-api --force-new-deployment
+  237| echo "https://simulacraamericana.com/#key=$key"
+  238| ```
+  239| The link sets the key for that browser tab (the page keeps it in
+  240| `sessionStorage` and drops it from the address bar; a fragment never reaches
+  241| a server log). To revoke a key, delete its name the same way and redeploy.
+  242| 
+  243| ## Spend
+  244| 
+  245| **Two dollar caps bound the intake, counted across every visitor together:**
+  246| `SIMULACRA_DAILY_USD` per UTC day (20 in the task definition) and
+  247| `SIMULACRA_MONTHLY_USD` per UTC calendar month (200). The worker records each
+  248| stage in `/state/sessions/spend.jsonl` (priced before it is sent and recorded
+  249| after, with the access key's name when the request carried one; every line
+  250| counts toward the caps, keyed or not).
+  251| 
+  252| - **Before queuing** (`serve/guard.ts`, `checkCaps`): once today's or this
+  253|   month's recorded spend reaches its cap, POST /runs queues nothing and the
+  254|   run answers at once with `unknownWhy` saying the budget is spent.
+  255| - **Before each text** (`simharness/intake.py`, `left`): the worker checks the
+  256|   same ledger. With nothing left, the text is settled as `over-cap` in
+  257|   `queue-done.jsonl` and the waiting page is told why.
+  258| - **During a text** (`intake.Budget`): the text runs with what is left as its
+  259|   ceiling and stops at the first stage that reaches it. A stage is priced when
+  260|   it finishes, so a cap can be passed by at most the one stage that crosses
+  261|   it (at most about $2, the cost of one text's interviews).
+  262| 
+  263| A text that fails is retried once. After two failures it is settled as
+  264| `gave-up` and copied to `/state/sessions/queue-dead.jsonl`, so a text that
+  265| always fails is billed at most twice and never holds up the texts behind it.
+  266| 
+  267| To change a cap, edit its value in `infra/taskdef.json.tftpl` and deploy.
+  268| 
+  269| The research agent (`simharness/agent.py`) is off in production. It runs only
+  270| when the task definition sets `SIMULACRA_AGENT=1`. It spends under the same caps
+  271| and `Budget`, and its own model turns are recorded in the ledger as stage `agent`.
+  272| With `SIMULACRA_AGENT_PUBLISH=ask`, nothing it builds goes live until
+  273| `python -m simharness.run approve --id <trace>` is run in a one-off task.
+  274| 
+  275| The per-IP limits (`serve/simulacra.ts`, `DEFAULT_LIMITS`): 1,200
+  276| requests per 10 minutes, 120 runs per 10 minutes, and 10 queued texts an
+  277| hour; past the last, POST /runs answers 429. The rate limits read the
+  278| visitor's address from `X-Forwarded-For` two proxies deep (`TRUST_PROXY_HOPS`:
+  279| Vercel, then the ALB). A request sent to the ALB directly can forge that
+  280| header, so the per-IP limits can be dodged; the dollar caps can't, since they
+  281| count every visitor together. To stop the spending at once,
+  282| remove or revoke the Anthropic key, or stop the service
+  283| (`aws ecs update-service --cluster simulacra --service simulacra-api --desired-count 0`).
+  284| 
+  285| Session logs (`requests.jsonl` and the queue files) keep 7 days of lines
+  286| (`SIMULACRA_RETAIN_DAYS`), pruned at start and hourly while no worker runs.
+  287| `spend.jsonl` keeps every line, but drops a line's `note` (the visitor's
+  288| words) after the same 7 days. The worker's `intake.log` is emptied past 20 MB (CloudWatch keeps its
+  289| copy). To read them, run a one-off task, or download the latest AWS Backup
+  290| recovery point.
+  291| 
+  292| AWS can't see Anthropic spend. Set a usage alert on the production key in the
+  293| Anthropic console.
+  294| 
+  295| ## Census data
+  296| 
+  297| The NHGIS/IPUMS extracts and the derived `population/*_nhgis.csv` files are
+  298| not for redistribution. They live only in `s3://simulacra-americana-data/cache/`
+  299| (the derived part, everything except `*/raw/`) and on EFS. They are never in
+  300| git, an image, Vercel or the assets bucket.
+  301| 
+  302| The 1920 inputs in `data/1920/` are different: they are transcribed from the census
+  303| volumes (public domain) or come from CC0 datasets, plus one CC BY-SA returns file, and are
+  304| committed so the 1920 results can be rerun from the repo (`data/1920/PROVENANCE.md`).
+  305| 
+  306| To re-sync after rebuilding the cache on a laptop, run
+  307| `scripts/sync-data.sh upload-cache`, then `scripts/sync-data.sh cache`. Run
+  308| ids hash the cache manifest, so a changed cache means new run ids.
+  309| 
+  310| ## Alarms
+  311| 
+  312| All alarms go to SNS `simulacra-alarms`, which emails cam@partyhat.ai:
+  313| - no healthy target for 3 minutes;
+  314| - more than 5 target 5xx in 5 minutes;
+  315| - more than 10 ELB 5xx in 5 minutes;
+  316| - any worker STOP, refusal or traceback (the entrypoint echoes worker lines
+  317|   to the log with a `[worker]` prefix);
+  318| - the AWS Budget forecast passing 80%, and actual spend passing 100% of $150
+  319|   a month. The budget filters on the `project` cost-allocation tag. AWS can
+  320|   take up to 24 hours to see a new tag, so activating it may fail on the
+  321|   first apply; re-apply the next day.
+  322| 
+  323| ## Cost estimate (us-east-1, October 2026 list prices)
+  324| 
+  325| | Item | Basis | ~/month |
+  326| |---|---|---|
+  327| | ALB | $16.43 base plus about 1 LCU | $22 |
+  328| | Fargate | 1 vCPU, 4 GB, ARM, 24/7 | $34 |
+  329| | Public IPv4 | Task plus 2 ALB addresses at $3.65 each | $11 |
+  330| | EFS (elastic) | About 1–2 GB, growing 5–7 MB per new what-if, plus I/O | $1–3 |
+  331| | AWS Backup | EFS warm storage | <$1 |
+  332| | CloudFront | About 19 MB per first-time visitor; inside the 1 TB/month free tier up to about 50k visitors | $0 |
+  333| | S3, ECR, logs, alarms, Secrets Manager | | $3–5 |
+  334| | **AWS total** | | **≈ $75–80** |
+  335| | Vercel | Hobby is $0, but its terms exclude commercial use; Pro is $20 per member | $0–20 |
+  336| | Anthropic | $0.74–$1.91 per new typed what-if, from any visitor. Repeats and precomputed combinations are free | At most $200, by the monthly cap ($20 a day) |
+  337| 
+  338| The Anthropic line dominates. The daily and monthly caps (Spend, above) bound it.
 ```
