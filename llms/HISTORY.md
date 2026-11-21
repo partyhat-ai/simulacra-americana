@@ -1,10 +1,11 @@
 # simulacra-americana: commit history
 
-Generated from commit `63ce42152a8f` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `caf86112f396` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 
-16 commit(s), verbatim from `git log` (commits that only regenerate this digest are left out):
+17 commit(s), verbatim from `git log` (commits that only regenerate this digest are left out):
 
 ```
+caf8611  2026-11-20  Cameron Feather  Commit the API run's raw answers; point stale docs at it
 63ce421  2026-11-20  Cameron Feather  DEPLOY.md: an empty key ring doesn't stop queuing
 61ba45d  2026-11-20  Cameron Feather  Rerun the 1920 pilot on the Batch API; score EVAL.md from it
 6f14dc4  2026-11-20  Cameron Feather  Regenerate EVAL.md from a re-scored, reproducible prototype run

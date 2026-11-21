@@ -1,8 +1,8 @@
 # simulacra-americana: file map
 
-Generated from commit `63ce42152a8f` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `caf86112f396` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 
-1125 tracked files. 196 are reproduced in full in the `code-N.md` parts; the rest are listed with the reason they are not.
+1129 tracked files. 196 are reproduced in full in the `code-N.md` parts; the rest are listed with the reason they are not.
 
 Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/simulacra-americana/main/ (append the path to fetch the raw file).
 
@@ -16,15 +16,15 @@ Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/si
 | `.gitignore` | 181 | 16 |  | code-1.md |
 | `AGENTS.md` | 1,723 | 34 | Rules for coding agents | code-1.md |
 | `CONTEXT.md` | 1,382 | 19 | Vocabulary | code-1.md |
-| `DISCLOSURES.md` | 72,717 | 1,314 | Disclosures: inaccuracies and intellectual-honesty flags | code-1.md |
+| `DISCLOSURES.md` | 72,809 | 1,315 | Disclosures: inaccuracies and intellectual-honesty flags | code-1.md |
 | `Dockerfile` | 4,134 | 95 | syntax=docker/dockerfile:1 | code-1.md |
-| `EVAL.md` | 22,061 | 392 | EVAL: the 1920 prototype | code-2.md |
+| `EVAL.md` | 22,566 | 400 | EVAL: the 1920 prototype | code-2.md |
 | `LICENSE` | 1,065 | 21 |  | code-2.md |
-| `METHOD.md` | 24,001 | 489 | Simulacra Americana: how the harness works | code-2.md |
+| `METHOD.md` | 24,099 | 490 | Simulacra Americana: how the harness works | code-2.md |
 | `README.md` | 2,113 | 51 | Synthetic voters | code-2.md |
 | `VALIDITY.md` | 25,202 | 341 | Validity: goals, contamination, leakage and historical bias | code-2.md |
 | `biome.json` | 775 | 40 |  | code-2.md |
-| `data/1920/PROVENANCE.md` | 7,015 | 122 | 1920 inputs: provenance and licences | code-2.md |
+| `data/1920/PROVENANCE.md` | 7,266 | 124 | 1920 inputs: provenance and licences | code-2.md |
 | `docker/entrypoint.sh` | 652 | 17 | The API container's entrypoint: check the state mount, surface the worker's | code-2.md |
 | `docs/DEPLOY.md` | 17,996 | 338 | Deploying Simulacra Americana | code-2.md |
 | `docs/harness/README.md` | 15,973 | 241 | Simulacra Americana harness | code-3.md |
@@ -226,7 +226,7 @@ Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/si
 | `data/` | 7 | 1,007,856 |
 | `extracts/` | 2 | 47,047 |
 | `profiles/` | 58 | 235,910 |
-| `runs/` | 616 | 48,045,272 |
+| `runs/` | 620 | 52,253,071 |
 | `serve/` | 60 | 13,024,850 |
 | `tests/` | 1 | 54,943 |
 | `whatifs/` | 109 | 1,623,304 |
