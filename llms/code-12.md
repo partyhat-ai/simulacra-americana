@@ -1,6 +1,6 @@
 # simulacra-americana: source and docs, part 12 of 17
 
-Generated from commit `29f2a89724da` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `7f181fc6d5be` (2026-11-24) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 Files `src/lib/robot/blast.ts` to `src/lib/simulacra/KindChips.svelte`. Lines are numbered as in the repository.
 
 ## `src/lib/robot/blast.ts`

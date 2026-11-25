@@ -1,6 +1,6 @@
 # simulacra-americana: source and docs, part 2 of 17
 
-Generated from commit `29f2a89724da` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `7f181fc6d5be` (2026-11-24) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 Files `EVAL.md` to `docs/DEPLOY.md`. Lines are numbered as in the repository.
 
 ## `EVAL.md`
@@ -1798,74 +1798,77 @@ Files `EVAL.md` to `docs/DEPLOY.md`. Lines are numbered as in the repository.
   266| 
   267| To change a cap, edit its value in `infra/taskdef.json.tftpl` and deploy.
   268| 
-  269| The research agent (`simharness/agent.py`) is off in production. It runs only
-  270| when the task definition sets `SIMULACRA_AGENT=1`. It spends under the same caps
-  271| and `Budget`, and its own model turns are recorded in the ledger as stage `agent`.
-  272| With `SIMULACRA_AGENT_PUBLISH=ask`, nothing it builds goes live until
-  273| `python -m simharness.run approve --id <trace>` is run in a one-off task.
-  274| 
-  275| The per-IP limits (`serve/simulacra.ts`, `DEFAULT_LIMITS`): 1,200
-  276| requests per 10 minutes, 120 runs per 10 minutes, and 10 queued texts an
-  277| hour; past the last, POST /runs answers 429. The rate limits read the
-  278| visitor's address from `X-Forwarded-For` two proxies deep (`TRUST_PROXY_HOPS`:
-  279| Vercel, then the ALB). A request sent to the ALB directly can forge that
-  280| header, so the per-IP limits can be dodged; the dollar caps can't, since they
-  281| count every visitor together. To stop the spending at once,
-  282| remove or revoke the Anthropic key, or stop the service
-  283| (`aws ecs update-service --cluster simulacra --service simulacra-api --desired-count 0`).
-  284| 
-  285| Session logs (`requests.jsonl` and the queue files) keep 7 days of lines
-  286| (`SIMULACRA_RETAIN_DAYS`), pruned at start and hourly while no worker runs.
-  287| `spend.jsonl` keeps every line, but drops a line's `note` (the visitor's
-  288| words) after the same 7 days. The worker's `intake.log` is emptied past 20 MB (CloudWatch keeps its
-  289| copy). To read them, run a one-off task, or download the latest AWS Backup
-  290| recovery point.
-  291| 
-  292| AWS can't see Anthropic spend. Set a usage alert on the production key in the
-  293| Anthropic console.
+  269| The research agent (`simharness/agent.py`) models typed what-ifs in production:
+  270| the task definition sets `SIMULACRA_AGENT=1` (remove it to go back to the fixed
+  271| stages). With no `SIMULACRA_AGENT_PUBLISH`, a bundle that passes its checks goes
+  272| live by itself (`gate`); one that fails waits in `/state/sessions/pending-publish/`.
+  273| Traces are in `/state/sessions/traces/`. It spends under the same caps
+  274| and `Budget`, and its own model turns are recorded in the ledger as stage `agent`.
+  275| With `SIMULACRA_AGENT_PUBLISH=ask`, nothing it builds goes live until
+  276| `python -m simharness.run approve --id <trace>` is run in a one-off task.
+  277| 
+  278| The per-IP limits (`serve/simulacra.ts`, `DEFAULT_LIMITS`): 1,200
+  279| requests per 10 minutes, 120 runs per 10 minutes, and 10 queued texts an
+  280| hour; past the last, POST /runs answers 429. The rate limits read the
+  281| visitor's address from `X-Forwarded-For` two proxies deep (`TRUST_PROXY_HOPS`:
+  282| Vercel, then the ALB). A request sent to the ALB directly can forge that
+  283| header, so the per-IP limits can be dodged; the dollar caps can't, since they
+  284| count every visitor together. To stop the spending at once,
+  285| remove or revoke the Anthropic key, or stop the service
+  286| (`aws ecs update-service --cluster simulacra --service simulacra-api --desired-count 0`).
+  287| 
+  288| Session logs (`requests.jsonl` and the queue files) keep 7 days of lines
+  289| (`SIMULACRA_RETAIN_DAYS`), pruned at start and hourly while no worker runs.
+  290| `spend.jsonl` keeps every line, but drops a line's `note` (the visitor's
+  291| words) after the same 7 days. The worker's `intake.log` is emptied past 20 MB (CloudWatch keeps its
+  292| copy). To read them, run a one-off task, or download the latest AWS Backup
+  293| recovery point.
   294| 
-  295| ## Census data
-  296| 
-  297| The NHGIS/IPUMS extracts and the derived `population/*_nhgis.csv` files are
-  298| not for redistribution. They live only in `s3://simulacra-americana-data/cache/`
-  299| (the derived part, everything except `*/raw/`) and on EFS. They are never in
-  300| git, an image, Vercel or the assets bucket.
-  301| 
-  302| The 1920 inputs in `data/1920/` are different: they are transcribed from the census
-  303| volumes (public domain) or come from CC0 datasets, plus one CC BY-SA returns file, and are
-  304| committed so the 1920 results can be rerun from the repo (`data/1920/PROVENANCE.md`).
-  305| 
-  306| To re-sync after rebuilding the cache on a laptop, run
-  307| `scripts/sync-data.sh upload-cache`, then `scripts/sync-data.sh cache`. Run
-  308| ids hash the cache manifest, so a changed cache means new run ids.
-  309| 
-  310| ## Alarms
-  311| 
-  312| All alarms go to SNS `simulacra-alarms`, which emails cam@partyhat.ai:
-  313| - no healthy target for 3 minutes;
-  314| - more than 5 target 5xx in 5 minutes;
-  315| - more than 10 ELB 5xx in 5 minutes;
-  316| - any worker STOP, refusal or traceback (the entrypoint echoes worker lines
-  317|   to the log with a `[worker]` prefix);
-  318| - the AWS Budget forecast passing 80%, and actual spend passing 100% of $150
-  319|   a month. The budget filters on the `project` cost-allocation tag. AWS can
-  320|   take up to 24 hours to see a new tag, so activating it may fail on the
-  321|   first apply; re-apply the next day.
-  322| 
-  323| ## Cost estimate (us-east-1, October 2026 list prices)
-  324| 
-  325| | Item | Basis | ~/month |
-  326| |---|---|---|
-  327| | ALB | $16.43 base plus about 1 LCU | $22 |
-  328| | Fargate | 1 vCPU, 4 GB, ARM, 24/7 | $34 |
-  329| | Public IPv4 | Task plus 2 ALB addresses at $3.65 each | $11 |
-  330| | EFS (elastic) | About 1–2 GB, growing 5–7 MB per new what-if, plus I/O | $1–3 |
-  331| | AWS Backup | EFS warm storage | <$1 |
-  332| | CloudFront | About 19 MB per first-time visitor; inside the 1 TB/month free tier up to about 50k visitors | $0 |
-  333| | S3, ECR, logs, alarms, Secrets Manager | | $3–5 |
-  334| | **AWS total** | | **≈ $75–80** |
-  335| | Vercel | Hobby is $0, but its terms exclude commercial use; Pro is $20 per member | $0–20 |
-  336| | Anthropic | $0.74–$1.91 per new typed what-if, from any visitor. Repeats and precomputed combinations are free | At most $200, by the monthly cap ($20 a day) |
-  337| 
-  338| The Anthropic line dominates. The daily and monthly caps (Spend, above) bound it.
+  295| AWS can't see Anthropic spend. Set a usage alert on the production key in the
+  296| Anthropic console.
+  297| 
+  298| ## Census data
+  299| 
+  300| The NHGIS/IPUMS extracts and the derived `population/*_nhgis.csv` files are
+  301| not for redistribution. They live only in `s3://simulacra-americana-data/cache/`
+  302| (the derived part, everything except `*/raw/`) and on EFS. They are never in
+  303| git, an image, Vercel or the assets bucket.
+  304| 
+  305| The 1920 inputs in `data/1920/` are different: they are transcribed from the census
+  306| volumes (public domain) or come from CC0 datasets, plus one CC BY-SA returns file, and are
+  307| committed so the 1920 results can be rerun from the repo (`data/1920/PROVENANCE.md`).
+  308| 
+  309| To re-sync after rebuilding the cache on a laptop, run
+  310| `scripts/sync-data.sh upload-cache`, then `scripts/sync-data.sh cache`. Run
+  311| ids hash the cache manifest, so a changed cache means new run ids.
+  312| 
+  313| ## Alarms
+  314| 
+  315| All alarms go to SNS `simulacra-alarms`, which emails cam@partyhat.ai:
+  316| - no healthy target for 3 minutes;
+  317| - more than 5 target 5xx in 5 minutes;
+  318| - more than 10 ELB 5xx in 5 minutes;
+  319| - any worker STOP, refusal or traceback (the entrypoint echoes worker lines
+  320|   to the log with a `[worker]` prefix);
+  321| - the AWS Budget forecast passing 80%, and actual spend passing 100% of $150
+  322|   a month. The budget filters on the `project` cost-allocation tag. AWS can
+  323|   take up to 24 hours to see a new tag, so activating it may fail on the
+  324|   first apply; re-apply the next day.
+  325| 
+  326| ## Cost estimate (us-east-1, October 2026 list prices)
+  327| 
+  328| | Item | Basis | ~/month |
+  329| |---|---|---|
+  330| | ALB | $16.43 base plus about 1 LCU | $22 |
+  331| | Fargate | 1 vCPU, 4 GB, ARM, 24/7 | $34 |
+  332| | Public IPv4 | Task plus 2 ALB addresses at $3.65 each | $11 |
+  333| | EFS (elastic) | About 1–2 GB, growing 5–7 MB per new what-if, plus I/O | $1–3 |
+  334| | AWS Backup | EFS warm storage | <$1 |
+  335| | CloudFront | About 19 MB per first-time visitor; inside the 1 TB/month free tier up to about 50k visitors | $0 |
+  336| | S3, ECR, logs, alarms, Secrets Manager | | $3–5 |
+  337| | **AWS total** | | **≈ $75–80** |
+  338| | Vercel | Hobby is $0, but its terms exclude commercial use; Pro is $20 per member | $0–20 |
+  339| | Anthropic | $0.74–$1.91 per new typed what-if, from any visitor. Repeats and precomputed combinations are free | At most $200, by the monthly cap ($20 a day) |
+  340| 
+  341| The Anthropic line dominates. The daily and monthly caps (Spend, above) bound it.
 ```

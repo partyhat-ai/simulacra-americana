@@ -1,6 +1,6 @@
 # simulacra-americana: file map
 
-Generated from commit `29f2a89724da` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `7f181fc6d5be` (2026-11-24) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 
 1129 tracked files. 196 are reproduced in full in the `code-N.md` parts; the rest are listed with the reason they are not.
 
@@ -26,7 +26,7 @@ Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/si
 | `biome.json` | 775 | 40 |  | code-2.md |
 | `data/1920/PROVENANCE.md` | 7,266 | 124 | 1920 inputs: provenance and licences | code-2.md |
 | `docker/entrypoint.sh` | 652 | 17 | The API container's entrypoint: check the state mount, surface the worker's | code-2.md |
-| `docs/DEPLOY.md` | 17,996 | 338 | Deploying Simulacra Americana | code-2.md |
+| `docs/DEPLOY.md` | 18,234 | 341 | Deploying Simulacra Americana | code-2.md |
 | `docs/harness/README.md` | 15,973 | 241 | Simulacra Americana harness | code-3.md |
 | `infra/.gitignore` | 60 | 5 |  | code-3.md |
 | `infra/.terraform.lock.hcl` | 1,481 | 26 | This file is maintained automatically by "terraform init". | code-3.md |
@@ -43,7 +43,7 @@ Every path below is relative to https://raw.githubusercontent.com/partyhat-ai/si
 | `infra/outputs.tf` | 1,630 | 49 | infra/vercel-dns.sh reads these (terraform output -json); deploy-api.yml's | code-3.md |
 | `infra/s3.tf` | 3,553 | 118 | Two private buckets. | code-3.md |
 | `infra/secrets.tf` | 691 | 13 | The shell only. The value is put by hand, never through Terraform, so it | code-3.md |
-| `infra/taskdef.json.tftpl` | 2,071 | 56 |  | code-3.md |
+| `infra/taskdef.json.tftpl` | 2,124 | 57 |  | code-3.md |
 | `infra/terraform.tfvars.example` | 570 | 12 | Copy to terraform.tfvars (gitignored) and fill in. | code-3.md |
 | `infra/variables.tf` | 2,538 | 65 |  | code-3.md |
 | `infra/vercel-dns.sh` | 1,799 | 49 | Every DNS record the AWS side needs, added in Vercel DNS (the zone lives | code-3.md |

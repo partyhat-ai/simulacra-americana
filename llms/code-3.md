@@ -1,6 +1,6 @@
 # simulacra-americana: source and docs, part 3 of 17
 
-Generated from commit `29f2a89724da` (2026-11-20) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
+Generated from commit `7f181fc6d5be` (2026-11-24) of github.com/partyhat-ai/simulacra-americana by `scripts/llms_digest.py`, which `.github/workflows/llms-digest.yml` reruns on every push to `main`, so this text matches the code at that commit.
 Files `docs/harness/README.md` to `requirements.lock`. Lines are numbered as in the repository.
 
 ## `docs/harness/README.md`
@@ -1412,29 +1412,30 @@ Files `docs/harness/README.md` to `requirements.lock`. Lines are numbered as in 
    31|         { "name": "PORT", "value": "8080" },
    32|         { "name": "SIMULACRA_LOG", "value": "1" },
    33|         { "name": "SIMULACRA_AUTORUN", "value": "configs/live-1920.json" },
-   34|         { "name": "SIMULACRA_PYTHON", "value": "/opt/venv/bin/python" },
-   35|         { "name": "SIMULACRA_BUNDLES", "value": "/app/serve/bundles" },
-   36|         { "name": "SIMHARNESS_CACHE", "value": "/state/cache" },
-   37|         { "name": "SIMULACRA_DAILY_USD", "value": "20" },
-   38|         { "name": "SIMULACRA_MONTHLY_USD", "value": "200" },
-   39|         { "name": "SIMULACRA_RETAIN_DAYS", "value": "7" },
-   40|         { "name": "TRUST_PROXY_HOPS", "value": "2" }
-   41|       ],
-   42|       "secrets": [
-   43|         { "name": "ANTHROPIC_API_KEY", "valueFrom": "${secret_arn}:ANTHROPIC_API_KEY::" },
-   44|         { "name": "SIMULACRA_ACCESS_KEYS", "valueFrom": "${secret_arn}:SIMULACRA_ACCESS_KEYS::" }
-   45|       ],
-   46|       "logConfiguration": {
-   47|         "logDriver": "awslogs",
-   48|         "options": {
-   49|           "awslogs-group": "${log_group}",
-   50|           "awslogs-region": "${region}",
-   51|           "awslogs-stream-prefix": "api"
-   52|         }
-   53|       }
-   54|     }
-   55|   ]
-   56| }
+   34|         { "name": "SIMULACRA_AGENT", "value": "1" },
+   35|         { "name": "SIMULACRA_PYTHON", "value": "/opt/venv/bin/python" },
+   36|         { "name": "SIMULACRA_BUNDLES", "value": "/app/serve/bundles" },
+   37|         { "name": "SIMHARNESS_CACHE", "value": "/state/cache" },
+   38|         { "name": "SIMULACRA_DAILY_USD", "value": "20" },
+   39|         { "name": "SIMULACRA_MONTHLY_USD", "value": "200" },
+   40|         { "name": "SIMULACRA_RETAIN_DAYS", "value": "7" },
+   41|         { "name": "TRUST_PROXY_HOPS", "value": "2" }
+   42|       ],
+   43|       "secrets": [
+   44|         { "name": "ANTHROPIC_API_KEY", "valueFrom": "${secret_arn}:ANTHROPIC_API_KEY::" },
+   45|         { "name": "SIMULACRA_ACCESS_KEYS", "valueFrom": "${secret_arn}:SIMULACRA_ACCESS_KEYS::" }
+   46|       ],
+   47|       "logConfiguration": {
+   48|         "logDriver": "awslogs",
+   49|         "options": {
+   50|           "awslogs-group": "${log_group}",
+   51|           "awslogs-region": "${region}",
+   52|           "awslogs-stream-prefix": "api"
+   53|         }
+   54|       }
+   55|     }
+   56|   ]
+   57| }
 ```
 
 ## `infra/terraform.tfvars.example`
