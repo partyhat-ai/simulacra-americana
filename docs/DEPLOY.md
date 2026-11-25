@@ -266,8 +266,11 @@ always fails is billed at most twice and never holds up the texts behind it.
 
 To change a cap, edit its value in `infra/taskdef.json.tftpl` and deploy.
 
-The research agent (`simharness/agent.py`) is off in production. It runs only
-when the task definition sets `SIMULACRA_AGENT=1`. It spends under the same caps
+The research agent (`simharness/agent.py`) models typed what-ifs in production:
+the task definition sets `SIMULACRA_AGENT=1` (remove it to go back to the fixed
+stages). With no `SIMULACRA_AGENT_PUBLISH`, a bundle that passes its checks goes
+live by itself (`gate`); one that fails waits in `/state/sessions/pending-publish/`.
+Traces are in `/state/sessions/traces/`. It spends under the same caps
 and `Budget`, and its own model turns are recorded in the ledger as stage `agent`.
 With `SIMULACRA_AGENT_PUBLISH=ask`, nothing it builds goes live until
 `python -m simharness.run approve --id <trace>` is run in a one-off task.
